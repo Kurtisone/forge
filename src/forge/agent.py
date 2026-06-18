@@ -8,6 +8,10 @@ Tu es Forge, un assistant local pour développeur.
 Réponds de manière claire et structurée.
 """
 
+def normalize_value(value: str) -> str:
+    value = value.strip()
+    return value[0].upper() + value[1:] if value else value
+
 
 def run_agent(user_input: str):
 
@@ -54,23 +58,20 @@ def run_agent(user_input: str):
 def extract_facts(user_input: str):
     text = user_input.lower()
 
-    # pattern 1 : nom
-    match = re.search(r"je m'appelle (.+)", text)
+    # nom
+    match = re.search(r"(je m'appelle|mon nom est|appelez-moi)\s+(.+)", text)
     if match:
-        name = match.group(1).strip()
-        add_fact("user_name", name)
-        return
+        value = normalize_value(match.group(2))
+        add_fact("user_name", value)
 
-    # pattern 2 : j'habite
-    match = re.search(r"j'habite (.+)", text)
+    # localisation
+    match = re.search(r"(j'habite|je vis à|je suis à)\s+(.+)", text)
     if match:
-        location = match.group(1).strip()
-        add_fact("user_location", location)
-        return
+        value = normalize_value(match.group(2))
+        add_fact("user_location", value)
 
-    # pattern 3 : j'aime
-    match = re.search(r"j'aime (.+)", text)
+    # goûts
+    match = re.search(r"j'aime\s+(.+)", text)
     if match:
-        like = match.group(1).strip()
-        add_fact("user_like", like)
-        return
+        value = normalize_value(match.group(1))
+        add_fact("user_like", value)
