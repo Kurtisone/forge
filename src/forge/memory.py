@@ -41,3 +41,25 @@ def add_message(role, content):
     memory["history"] = history
 
     save_memory(memory)
+
+def get_facts():
+    memory = load_memory()
+    return memory.get("facts", [])
+
+
+def add_fact(key, value):
+    memory = load_memory()
+
+    facts = memory.get("facts", [])
+
+    # overwrite si existe déjà
+    facts = [f for f in facts if f["key"] != key]
+
+    facts.append({
+        "key": key,
+        "value": value
+    })
+
+    memory["facts"] = facts
+
+    save_memory(memory)
