@@ -1,5 +1,9 @@
 import requests
-from forge.config import LLM_URL
+from forge.config import (
+    OPENROUTER_API_KEY,
+    OPENROUTER_URL,
+    LLM_URL
+)
 
 def call_ollama(prompt, model):
     r = requests.post(
@@ -13,11 +17,11 @@ def call_ollama(prompt, model):
     return r.json()["response"]
 
 
-def call_openrouter(url, api_key, model, prompt):
+def call_openrouter(prompt, model):
     r = requests.post(
-        url,
+        OPENROUTER_URL,
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
             "HTTP-Referer": "http://localhost",
             "X-OpenRouter-Title": "Forge"
