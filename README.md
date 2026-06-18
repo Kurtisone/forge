@@ -1,55 +1,49 @@
 # Forge
 
-Forge is a lightweight LLM agent framework designed for experimentation with local and cloud-based AI providers.
-
-It supports:
-- OpenRouter (cloud LLMs)
-- Ollama (local LLMs)
-- Modular provider architecture
-- Simple CLI agent loop
-- Extensible tool system (WIP)
+Lightweight LLM agent framework for local and cloud models (Ollama / OpenRouter)
 
 ---
 
-## Why this project exists
+## Overview
 
-This project was built to explore:
-- How to design a minimal agent architecture
-- How to abstract LLM providers cleanly
-- How to switch between local and cloud inference
-- How to structure an extensible tool-based AI system
+Forge is a minimal experimental framework for building LLM-based agents with a clear separation between:
+
+- Agent logic
+- LLM provider abstraction
+- Local and cloud inference backends
+- Tool system (work in progress)
+
+---
+
+## Features
+
+- Multi-provider support (OpenRouter / Ollama)
+- Modular LLM abstraction layer
+- Simple CLI agent loop
+- Extensible tool system (filesystem, shell, git)
+- Container-ready (Podman / Docker)
 
 ---
 
 ## Architecture
-User
-↓
-CLI (main.py)
-↓
-Agent (agent.py)
-↓
-LLM Router (llm.py)
-↓
-Provider Layer (llm_provider.py)
-↓
-OpenRouter / Ollama
+
+User → CLI (main.py) → Agent (agent.py) → LLM Router (llm.py) → Provider Layer (llm_provider.py) → OpenRouter / Ollama
 
 ---
 
-## Setup
+## Installation
 
-### Build container
+Build container:
 
-```bash
 podman build -t forge .
-```
 
-### Run
-```bash
+Run:
+
 podman run -it --env-file .env forge
-```
 
-## Environment variables
+---
+
+## Configuration
 
 Create a .env file:
 
@@ -57,11 +51,39 @@ FORGE_PROVIDER=openrouter
 OPENROUTER_API_KEY=your_key_here
 FORGE_MODEL=meta-llama/llama-3.2-3b-instruct:free
 
+---
+
+## Usage
+
+Forge > Hello
+
+---
+
+## Design goals
+
+- Clean LLM abstraction
+- Local/cloud switching
+- Minimal agent architecture
+- Extensible tool system
+
+---
+
+## Roadmap
+
+- Memory system
+- Tool execution (shell, git, filesystem)
+- Streaming responses
+- Multi-agent support
+- Config file support
+
+---
+
 ## Status
 
-This project is an early MVP and actively evolving.
-Planned features:
+Early MVP for experimentation and learning
 
-Memory system (short-term + persistent)
-Tool execution (shell, git, filesystem)
-Multi-agent orchestration
+---
+
+## License
+
+MIT
