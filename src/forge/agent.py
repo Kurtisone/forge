@@ -1,77 +1,138 @@
-import re
+import json
 from forge.llm import call_llm
-from forge.memory import add_message, get_history, add_fact, get_facts
+from forge.memory import add_message, get_history, update_fact, get_facts
 
 
 SYSTEM_PROMPT = """
-Tu es Forge, un assistant local pour développeur.
-Réponds de manière claire et structurée.
+Tu es Forge, un assistant pour développeur.
+
+FACTS est une base de données persistante sur l'utilisateur.
+
+Règles :
+- FACTS est la vérité
+- Tu ne modifies jamais FACTS directement
+- Tu peux proposer des informations, mais pas les appliquer toi-même
+- En cas de conflit, FACTS gagnent
 """
 
-def normalize_value(value: str) -> str:
-    value = value.strip()
-    return value[0].upper() + value[1:] if value else value
+
+# ----------------------------
+# MULTI FACT EXTRACTION
+# ----------------------------
+def extract_facts(user_input: str):
+    prompt = f"""
+Extract ALL structured facts from the user input.
+
+Return ONLY valid JSON array.
+
+Each item must be:
+{{
+  "key": "...",
+  "value": "..." or ["..."]
+}}
+
+Rules:
+- Detect multiple facts in one sentence
+- If user expresses preferences, use list
+- If no fact, return []
+
+Input:
+{user_input}
+"""
+
+    raw = call_llm(prompt)
+
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception:
+        return []
 
 
+# ----------------------------
+# INTENT CLASSIFIER (simple)
+# ----------------------------
+def detect_intent(user_input: str):
+    prompt = f"""
+Classify user intent.
+
+Return ONLY JSON:
+{{
+  "intent": "chat | query_fact"
+}}
+
+User:
+{user_input}
+"""
+
+    raw = call_llm(prompt)
+
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {"intent": "chat"}
+
+
+# ----------------------------
+# AGENT CORE
+# ----------------------------
 def run_agent(user_input: str):
-
-    # 1. extraction des facts AVANT tout
-    extract_facts(user_input)
-
-    # 2. sauvegarde user input
+    # 1. save user message
     add_message("user", user_input)
 
-    # 3. récupération mémoire
+    # 2. extract facts (MULTI)
+    new_facts = extract_facts(user_input)
+
+    # 3. store facts
+    for fact in new_facts:
+        key = fact.get("key")
+        value = fact.get("value")
+
+        if key and value:
+            update_fact(key, value)
+
+    # 4. detect intent
+    intent_data = detect_intent(user_input)
+    intent = intent_data.get("intent", "chat")
+
     facts = get_facts()
     history = get_history()
 
-    # 4. build facts text
+    # 5. build context
     facts_text = ""
-    for fact in facts:
-        facts_text += f"- {fact['key']}: {fact['value']}\n"
+    for f in facts:
+        facts_text += f"- {f['key']}: {f['value']}\n"
 
-    # 5. build history text
     history_text = ""
     for msg in history:
         history_text += f"{msg['role']}: {msg['content']}\n"
 
-    # 6. prompt final
+    # 6. QUERY FACT MODE
+    if intent == "query_fact":
+        name = next((f["value"] for f in facts if f["key"] == "name"), None)
+
+        if name:
+            response = f"Tu t'appelles {name}"
+        else:
+            response = "Je ne connais pas encore ton prénom."
+
+        add_message("assistant", response)
+        return response
+
+    # 7. DEFAULT CHAT MODE
     prompt = (
         SYSTEM_PROMPT
-        + "\n\nFACTS (persistent user knowledge):\n"
+        + "\n\nFACTS:\n"
         + (facts_text if facts_text else "- none")
-        + "\n\nConversation history:\n"
+        + "\n\nHISTORY:\n"
         + history_text
-        + "\nUser request:\n"
+        + "\n\nUSER:\n"
         + user_input
     )
 
-    # 7. appel LLM
     response = call_llm(prompt)
 
-    # 8. sauvegarde réponse
     add_message("assistant", response)
-
     return response
-
-
-def extract_facts(user_input: str):
-    text = user_input.lower()
-
-    # nom
-    match = re.search(r"(je m'appelle|mon nom est|appelez-moi)\s+(.+)", text)
-    if match:
-        value = normalize_value(match.group(2))
-        add_fact("user_name", value)
-
-    # localisation
-    match = re.search(r"(j'habite|je vis à|je suis à)\s+(.+)", text)
-    if match:
-        value = normalize_value(match.group(2))
-        add_fact("user_location", value)
-
-    # goûts
-    match = re.search(r"j'aime\s+(.+)", text)
-    if match:
-        value = normalize_value(match.group(1))
-        add_fact("user_like", value)
