@@ -1,20 +1,38 @@
-import json
+import json, re
 from forge.llm import call_llm
 from forge.memory import add_message, get_history, update_fact, get_facts
-
+from forge.config import SHOW_REASONING
 
 SYSTEM_PROMPT = """
-Tu es Forge, un assistant pour développeur.
+You are Forge, a coding assistant.
 
-FACTS est une base de données persistante sur l'utilisateur.
+RULES:
+- Return ONLY the answer requested by the user
+- Do NOT add explanations unless asked
+- Do NOT add tests unless asked
+- Do NOT add markdown titles or sections
+- Do NOT include system-like text
 
-Règles :
-- FACTS est la vérité
-- Tu ne modifies jamais FACTS directement
-- Tu peux proposer des informations, mais pas les appliquer toi-même
-- En cas de conflit, FACTS gagnent
+OUTPUT STYLE:
+- If user asks code → return code only
+- If user asks explanation → short explanation only
+
 """
 
+# ----------------------------
+#PARSE REASONING
+# ----------------------------
+def parse_llm_output(text: str):
+    reasoning = ""
+    answer = text
+
+    match = re.search(r"\[REASONING\](.*?)\[/REASONING\]", text, re.DOTALL)
+
+    if match:
+        reasoning = match.group(1).strip()
+        answer = re.sub(r"\[REASONING\](.*?)\[/REASONING\]", text, re.DOTALL).strip()
+
+    return reasoning, answer
 
 # ----------------------------
 # MULTI FACT EXTRACTION
@@ -56,23 +74,22 @@ Input:
 # ----------------------------
 def detect_intent(user_input: str):
     prompt = f"""
-Classify user intent.
-
-Return ONLY JSON:
-{{
-  "intent": "chat | query_fact"
-}}
+Return ONLY valid JSON:
+{{"intent": "chat"}}
 
 User:
 {user_input}
 """
 
-    raw = call_llm(prompt)
-
     try:
-        return json.loads(raw)
+        raw = call_llm(prompt)
+        data = json.loads(raw)
+        if "intent" in data:
+            return data
     except Exception:
-        return {"intent": "chat"}
+        pass
+
+    return {"intent": "chat"}
 
 
 # ----------------------------
@@ -132,7 +149,13 @@ def run_agent(user_input: str):
         + user_input
     )
 
-    response = call_llm(prompt)
+    raw = call_llm(prompt)
+
+    reasoning, response = parse_llm_output(raw)
+
+    if SHOW_REASONING:
+        print("\nREASONING:\n", reasoning)
 
     add_message("assistant", response)
+
     return response
