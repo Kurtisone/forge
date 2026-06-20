@@ -1,23 +1,43 @@
 import requests
 from forge.config import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_URL,
-    LLM_URL
+    FORGE_PROVIDER,
+    OLLAMA_URL,
+    LLAMA_CPP_URL,
+    LLM_MODEL
 )
 
-def call_ollama(prompt, model):
+def call_llama_cpp(url: str, model: str, prompt: str):
+    try:
+        r = requests.post(
+            f"{url}/completion",
+            json={
+                "prompt": prompt,
+                "n_predict": 512,
+                "temperature": 0.7,
+                "stop": []
+            },
+            timeout=120
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data.get("content") or data.get("completion") or ""
+    except Exception as e:
+        return f"[LLAMA_CPP_ERROR] {str(e)}"
+
+def call_ollama(url: str, model: str, prompt: str):
     r = requests.post(
-        LLM_URL,
+        url,
         json={
             "model": model,
             "prompt": prompt,
             "stream": False
         }
     )
-    return r.json()["response"]
+    data = r.json()
+    return data.get("response") or data.get("content")
 
 
-def call_openrouter(prompt, model):
+def call_openrouter(url: str, api_key: str, model: str, prompt: str):
     r = requests.post(
         OPENROUTER_URL,
         headers={
