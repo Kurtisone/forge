@@ -13,8 +13,8 @@ def call_llama_cpp(url: str, model: str, prompt: str):
             json={
                 "prompt": prompt,
                 "n_predict": 512,
-                "temperature": 0.7,
-                "stop": []
+                "temperature": 0.0,
+                "stop": ["</tool>", "<tool>"]
             },
             timeout=120
         )
