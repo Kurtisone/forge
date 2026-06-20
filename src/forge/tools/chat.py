@@ -1,2 +1,4 @@
-def chat(user_input: str) -> str:
-    return user_input
+from forge.llm import call_llm
+
+def run(content: str):
+    return call_llm(content)

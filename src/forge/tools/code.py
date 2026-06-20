@@ -1,2 +1,2 @@
-def generate_code(code: str) -> str:
-    return f"```python\n{code}\n```"
+def run(content: str):
+    return content  # ou exécution sandbox plus tard

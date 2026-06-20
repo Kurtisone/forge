@@ -10,7 +10,9 @@ def main():
             break
 
         response = run_agent(user_input)
-        print("\n" + response + "\n")
+
+        print("\n" + str(response) + "\n")
+
 
 if __name__ == "__main__":
     main()
