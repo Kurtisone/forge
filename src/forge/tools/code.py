@@ -1,2 +1,2 @@
 def run(content: str):
-    return content  # ou exécution sandbox plus tard
+    return f"```python\n{content}\n```"
