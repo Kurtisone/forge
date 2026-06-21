@@ -63,21 +63,54 @@ generate_code(content: str) -> str
 ---
 
 ### Architecture
+
+Forge v2.2 ("Clean Runtime") enforces a strict separation between the
+three layers: the **LLM** (router prompt + providers), **tools**
+(dispatch + handlers), and **logs** (the only place anything is
+printed). The orchestrator is the single point where they meet, and
+it is the only place a loop guard (`MAX_STEPS`) can ever apply.
+
 ```
 src/forge/
 │
-├── agent.py          # core orchestrator
-├── llm.py            # LLM provider wrapper
-├── config.py         # runtime configuration
+├── orchestrator.py    # the only orchestrator (agent.py is a compat alias)
+├── llm.py             # LLM dispatch — never called from anywhere else
+├── config.py          # the only module that reads os.getenv()
+├── logger.py           # the only module allowed to print/log
+├── errors.py           # typed exception hierarchy (ForgeError, ...)
+├── types.py             # RouterDecision / ToolResult / AgentResult dataclasses
+│
+├── router/
+│   ├── prompt.py        # router prompt template — isolated, nothing else builds prompts
+│   └── parser.py         # raw LLM text -> RouterDecision
 │
 ├── tools/
-│   ├── router.py     # prompt + JSON parser
-│   ├── chat.py       # chat tool
-│   └── code.py       # code tool
+│   ├── registry.py        # discovery; failures are logged, never swallowed
+│   ├── chat.py
+│   ├── code.py
+│   └── files.py / git.py / shell.py   # roadmap stubs, no run() yet
 │
 └── providers/
-    └── llm_provider.py
+    ├── llama_cpp.py
+    ├── ollama.py
+    └── openrouter.py
 ```
+
+Data flow:
+```
+user_input
+   ↓
+Orchestrator._route()      -> RouterDecision   (LLM layer)
+   ↓
+Orchestrator._dispatch()   -> ToolResult        (tools layer)
+   ↓
+AgentResult                                      (returned to caller)
+```
+Every step along the way emits a structured event through `log.event()`
+(visible only when `SHOW_DEBUG=true`), and is bounded by `MAX_STEPS`
+with cycle detection so the same `(tool, content)` pair can never be
+dispatched twice in a single run.
+
 ---
 
 ### Usage
@@ -95,11 +128,14 @@ Environment variables:
 
 |Variable       | Description	                    |Default                              |
 |---------------|:---------------------------------:|:-----------------------------------:|
-|FORGE_PROVIDER	| LLM backend (ollama, llama_cpp)	| llama_cpp                           |
+|FORGE_PROVIDER	| LLM backend (ollama, llama_cpp, openrouter)	| llama_cpp                           |
 |LLM_MODEL	    | Model name	                    | default                             |
 |OLLAMA_URL	    | Ollama endpoint	                | http://127.0.0.1:11434/api/generate |
 |LLAMA_CPP_URL	| llama.cpp endpoint	            | http://127.0.0.1:8080               |
-|SHOW_DEBUG	    | Debug output	                    | false                               |
+|OPENROUTER_URL	| OpenRouter endpoint	            | https://openrouter.ai/api/v1/chat/completions |
+|OPENROUTER_API_KEY	| OpenRouter API key	        | (empty)                             |
+|MAX_STEPS	    | Hard ceiling on router→tool steps per run (loop guard) | 1                |
+|SHOW_DEBUG	    | Emit structured debug trace (router prompt, raw output, tool dispatch, timings) | false |
 
 ---
 
