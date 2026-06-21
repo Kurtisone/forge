@@ -90,6 +90,9 @@ src/forge/
 │   ├── code.py
 │   └── files.py / git.py / shell.py   # roadmap stubs, no run() yet
 │
+├── memory.py             # JSON-backed rolling history + key/value facts
+│                          # (see Memory section below)
+│
 └── providers/
     ├── llama_cpp.py
     ├── ollama.py
@@ -135,7 +138,28 @@ Environment variables:
 |OPENROUTER_URL	| OpenRouter endpoint	            | https://openrouter.ai/api/v1/chat/completions |
 |OPENROUTER_API_KEY	| OpenRouter API key	        | (empty)                             |
 |MAX_STEPS	    | Hard ceiling on router→tool steps per run (loop guard) | 1                |
+|MEMORY_ENABLED	| Persist and recall conversation history across turns | true                |
+|MEMORY_FILE	| Path to the JSON memory file (mount a volume here for persistence) | data/memory.json |
+|MEMORY_MAX_HISTORY | Number of past messages kept and replayed to the router | 20              |
 |SHOW_DEBUG	    | Emit structured debug trace (router prompt, raw output, tool dispatch, timings) | false |
+
+---
+
+### Memory
+
+Forge keeps a rolling window of the last `MEMORY_MAX_HISTORY` messages
+in `MEMORY_FILE` (JSON, mounted via `-v $(pwd)/data:/app/data`) and
+replays it as context in the router prompt on every turn, so it can
+answer "do you remember..." correctly.
+
+It's plain JSON, not a database. For a single-user, single-process
+local runtime, that's a feature, not a shortcut: no schema, no
+migrations, `cat data/memory.json` to debug it directly. The module
+also exposes a `facts` key/value store (`add_fact` / `get_facts`) for
+durable facts, not yet wired into the router prompt — that's the
+natural next step if/when a "remember this" tool is added.
+If Forge ever needs concurrent writers or queries beyond "last N
+messages", that's when SQLite earns its place — not before.
 
 ---
 
