@@ -61,6 +61,48 @@ def test_runaway_local_model_output_still_parses(monkeypatch):
     assert result.output == "answer"
 
 
+def test_leaked_role_prefix_is_stripped(monkeypatch):
+    """
+    Regression test: once conversation history was added to the
+    router prompt, some local models started leaking 'Assistant: ...'
+    style prefixes into otherwise-non-JSON output. The label must not
+    end up visible in the final answer.
+    """
+    monkeypatch.setattr(
+        orch_mod, "call_llm", lambda prompt: "Assistant: here is my answer"
+    )
+    result = Orchestrator().run("hello")
+    assert result.ok
+    assert result.output == "here is my answer"
+
+
+def test_history_is_passed_as_context_not_dialogue(monkeypatch):
+    """
+    Regression test: the history block used to be formatted as
+    'User: ... / Assistant: ...', which visually matched the live
+    turn prompt and caused local models to continue it as plain
+    dialogue instead of emitting JSON. It must read as reference
+    context instead. (Memory file isolation comes from the autouse
+    fixture in conftest.py.)
+    """
+    captured = {}
+
+    def capture_and_answer(prompt):
+        captured["prompt"] = prompt
+        return json.dumps({"tool": "chat", "content": "ok"})
+
+    monkeypatch.setattr(orch_mod, "call_llm", lambda prompt: json.dumps(
+        {"tool": "chat", "content": "Salut Alexandre !"}
+    ))
+    Orchestrator().run("Je m'appelle Alexandre")
+
+    monkeypatch.setattr(orch_mod, "call_llm", capture_and_answer)
+    Orchestrator().run("Comment je m'appelle ?")
+
+    assert "they said" in captured["prompt"]
+    assert "\nUser: Je m'appelle Alexandre\n" not in captured["prompt"]
+
+
 def test_unknown_tool_falls_back_to_chat(monkeypatch):
     monkeypatch.setattr(
         orch_mod,
