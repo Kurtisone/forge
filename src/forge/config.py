@@ -39,5 +39,10 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 # just because nobody remembered to add a guard.
 MAX_STEPS = int(os.getenv("MAX_STEPS", "1"))
 
+# --- Memory --------------------------------------------------------------
+MEMORY_ENABLED = _bool("MEMORY_ENABLED", "true")
+MEMORY_FILE = os.getenv("MEMORY_FILE", "data/memory.json")
+MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "20"))
+
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")

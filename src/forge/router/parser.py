@@ -8,11 +8,23 @@ instead of silent.
 """
 
 import json
+import re
 
 from forge.logger import log
 from forge.types import RouterDecision
 
 _VALID_TOOLS = {"chat", "code"}
+_LEAKED_ROLE_PREFIX = re.compile(r"^\s*(assistant|user)\s*:\s*", re.IGNORECASE)
+
+
+def _strip_leaked_role_prefix(text: str) -> str:
+    """
+    Local models occasionally leak a role label ('Assistant: ...')
+    instead of staying in pure JSON. This is defense in depth on top
+    of the prompt fix -- it should rarely trigger, but if it does,
+    the label shouldn't end up visible in the final answer.
+    """
+    return _LEAKED_ROLE_PREFIX.sub("", text, count=1)
 
 
 def _extract_first_json_object(text: str):
@@ -49,7 +61,9 @@ def parse_router_output(raw: str) -> RouterDecision:
 
     if not isinstance(data, dict):
         log.warning("router returned non-JSON output, falling back to chat")
-        return RouterDecision(tool="chat", content=raw.strip(), raw=raw)
+        return RouterDecision(
+            tool="chat", content=_strip_leaked_role_prefix(raw.strip()), raw=raw
+        )
 
     tool = data.get("tool", "chat")
     content = data.get("content")

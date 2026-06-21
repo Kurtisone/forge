@@ -14,9 +14,12 @@ not by convention:
    same step twice is stopped instead of spinning.
 3. Every failure is a typed AgentResult, never a bare exception
    leaking to main.py or a silently-swallowed empty string.
+4. Memory (conversation history) is best-effort: a read/write
+   failure is logged and ignored, never allowed to break a turn.
 """
 
-from forge.config import MAX_STEPS
+from forge import memory
+from forge.config import MAX_STEPS, MEMORY_ENABLED
 from forge.errors import LoopGuardError, ProviderError
 from forge.llm import call_llm
 from forge.logger import log
@@ -65,6 +68,9 @@ class Orchestrator:
 
             result = self._dispatch(decision.tool, decision.content)
 
+            if MEMORY_ENABLED:
+                self._remember(user_input, result.output)
+
             # Single-shot today: the first successful dispatch is the
             # final answer. When the roadmap's multi-step tools land,
             # this is the one line that changes (decide whether to
@@ -81,8 +87,16 @@ class Orchestrator:
         # Unreachable while MAX_STEPS >= 1, kept for safety.
         raise LoopGuardError("max_steps exhausted without a result")
 
+    def _remember(self, user_input: str, output: str) -> None:
+        # Memory is a convenience layer: it must never fail a turn.
+        try:
+            memory.add_exchange(user_input, str(output))
+        except Exception as e:  # noqa: BLE001
+            log.warning("failed to persist memory: %s", e)
+
     def _route(self, user_input: str):
-        prompt = build_router_prompt(user_input)
+        history = self._recall()
+        prompt = build_router_prompt(user_input, history=history)
         log.event("router.prompt", chars=len(prompt))
 
         raw = call_llm(prompt)
@@ -91,6 +105,15 @@ class Orchestrator:
         decision = parse_router_output(raw)
         log.event("router.decision", tool=decision.tool, content=decision.content)
         return decision
+
+    def _recall(self) -> list[dict]:
+        if not MEMORY_ENABLED:
+            return []
+        try:
+            return memory.get_history()
+        except Exception as e:  # noqa: BLE001
+            log.warning("failed to load memory: %s", e)
+            return []
 
     def _dispatch(self, tool: str, content: str):
         handler = get_tool(tool)

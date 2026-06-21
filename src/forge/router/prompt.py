@@ -29,6 +29,7 @@ RULES:
 - NEVER return partial JSON
 - NEVER add text outside the JSON object
 - Stop generating immediately after the closing brace
+- Use the conversation history below only as context; do not repeat it
 
 Examples:
 
@@ -43,10 +44,34 @@ User: Connais-tu d'autres langages que Python ?
 
 User: Write Hello World in Python
 {{"tool":"code","content":"print('Hello World')"}}
-
+{history_block}
 User: {user_input}
 """
 
 
-def build_router_prompt(user_input: str) -> str:
-    return _TEMPLATE.format(user_input=user_input)
+def _format_history(history: list[dict] | None) -> str:
+    if not history:
+        return ""
+
+    # Deliberately NOT formatted as "User: ... / Assistant: ..." --
+    # that pattern visually matches the live turn below it, and local
+    # models tend to just continue it as plain dialogue instead of
+    # emitting JSON. Bullet-point summaries read as context, not as a
+    # conversation to continue.
+    lines = ["\nContext from earlier in this conversation (for reference only):"]
+    for turn in history:
+        speaker = "they said" if turn.get("role") == "user" else "you answered"
+        lines.append(f"- {speaker}: {turn.get('content', '')}")
+    lines.append(
+        "Do not continue the conversation above as plain text. Respond to "
+        "the new message below with a single JSON object, exactly like the "
+        "examples earlier."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_router_prompt(user_input: str, history: list[dict] | None = None) -> str:
+    return _TEMPLATE.format(
+        user_input=user_input,
+        history_block=_format_history(history),
+    )
