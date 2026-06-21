@@ -1,17 +1,35 @@
-from forge.agent import run_agent
+from forge.config import SHOW_DEBUG
+from forge.errors import ForgeError
+from forge.logger import log
+from forge.orchestrator import Orchestrator
+
 
 def main():
-    print("Forge V1 ready. Type 'exit' to quit.\n")
+    orchestrator = Orchestrator()
+
+    print("Forge ready" + (" [debug]" if SHOW_DEBUG else "") + ". Type 'exit' to quit.\n")
 
     while True:
-        user_input = input("Forge > ")
-
-        if user_input.lower() in ["exit", "quit"]:
+        try:
+            user_input = input("Forge > ")
+        except (EOFError, KeyboardInterrupt):
+            print()
             break
 
-        response = run_agent(user_input)
+        if user_input.lower() in ("exit", "quit"):
+            break
 
-        print("\n" + str(response) + "\n")
+        if not user_input.strip():
+            continue
+
+        try:
+            result = orchestrator.run(user_input)
+        except ForgeError as e:
+            log.error("unhandled runtime error: %s", e)
+            print(f"\n[error] {e}\n")
+            continue
+
+        print("\n" + str(result.output) + "\n")
 
 
 if __name__ == "__main__":
