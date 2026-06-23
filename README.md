@@ -88,7 +88,9 @@ src/forge/
 │   ├── registry.py        # discovery; failures are logged, never swallowed
 │   ├── chat.py
 │   ├── code.py
-│   └── files.py / git.py / shell.py   # roadmap stubs, no run() yet
+│   └── files.py / git.py / shell.py   # roadmap stubs, no run() yet --
+│                                       # and won't be reachable just
+│                                       # for having one (ENABLED_TOOLS)
 │
 ├── memory.py             # JSON-backed rolling history + key/value facts
 │                          # (see Memory section below)
@@ -141,6 +143,7 @@ Environment variables:
 |MEMORY_ENABLED	| Persist and recall conversation history across turns | true                |
 |MEMORY_FILE	| Path to the JSON memory file (mount a volume here for persistence) | data/memory.json |
 |MEMORY_MAX_HISTORY | Number of past messages kept and replayed to the router | 20              |
+|ENABLED_TOOLS	| Comma-separated allowlist of dispatchable tools. Having a run() function is not enough -- a tool must also be listed here | chat,code |
 |SHOW_DEBUG	    | Emit structured debug trace (router prompt, raw output, tool dispatch, timings) | false |
 
 ---
