@@ -95,6 +95,17 @@ def add_exchange(user_content: str, assistant_content: str) -> None:
     save_memory(memory)
 
 
+def clear_history() -> None:
+    """
+    Wipe the rolling conversation history (but keep facts).
+    Used by the !clear REPL command.
+    """
+    memory = load_memory()
+    memory["history"] = []
+    save_memory(memory)
+    log.info("conversation history cleared")
+
+
 # ----------------------------
 # FACTS
 # ----------------------------

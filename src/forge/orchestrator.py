@@ -16,11 +16,15 @@ not by convention:
    leaking to main.py or a silently-swallowed empty string.
 4. Memory (conversation history) is best-effort: a read/write
    failure is logged and ignored, never allowed to break a turn.
+5. The ToolResult contract is enforced, not assumed: a tool that
+   returns anything other than a non-empty str is treated as a
+   failure (ToolExecutionError), never passed through to the user
+   as-is.
 """
 
 from forge import memory
 from forge.config import MAX_STEPS, MEMORY_ENABLED
-from forge.errors import LoopGuardError, ProviderError
+from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
 from forge.llm import call_llm
 from forge.logger import log
 from forge.router import build_router_prompt, parse_router_output
@@ -28,6 +32,11 @@ from forge.tools.registry import get_tool, load_tools
 from forge.types import AgentResult, ToolResult
 
 load_tools()
+
+# Max chars of user input / output saved to memory per turn.
+# Prevents large code pastes from flooding the history and bloating
+# every subsequent prompt.
+_MAX_MEMORY_CONTENT = 300
 
 
 class Orchestrator:
@@ -68,7 +77,10 @@ class Orchestrator:
 
             result = self._dispatch(decision.tool, decision.content)
 
-            if MEMORY_ENABLED:
+            if MEMORY_ENABLED and result.ok:
+                # Only persist successful turns. A failed turn (provider
+                # down, tool contract violation, etc.) must not pollute the
+                # history that the router will replay on the next message.
                 self._remember(user_input, result.output)
 
             # Single-shot today: the first successful dispatch is the
@@ -89,8 +101,14 @@ class Orchestrator:
 
     def _remember(self, user_input: str, output: str) -> None:
         # Memory is a convenience layer: it must never fail a turn.
+        # Only called on success (see run()) so error messages like
+        # "Tool error: chat" never poison future prompts.
+        # Inputs are truncated so large code pastes don't bloat the
+        # history and overflow the model's context window.
         try:
-            memory.add_exchange(user_input, str(output))
+            user_snippet = user_input[:_MAX_MEMORY_CONTENT]
+            output_snippet = output[:_MAX_MEMORY_CONTENT]
+            memory.add_exchange(user_snippet, output_snippet)
         except Exception as e:  # noqa: BLE001
             log.warning("failed to persist memory: %s", e)
 
@@ -124,14 +142,37 @@ class Orchestrator:
         log.event("tool.dispatch", tool=tool)
         try:
             output = handler(content)
+            output = self._validate_tool_output(tool, output)
+        except ToolExecutionError as e:
+            log.error("tool %r violated its contract: %s", tool, e)
+            return ToolResult(
+                tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
+            )
         except Exception as e:  # noqa: BLE001 - a tool must never crash the runtime
             log.error("tool %r raised: %s", tool, e)
             return ToolResult(
                 tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
             )
 
-        log.event("tool.result", tool=tool, length=len(str(output)))
+        log.event("tool.result", tool=tool, length=len(output))
         return ToolResult(tool=tool, output=output, ok=True)
+
+    def _validate_tool_output(self, tool: str, output) -> str:
+        """
+        Enforce the ToolResult contract: a tool MUST return a
+        non-empty str. Anything else (None, a dict, an exception
+        object accidentally returned instead of raised, an empty or
+        whitespace-only string...) is a contract violation, caught
+        here rather than silently stringified or passed through to
+        the user as a confusing answer.
+        """
+        if not isinstance(output, str):
+            raise ToolExecutionError(
+                f"tool {tool!r} must return str, got {type(output).__name__}"
+            )
+        if not output.strip():
+            raise ToolExecutionError(f"tool {tool!r} returned empty output")
+        return output
 
 
 def run_agent(user_input: str) -> str:
