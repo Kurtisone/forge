@@ -62,5 +62,14 @@ ENABLED_TOOLS = {
     if name.strip()
 }
 
+# --- Execution trace --------------------------------------------------------
+# When enabled, each run() appends a JSONL record to TRACE_FILE.
+# One JSON object per line — inspect with:
+#   cat data/traces.jsonl | python -m json.tool
+#   tail -n1 data/traces.jsonl | jq .
+#   !trace  (inside Forge REPL)
+TRACE_ENABLED = _bool("TRACE_ENABLED", "true")
+TRACE_FILE = os.getenv("TRACE_FILE", "data/traces.jsonl")
+
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")

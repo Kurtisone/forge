@@ -12,15 +12,12 @@ Multi-line / code paste:
      ... ```
 
   B) Type your question, then paste the code on the next lines.
-     Forge > Create a multi-stage build
-     ... ```
-     ... FROM python:3.12
-     ... ```
      Forge will automatically combine the question and the code into
      a single turn when you paste them together.
 
 Special commands (prefix with !):
   !clear   wipe conversation history so the next turn starts fresh
+  !trace   show the last 5 execution traces
   !help    show this message
 """
 
@@ -32,6 +29,7 @@ from forge.errors import ForgeError
 from forge.logger import log
 from forge.memory import clear_history
 from forge.orchestrator import Orchestrator
+from forge import trace
 
 _FENCE = "```"
 
@@ -121,6 +119,8 @@ def _handle_command(cmd: str) -> bool:
     if cmd == "!clear":
         clear_history()
         print("[context cleared]\n")
+    elif cmd == "!trace":
+        print(trace.format_for_display(trace.read_last(5)) + "\n")
     elif cmd == "!help":
         print(__doc__)
     return False
