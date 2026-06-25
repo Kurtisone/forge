@@ -1,2 +1,4 @@
 .env*
 data/memory.json
+data/traces.jsonl
+data/__pycache__/
