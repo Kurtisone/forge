@@ -3,17 +3,22 @@ Forge REPL.
 
 Single-line usage: just type and press Enter as usual.
 
-Multi-line / code paste:
+Multi-line code paste — two ways:
+  A) Paste question + code together (recommended):
+       Forge > Optimise ce Containerfile
+       FROM python:3.12          ← these lines arrive in one paste
+       WORKDIR /app              ← select() detects it automatically
+       ...
+     No fences needed when pasting in one go.
 
-  A) Start a line with ``` (fence-first):
-     Forge > ```
-     ... def hello():
-     ...     print("hi")
-     ... ```
-
-  B) Type your question, then paste the code on the next lines.
-     Forge will automatically combine the question and the code into
-     a single turn when you paste them together.
+  B) Manual fence mode — type ``` on an empty line to start,
+     then ``` again on an empty line to submit:
+       Forge > ```
+       ... FROM python:3.12
+       ... WORKDIR /app
+       ... ```          ← closes the block and submits
+     Use this only for code. Plain questions don't need fences.
+     Type 'cancel' on an empty ... line to abort without submitting.
 
 Special commands (prefix with !):
   !clear   wipe conversation history so the next turn starts fresh
@@ -21,6 +26,7 @@ Special commands (prefix with !):
   !help    show this message
 """
 
+import re
 import select
 import sys
 
@@ -32,49 +38,56 @@ from forge.orchestrator import Orchestrator
 from forge import trace
 
 _FENCE = "```"
+_CANCEL = "cancel"
 
 
 def _stdin_has_data(timeout: float = 0.05) -> bool:
-    """
-    Return True if stdin has data buffered right now (i.e. the user
-    pasted a block of lines, all of which arrived at once).
-    Uses select() which is available on Linux / Steam Deck.
-    Falls back to False on platforms that don't support it.
-    """
     try:
         return bool(select.select([sys.stdin], [], [], timeout)[0])
     except (OSError, ValueError):
         return False
 
 
-def _collect_fence_block() -> str:
+def _collect_fence_block() -> str | None:
     """
-    Read lines until a closing ``` fence or EOF.
-    Returns the code content (without the fence markers).
+    Read lines until a closing ``` or 'cancel'.
+    Returns the collected content, or None if the user cancelled.
+    Prints a clear prompt so the user always knows how to exit.
     """
+    print("  (paste code, then type ``` on an empty line to submit,"
+          " or 'cancel' to abort)")
     lines = []
     while True:
         try:
             line = input("... ")
         except (EOFError, KeyboardInterrupt):
-            break
+            print()
+            return None
         if line.strip() == _FENCE:
             break
+        if line.strip().lower() == _CANCEL:
+            print("[cancelled]\n")
+            return None
         lines.append(line)
     return "\n".join(lines)
 
 
+def _strip_fences(text: str) -> str:
+    """Remove enclosing ``` markers from a pasted block."""
+    text = re.sub(r"^```\w*\n?", "", text, count=1)
+    text = re.sub(r"\n?```\s*$", "", text)
+    return text
+
+
 def _read_input() -> str | None:
     """
-    Read one user turn. Returns the text to submit, or None on EOF.
+    Read one user turn.
 
-    Handles three cases:
-    1. Single line  →  returned as-is.
-    2. Fence-first  →  collects code block, returns it alone.
-    3. Question then pasted code  →  detects buffered stdin with
-       select(), reads ahead, combines question + code as one turn.
-       This is the common copy-paste pattern:
-         "Create a multi-stage build\n```\nFROM...\n```"
+    Three cases:
+    1. Single line → returned as-is.
+    2. Fence-first (``` on its own line) → manual code collection.
+    3. Multi-line paste → select() detects buffered stdin and
+       combines all lines as one turn (fences stripped if present).
     """
     try:
         first_line = input("Forge > ")
@@ -82,40 +95,44 @@ def _read_input() -> str | None:
         print()
         return None
 
-    # Case 2: fence-first
+    # Case 2a: explicit fence on its own line
     if first_line.strip() == _FENCE:
-        code = _collect_fence_block()
-        return code
+        content = _collect_fence_block()
+        return content   # None = cancelled → caller skips
 
-    # Case 3: question followed immediately by more buffered lines
-    # (i.e. the user pasted a question + a code block in one go).
+    # Case 2b: question ending with ``` (with optional spaces or lang tag)
+    # Matches: "Optimise ce fichier ```"
+    #           "Optimise ce fichier ```python"
+    #           "Optimise ce fichier ``` "   (trailing space)
+    _inline_fence = re.match(r"^(.*?)```\w*\s*$", first_line)
+    if _inline_fence:
+        question = _inline_fence.group(1).strip()
+        content = _collect_fence_block()
+        if content is None:
+            return question or None
+        return f"{question}\n\n{content}".strip() if question else content
+
+    # Case 3: detect a paste (all lines arrive in the buffer at once)
     extra_lines = []
     while _stdin_has_data():
         try:
-            line = input("... ")
+            extra_lines.append(input("... "))
         except (EOFError, KeyboardInterrupt):
             break
-        extra_lines.append(line)
 
     if not extra_lines:
-        # Case 1: plain single line
-        return first_line
+        return first_line   # Case 1
 
-    # Combine: strip enclosing ``` fences from the extra block,
-    # then glue question + code as one readable message.
-    combined_extra = "\n".join(extra_lines)
-    # Remove leading/trailing fence markers so the prompt stays clean
-    import re
-    code_body = re.sub(r"^```\w*\n?", "", combined_extra, count=1)
-    code_body = re.sub(r"\n?```\s*$", "", code_body)
-
-    if code_body.strip():
-        return f"{first_line}\n\n{code_body.strip()}"
+    # Strip enclosing fences from the pasted block if present,
+    # then combine as "question\n\ncode"
+    combined = "\n".join(extra_lines)
+    code_body = _strip_fences(combined).strip()
+    if code_body:
+        return f"{first_line}\n\n{code_body}"
     return first_line
 
 
-def _handle_command(cmd: str) -> bool:
-    """Handle a !command. Returns True if the REPL should exit."""
+def _handle_command(cmd: str) -> None:
     if cmd == "!clear":
         clear_history()
         print("[context cleared]\n")
@@ -123,29 +140,25 @@ def _handle_command(cmd: str) -> bool:
         print(trace.format_for_display(trace.read_last(5)) + "\n")
     elif cmd == "!help":
         print(__doc__)
-    return False
 
 
 def main():
     orchestrator = Orchestrator()
 
-    print("Forge ready" + (" [debug]" if SHOW_DEBUG else "") + ". Type 'exit' to quit.\n")
-    print("Tip: wrap multi-line pastes in ``` fences.  !help for commands.\n")
+    print("Forge ready" + (" [debug]" if SHOW_DEBUG else "") + ". Type 'exit' to quit.")
+    print("Tip: just type your question. Use ``` only to paste code blocks. !help for more.\n")
 
     while True:
         user_input = _read_input()
 
         if user_input is None:
-            break
+            continue   # None = cancelled fence, not EOF
 
         stripped = user_input.strip()
-
         if not stripped:
             continue
-
         if stripped.lower() in ("exit", "quit"):
             break
-
         if stripped.startswith("!"):
             _handle_command(stripped.lower())
             continue
