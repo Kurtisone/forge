@@ -2,3 +2,4 @@
 data/memory.json
 data/traces.jsonl
 data/__pycache__/
+data/workspace/

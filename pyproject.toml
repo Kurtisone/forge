@@ -1,6 +1,11 @@
 [project]
 name = "forge"
-version = "0.1.0"
+version = "3.0.0"
+requires-python = ">=3.12"
+dependencies = ["requests"]
+
+[project.scripts]
+forge = "forge.cli:main"
 
 [build-system]
 requires = ["setuptools"]

@@ -49,8 +49,15 @@ MEMORY_ENABLED = _bool("MEMORY_ENABLED", "true")
 MEMORY_FILE = os.getenv("MEMORY_FILE", "data/memory.json")
 MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "20"))
 
-# --- Tool allowlist ---------------------------------------------------------
-# A module exposing run() in src/forge/tools/ is NOT dispatchable just
+# --- Files tool workspace ---------------------------------------------------
+# The files tool (forge.tools.files) confines all read/write/list
+# operations to this directory. Paths outside it are rejected before
+# any filesystem operation is attempted.
+# Mount a volume here when running in a container:
+#   podman run -v $(pwd):/workspace ...  and set WORKSPACE_DIR=/workspace
+WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "data/workspace")
+
+# --- Tool allowlist ---------------------------------------------------------# A module exposing run() in src/forge/tools/ is NOT dispatchable just
 # because it exists. It must also be explicitly listed here. This is
 # the guard that matters once files.py / git.py / shell.py stop being
 # empty stubs: implementing run() in shell.py must not silently make

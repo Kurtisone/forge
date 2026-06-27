@@ -82,6 +82,12 @@ class AgentState:
     final_tool: Optional[str] = None
     ok: bool = True
     error: Optional[str] = None
+    # Arbitrary key/value store for inter-node data passing in a graph.
+    # Nodes can write results here (e.g. file content) and downstream
+    # nodes can read them, without needing direct coupling.
+    # Example: read_file_node writes context["file_content"] = "...",
+    #          llm_review_node reads it.
+    context: dict = field(default_factory=dict)
 
     def new_step(self) -> TraceStep:
         self.steps_taken += 1

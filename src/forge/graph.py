@@ -168,7 +168,8 @@ class Graph:
     # ------------------------------------------------------------------
 
     def run(self, user_input: str,
-            history: Optional[list[dict]] = None) -> AgentState:
+            history: Optional[list[dict]] = None,
+            initial_context: Optional[dict] = None) -> AgentState:
         """
         Execute the graph starting from the entry node.
         Returns the final AgentState (use .to_result() for AgentResult).
@@ -180,6 +181,7 @@ class Graph:
             user_input=user_input,
             max_steps=self.max_steps,
             history=history or [],
+            context=initial_context or {},
         )
 
         current = self._entry
