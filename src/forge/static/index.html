@@ -284,6 +284,7 @@
 <div class="tabs">
   <div class="tab active" data-tab="chat">Chat</div>
   <div class="tab" data-tab="review">Review</div>
+  <div class="tab" data-tab="run">Run Graph</div>
   <div class="tab" data-tab="traces">Traces</div>
 </div>
 
@@ -320,6 +321,36 @@
   <div id="review-result"></div>
 </div>
 
+<!-- Run Graph -->
+<div class="panel" id="run-panel">
+  <div id="run-panel-inner" style="padding:20px;gap:16px;overflow-y:auto;display:flex;flex-direction:column;">
+    <div class="field">
+      <div class="field-label">Graph</div>
+      <select id="run-graph" style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:10px 14px;font-size:.92rem;outline:none;">
+      </select>
+    </div>
+    <div class="field">
+      <div class="field-label">Input</div>
+      <textarea id="run-input" placeholder="Entrée passée au graph…" style="min-height:60px;max-height:120px;"></textarea>
+    </div>
+    <div class="field">
+      <div class="field-label">Context JSON <span style="color:var(--muted);font-weight:400">(optionnel)</span></div>
+      <textarea id="run-context" placeholder='{"question": "Que peut-on améliorer ?"}' style="min-height:60px;max-height:120px;font-family:var(--mono);font-size:.82rem;"></textarea>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;">
+      <button onclick="sendRun()">Exécuter</button>
+      <div id="run-spinner" style="display:none;color:var(--muted);font-size:.85rem;align-items:center;gap:8px;">
+        <div class="dots"><span>·</span><span>·</span><span>·</span></div> En cours…
+      </div>
+    </div>
+    <div>
+      <div class="field-label" style="margin-bottom:8px;">Tools actifs</div>
+      <div id="tools-list" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+    <div id="run-result" style="display:none;background:var(--bot-bg);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-size:.9rem;line-height:1.6;white-space:pre-wrap;"></div>
+  </div>
+</div>
+
 <!-- Traces -->
 <div class="panel" id="traces-panel">
   <button class="btn-outline" id="traces-refresh" onclick="loadTraces()">↺ Rafraîchir</button>
@@ -327,6 +358,57 @@
 </div>
 
 <script>
+// ── Tools / Run ───────────────────────────────────────────────────
+async function loadToolsAndGraphs() {
+  try {
+    const r = await fetch('/tools')
+    const data = await r.json()
+    const list = document.getElementById('tools-list')
+    list.innerHTML = (data.tools || []).map(t =>
+      `<span class="step-pill ok">${t}</span>`
+    ).join('') || '<span style="color:var(--muted);font-size:.85rem">aucun</span>'
+
+    const sel = document.getElementById('run-graph')
+    sel.innerHTML = (data.graphs || []).map(g =>
+      `<option value="${g}">${g}</option>`
+    ).join('')
+  } catch {}
+}
+
+async function sendRun() {
+  const graph   = document.getElementById('run-graph').value
+  const input   = document.getElementById('run-input').value.trim()
+  const ctxRaw  = document.getElementById('run-context').value.trim()
+  if (!input) return
+
+  let context = {}
+  if (ctxRaw) {
+    try { context = JSON.parse(ctxRaw) }
+    catch { document.getElementById('run-result').textContent = '[error] JSON context invalide'; document.getElementById('run-result').style.display='block'; return }
+  }
+
+  const spinner = document.getElementById('run-spinner')
+  const result  = document.getElementById('run-result')
+  spinner.style.display = 'flex'
+  result.style.display  = 'none'
+
+  try {
+    const r = await fetch('/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({graph, input, context})
+    })
+    const data = await r.json()
+    result.textContent = data.output || '[empty]'
+    result.style.borderColor = data.ok ? 'var(--green)' : 'var(--red)'
+    result.style.display = 'block'
+  } catch (e) {
+    result.textContent = `Erreur réseau : ${e.message}`
+    result.style.display = 'block'
+  }
+  spinner.style.display = 'none'
+}
+
 // ── Tab switching ─────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -335,8 +417,13 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active')
     document.getElementById(tab.dataset.tab + '-panel').classList.add('active')
     if (tab.dataset.tab === 'traces') loadTraces()
+    if (tab.dataset.tab === 'run')    loadToolsAndGraphs()
   })
 })
+
+// Load on startup
+checkHealth()
+loadToolsAndGraphs()
 
 // ── Health check ──────────────────────────────────────────────────
 async function checkHealth() {
@@ -351,7 +438,6 @@ async function checkHealth() {
     document.getElementById('status-text').textContent = 'offline'
   }
 }
-checkHealth()
 
 // ── Chat ──────────────────────────────────────────────────────────
 const messages = document.getElementById('chat-messages')

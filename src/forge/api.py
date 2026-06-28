@@ -67,6 +67,32 @@ async def _run_in_thread(fn, *args):
     return await loop.run_in_executor(_executor, fn, *args)
 
 
+class RunRequest(BaseModel):
+    graph: str                          # registered graph name: "review"
+    input: str                          # user_input passed to Graph.run()
+    context: Optional[dict] = None      # initial_context for the graph
+
+
+class RunResponse(BaseModel):
+    output: str
+    ok: bool
+    steps: int
+    graph: str
+    error: Optional[str] = None
+
+
+# ─── Graph registry ────────────────────────────────────────────────
+
+def _graph_registry() -> dict:
+    """Return all available graph builders, keyed by name."""
+    from forge.graphs.default import build as default_build
+    from forge.graphs.review import build as review_build
+    return {
+        "default": default_build,
+        "review":  review_build,
+    }
+
+
 # ─── Endpoints ─────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -120,6 +146,42 @@ async def review(req: ReviewRequest):
 @app.get("/traces")
 async def get_traces(n: int = 10):
     return {"traces": trace.read_last(n)}
+
+
+@app.get("/tools")
+async def list_tools():
+    """Return the list of currently enabled tools and available graphs."""
+    from forge.tools.registry import available_tools
+    return {
+        "tools": available_tools(),
+        "graphs": list(_graph_registry().keys()),
+    }
+
+
+@app.post("/run", response_model=RunResponse)
+async def run_graph(req: RunRequest):
+    """Run any registered graph by name with an optional initial context."""
+    registry = _graph_registry()
+    if req.graph not in registry:
+        raise HTTPException(
+            status_code=404,
+            detail=f"graph {req.graph!r} not found. Available: {sorted(registry)}"
+        )
+    if not req.input.strip():
+        raise HTTPException(status_code=400, detail="input cannot be empty")
+
+    def _execute():
+        g = registry[req.graph]()
+        return g.run(req.input, initial_context=req.context or {})
+
+    state = await _run_in_thread(_execute)
+    return RunResponse(
+        output=state.final_output or "",
+        ok=state.ok,
+        steps=state.steps_taken,
+        graph=req.graph,
+        error=state.error,
+    )
 
 
 # ─── UI ────────────────────────────────────────────────────────────

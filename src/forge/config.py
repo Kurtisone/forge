@@ -57,6 +57,15 @@ MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "20"))
 #   podman run -v $(pwd):/workspace ...  and set WORKSPACE_DIR=/workspace
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "data/workspace")
 
+# --- Shell tool -------------------------------------------------------------
+SHELL_TIMEOUT = int(os.getenv("SHELL_TIMEOUT", "30"))
+_default_shell_cmds = "ls,cat,head,tail,wc,grep,find,python3,pip,pytest"
+SHELL_ALLOWED_COMMANDS: set[str] = {
+    c.strip()
+    for c in os.getenv("SHELL_ALLOWED_COMMANDS", _default_shell_cmds).split(",")
+    if c.strip()
+}
+
 # --- Tool allowlist ---------------------------------------------------------# A module exposing run() in src/forge/tools/ is NOT dispatchable just
 # because it exists. It must also be explicitly listed here. This is
 # the guard that matters once files.py / git.py / shell.py stop being
