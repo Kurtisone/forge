@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from forge import trace
@@ -124,7 +124,9 @@ async def review(req: ReviewRequest):
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="content cannot be empty")
 
-    import tempfile, os
+    import os
+    import tempfile
+
     from forge.graphs.review import run as review_run
 
     # Write the content to a temp file so the review graph can read it
