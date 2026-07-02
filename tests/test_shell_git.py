@@ -8,10 +8,17 @@ import forge.tools.git as git_mod
 # ── shell ──────────────────────────────────────────────────────────
 
 def test_shell_allowed_command(tmp_path, monkeypatch):
+    # shell.py imports SHELL_ALLOWED_COMMANDS / SHELL_TIMEOUT by value at
+    # import time (`from forge.config import ...`), so patching forge.config
+    # alone has no effect on the already-bound names in shell_mod — the
+    # module's own attributes must be patched too, same as WORKSPACE_DIR
+    # below.
     monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(cfg, "SHELL_ALLOWED_COMMANDS", {"echo"})
     monkeypatch.setattr(cfg, "SHELL_TIMEOUT", 10)
     monkeypatch.setattr(shell_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(shell_mod, "SHELL_ALLOWED_COMMANDS", {"echo"})
+    monkeypatch.setattr(shell_mod, "SHELL_TIMEOUT", 10)
     r = shell_mod.run("echo hello")
     assert "hello" in r
 
