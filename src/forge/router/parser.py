@@ -116,7 +116,12 @@ def _validate_json_obj(data: dict, cleaned: str) -> RouterDecision | None:
         tool = "chat"
     if not content or not str(content).strip():
         return None   # empty content → try next extraction
-    return RouterDecision(tool=tool, content=str(content), raw=cleaned)
+    # Optional multi-step continuation flag. Absent (the common case,
+    # and every fine-tune/model that predates this field) means True:
+    # one step, same as before. Only an explicit false continues the
+    # loop in the orchestrator.
+    done = bool(data.get("done", True))
+    return RouterDecision(tool=tool, content=str(content), raw=cleaned, done=done)
 
 
 def parse_router_output(raw: str) -> RouterDecision:
