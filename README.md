@@ -1,5 +1,7 @@
 # Forge
 
+[![CI](https://github.com/Kurtisone/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/Kurtisone/forge/actions/workflows/ci.yml)
+
 Forge is a lightweight LLM-based agent runtime built around a router + tool execution model.
 Instead of relying on a monolithic prompt or complex reasoning loops, Forge delegates actions
 to explicit tools selected by a structured LLM router.
@@ -40,7 +42,7 @@ point where they meet. From v3.0, execution can also be expressed as a
 ```
 src/forge/
 │
-├── orchestrator.py      # single orchestrator — MAX_STEPS loop guard + cycle detection
+├── orchestrator.py      # single orchestrator — MAX_STEPS loop guard + cycle detection + real multi-step (see below)
 ├── llm.py               # LLM dispatch — called from nowhere else
 ├── config.py            # sole reader of os.getenv()
 ├── logger.py            # sole logger; SHOW_DEBUG gates structured trace events
@@ -83,8 +85,25 @@ Orchestrator._route()      →  RouterDecision   (LLM layer)
    ↓
 Orchestrator._dispatch()   →  ToolResult       (tools layer)
    ↓
+done? ──no──→  fold result into history  ──→  route again (up to MAX_STEPS)
+   │
+  yes
+   ↓
 AgentResult + TraceStep                         (returned to caller + written to traces.jsonl)
 ```
+
+**Multi-step is opt-in and backward compatible.** The router's JSON can include
+`"done": false` to ask for another step; the tool's result is folded into history as
+context for the next routing decision. The field defaults to `true`, so every
+extraction path that predates it — plain JSON without `done`, the XML tool-call
+format, markdown-fence fallback, plain-text fallback — still returns after exactly
+one step, exactly as before. A failed step always stops the run regardless of `done`,
+and the existing `seen_calls` loop guard applies across every step, not just within one.
+
+```json
+{"tool": "code", "content": "print(1)", "done": false}
+```
+
 
 Data flow per turn (graph):
 ```
@@ -114,6 +133,9 @@ open http://localhost:8000
 open http://<host-ip>:8000
 ```
 
+Exposing this beyond localhost or a trusted LAN? Set `API_TOKEN` in `.env.local`
+first — see [Configuration](#configuration) and [API Endpoints](#api-endpoints).
+
 **REPL (interactive terminal, local only):**
 
 ```bash
@@ -142,16 +164,23 @@ python -m forge.cli replay <run_id>
 
 ### API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/` | Web UI |
-| `GET` | `/health` | Provider + model info |
-| `POST` | `/chat` | Single conversation turn |
-| `POST` | `/review` | File content analysis |
-| `POST` | `/run` | Run any graph by name |
-| `GET` | `/tools` | Active tools + available graphs |
-| `GET` | `/traces?n=10` | Recent execution traces |
-| `GET` | `/docs` | Interactive API docs (Swagger) |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/` | open | Web UI |
+| `GET` | `/health` | open | Provider + model info |
+| `POST` | `/chat` | optional | Single conversation turn |
+| `POST` | `/review` | optional | File content analysis |
+| `POST` | `/run` | optional | Run any graph by name |
+| `GET` | `/tools` | optional | Active tools + available graphs |
+| `GET` | `/traces?n=10` | optional | Recent execution traces |
+| `GET` | `/docs` | open | Interactive API docs (Swagger) |
+
+**Auth:** set `API_TOKEN` in the environment to require
+`Authorization: Bearer <token>` on every "optional" route above. Unset (the
+default), the API is exactly as open as before this existed — nothing changes
+unless you opt in. `/` and `/health` always stay open, for the UI shell and
+monitoring probes. The web UI has a 🔑 **Token** button in the header that
+prompts for the token and remembers it (localStorage) for subsequent requests.
 
 **`POST /run` example:**
 ```json
@@ -172,7 +201,7 @@ python -m forge.cli replay <run_id>
 | `LLAMA_CPP_TIMEOUT` | HTTP timeout for llama.cpp requests (seconds) | `120` |
 | `OPENROUTER_URL` | OpenRouter endpoint | `https://openrouter.ai/api/v1/chat/completions` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | *(empty)* |
-| `MAX_STEPS` | Hard ceiling on router→tool steps per run | `1` |
+| `MAX_STEPS` | Hard ceiling on router→tool steps per run (multi-step only happens if the router sends `"done": false`) | `1` |
 | `ENABLED_TOOLS` | Comma-separated allowlist of dispatchable tools | `chat,code` |
 | `WORKSPACE_DIR` | Root directory for files + shell tools | `data/workspace` |
 | `SHELL_TIMEOUT` | Max seconds for a shell tool command | `30` |
@@ -183,6 +212,7 @@ python -m forge.cli replay <run_id>
 | `TRACE_ENABLED` | Write JSONL execution trace per run | `true` |
 | `TRACE_FILE` | Path to the JSONL trace file | `data/traces.jsonl` |
 | `SHOW_DEBUG` | Emit full structured trace to stderr (prompt, raw output, timings) | `false` |
+| `API_TOKEN` | Bearer token required on `/chat`, `/review`, `/run`, `/tools`, `/traces`. Empty = API stays open | *(empty)* |
 
 ---
 
@@ -229,6 +259,20 @@ Each record contains: `run_id`, `timestamp`, `user_input_preview`, per-step tool
 
 ---
 
+### Continuous Integration
+
+Every push to `main` and every PR targeting it runs, via GitHub Actions
+(`.github/workflows/ci.yml`):
+
+```bash
+ruff check .
+pytest tests/ -v
+```
+
+Same commands locally, after `pip install -r requirements-dev.txt`.
+
+---
+
 ### Design Philosophy
 
 - **Deterministic routing over free-form reasoning** — the model picks a tool from a fixed set,
@@ -253,8 +297,9 @@ Each record contains: `run_id`, `timestamp`, `user_input_preview`, per-step tool
 | **v2.4** | done | Structured execution trace: `AgentState`, `TraceStep`, JSONL trace file, `!trace` |
 | **v3.0** | done | Graph execution engine: `Node/Edge/Graph`, conditional edges, `AgentState.context` |
 | **v3.1** | done | HTTP API + web UI, review graph, `forge review` CLI, sandboxed files tool |
-| **v3.2** | current | Shell tool, git tool, `POST /run`, Tools tab in UI |
-| **v3.3** | planned | Portfolio: architecture diagram, quick-start `docker run`, LinkedIn writeup |
+| **v3.2** | done | Shell tool, git tool, `POST /run`, Tools tab in UI |
+| **v3.3** | current | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
+| **v3.4** | planned | Portfolio: architecture diagram, quick-start `docker run`, LinkedIn writeup |
 
 ---
 
