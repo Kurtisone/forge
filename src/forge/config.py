@@ -37,11 +37,11 @@ OPENROUTER_URL = os.getenv(
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 # --- Runtime safety ---------------------------------------------------------
-# Hard ceiling on how many router->tool steps a single run_agent() call
-# may take. Forge today is single-shot (1 step), but the orchestrator
-# enforces this ceiling unconditionally so future multi-step tools
-# (roadmap: memory, filesystem, shell) cannot turn into infinite loops
-# just because nobody remembered to add a guard.
+# Hard ceiling on how many router->tool steps a single run() call may
+# take. Default is 1 (single-shot). The orchestrator only goes beyond
+# one step if the router's own JSON explicitly sets "done": false --
+# see Orchestrator.run() -- so this ceiling exists to make sure that,
+# whatever a model decides, a run can't loop forever.
 MAX_STEPS = int(os.getenv("MAX_STEPS", "1"))
 
 # --- Memory --------------------------------------------------------------

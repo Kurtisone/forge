@@ -1,4 +1,5 @@
 .env*
+!.env.example
 data/memory.json
 data/traces.jsonl
 data/__pycache__/
