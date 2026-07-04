@@ -34,7 +34,7 @@ from forge import trace
 from forge.config import API_TOKEN, FORGE_PROVIDER, LLM_MODEL
 from forge.orchestrator import Orchestrator
 
-app = FastAPI(title="Forge", version="3.1.0", docs_url="/docs")
+app = FastAPI(title="Forge", version="3.3.0", docs_url="/docs")
 _executor = ThreadPoolExecutor(max_workers=2)
 _orchestrator = Orchestrator()
 
