@@ -39,6 +39,46 @@ Forge enforces a strict separation between three layers: the **LLM**
 point where they meet. From v3.0, execution can also be expressed as a
 **Graph** of typed nodes connected by conditional edges.
 
+```mermaid
+flowchart TD
+    U["User<br/>(REPL · Web UI · HTTP API)"] --> O
+
+    subgraph Orchestrator["Orchestrator (single entry point)"]
+        direction TB
+        R["Router<br/>(LLM prompt → JSON decision)"]
+        D["Tool Dispatcher"]
+        LG["Loop guard<br/>(seen_calls, MAX_STEPS)"]
+        R --> D
+        D -->|"done: false<br/>(optional, opt-in)"| R
+        D --> LG
+    end
+
+    U --> R
+
+    D --> T1[chat]
+    D --> T2[code]
+    D --> T3["files<br/>(sandboxed)"]
+    D --> T4["shell<br/>(sandboxed)"]
+    D --> T5["git<br/>(read-only)"]
+
+    subgraph Providers["LLM providers (llm.py)"]
+        direction LR
+        P1[llama.cpp]
+        P2[Ollama]
+        P3[OpenRouter]
+    end
+    R -.-> Providers
+
+    O --> TR["TraceStep / AgentState<br/>→ traces.jsonl"]
+    O --> MEM["Memory<br/>(rolling JSON history)"]
+
+    G["Graph engine<br/>(Node / Edge / conditional Edge)"] -.->|POST /run| D
+    style G stroke-dasharray: 4 3
+```
+
+GitHub renders this diagram automatically; if you're reading this elsewhere, the ASCII
+directory tree below covers the same layering.
+
 ```
 src/forge/
 │
