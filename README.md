@@ -158,6 +158,20 @@ AgentState.final_output  (+ full trace in AgentState.trace)
 
 ### Usage
 
+```bash
+cp .env.example .env.local   # then edit if you need to override any default
+```
+
+`podman build` below picks up the `Containerfile` in the repo root automatically
+(podman's native name — no `-f` flag needed). It defaults to serving the API.
+
+**Container networking:** the default LLM backends (llama.cpp on `:8080`,
+Ollama on `:11434`) are meant to run on the **host**, not inside the
+container. From inside a container, `127.0.0.1` means the container itself.
+Point `LLAMA_CPP_URL`/`OLLAMA_URL` in `.env.local` at
+`http://host.containers.internal:8080` (podman) instead — already the
+convention used by this repo's own `.env.local` setups.
+
 **API server (recommended — accessible from browser and any device on the network):**
 
 ```bash
