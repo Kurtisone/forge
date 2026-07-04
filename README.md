@@ -352,8 +352,10 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.0** | done | Graph execution engine: `Node/Edge/Graph`, conditional edges, `AgentState.context` |
 | **v3.1** | done | HTTP API + web UI, review graph, `forge review` CLI, sandboxed files tool |
 | **v3.2** | done | Shell tool, git tool, `POST /run`, Tools tab in UI |
-| **v3.3** | current | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
-| **v3.4** | planned | Portfolio: architecture diagram, quick-start `docker run`, LinkedIn writeup |
+| **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
+| **v3.4** | current | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
+
+Writeup draft for the last row: [`docs/LINKEDIN_POST.md`](docs/LINKEDIN_POST.md).
 
 ---
 
