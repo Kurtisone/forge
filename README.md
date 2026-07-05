@@ -355,8 +355,6 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
 | **v3.4** | current | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
 
-Writeup draft for the last row: [`docs/LINKEDIN_POST.md`](docs/LINKEDIN_POST.md).
-
 ---
 
 ### Status
