@@ -303,6 +303,17 @@ opt-in itself changed: a tool still has to be listed in `ENABLED_TOOLS` to be re
 and each tool's own sandboxing (allowlist, timeout, `WORKSPACE_DIR` confinement, git's read-only
 subcommand list) applies the same regardless of how it's invoked.
 
+**Why `/chat` isn't streamed (yet):** for `tool="chat"`, the router's single LLM call already
+*is* the answer — `content` in `{"tool":"chat","content":"..."}` is generated in the same call as
+the routing decision, and `tools/chat.py` just returns it unchanged. Streaming that content would
+mean streaming tokens before the JSON (and therefore the tool choice) is even complete — and the
+parser deliberately prefers the *last* complete JSON object it finds, not the first, because small
+local models sometimes echo earlier conversation before producing the real answer. Streaming
+token-by-token would risk showing stale/wrong content that then gets silently replaced — worse
+UX than no streaming. Real streaming needs decision and generation split into two LLM calls (a
+fast classify-only call, then a separate streamed generation call once the tool is known) — a
+real latency trade-off on already-slow local hardware, planned for v3.6.
+
 ---
 
 ### Memory
@@ -374,7 +385,8 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.2** | done | Shell tool, git tool, `POST /run`, Tools tab in UI |
 | **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
 | **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
-| **v3.5** | current | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git |
+| **v3.5** | current | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
+| **v3.6** | planned | True token streaming for `/chat` (needs decision/generation split — see Architecture notes) |
 
 ---
 
