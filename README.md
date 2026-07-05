@@ -39,6 +39,46 @@ Forge enforces a strict separation between three layers: the **LLM**
 point where they meet. From v3.0, execution can also be expressed as a
 **Graph** of typed nodes connected by conditional edges.
 
+```mermaid
+flowchart TD
+    U["User<br/>(REPL · Web UI · HTTP API)"] --> O
+
+    subgraph Orchestrator["Orchestrator (single entry point)"]
+        direction TB
+        R["Router<br/>(LLM prompt → JSON decision)"]
+        D["Tool Dispatcher"]
+        LG["Loop guard<br/>(seen_calls, MAX_STEPS)"]
+        R --> D
+        D -->|"done: false<br/>(optional, opt-in)"| R
+        D --> LG
+    end
+
+    U --> R
+
+    D --> T1[chat]
+    D --> T2[code]
+    D --> T3["files<br/>(sandboxed)"]
+    D --> T4["shell<br/>(sandboxed)"]
+    D --> T5["git<br/>(read-only)"]
+
+    subgraph Providers["LLM providers (llm.py)"]
+        direction LR
+        P1[llama.cpp]
+        P2[Ollama]
+        P3[OpenRouter]
+    end
+    R -.-> Providers
+
+    O --> TR["TraceStep / AgentState<br/>→ traces.jsonl"]
+    O --> MEM["Memory<br/>(rolling JSON history)"]
+
+    G["Graph engine<br/>(Node / Edge / conditional Edge)"] -.->|POST /run| D
+    style G stroke-dasharray: 4 3
+```
+
+GitHub renders this diagram automatically; if you're reading this elsewhere, the ASCII
+directory tree below covers the same layering.
+
 ```
 src/forge/
 │
@@ -117,6 +157,20 @@ AgentState.final_output  (+ full trace in AgentState.trace)
 ---
 
 ### Usage
+
+```bash
+cp .env.example .env.local   # then edit if you need to override any default
+```
+
+`podman build` below picks up the `Containerfile` in the repo root automatically
+(podman's native name — no `-f` flag needed). It defaults to serving the API.
+
+**Container networking:** the default LLM backends (llama.cpp on `:8080`,
+Ollama on `:11434`) are meant to run on the **host**, not inside the
+container. From inside a container, `127.0.0.1` means the container itself.
+Point `LLAMA_CPP_URL`/`OLLAMA_URL` in `.env.local` at
+`http://host.containers.internal:8080` (podman) instead — already the
+convention used by this repo's own `.env.local` setups.
 
 **API server (recommended — accessible from browser and any device on the network):**
 
@@ -298,8 +352,8 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.0** | done | Graph execution engine: `Node/Edge/Graph`, conditional edges, `AgentState.context` |
 | **v3.1** | done | HTTP API + web UI, review graph, `forge review` CLI, sandboxed files tool |
 | **v3.2** | done | Shell tool, git tool, `POST /run`, Tools tab in UI |
-| **v3.3** | current | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
-| **v3.4** | planned | Portfolio: architecture diagram, quick-start `docker run`, LinkedIn writeup |
+| **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
+| **v3.4** | current | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
 
 ---
 
