@@ -97,3 +97,11 @@ SHOW_DEBUG = _bool("SHOW_DEBUG")
 # -- /chat, /review, /run, /traces and /tools currently have zero
 # protection otherwise.
 API_TOKEN = os.getenv("API_TOKEN", "")
+
+# --- API rate limiting ----------------------------------------------------
+# In-memory sliding window, per client IP, single-process only (see
+# forge/ratelimit.py). Defaults are generous for interactive/UI use
+# and mainly matter if the API is hammered or scripted against.
+RATE_LIMIT_ENABLED = _bool("RATE_LIMIT_ENABLED", "true")
+RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "30"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))

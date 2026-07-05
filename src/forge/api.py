@@ -13,6 +13,11 @@ Auth: set API_TOKEN in the environment to require
 /health. Unset (default) means the API stays open, unchanged from
 before this was added.
 
+Rate limiting: in-memory sliding window, per client IP, on every
+endpoint except / and /health. RATE_LIMIT_REQUESTS per
+RATE_LIMIT_WINDOW_SECONDS (default: 30 per 60s). Set
+RATE_LIMIT_ENABLED=false to disable.
+
 Run:
   uvicorn forge.api:app --host 0.0.0.0 --port 8000
 
@@ -26,11 +31,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from forge import trace
+from forge import ratelimit, trace
 from forge.config import API_TOKEN, FORGE_PROVIDER, LLM_MODEL
 from forge.orchestrator import Orchestrator
 
@@ -53,6 +58,22 @@ async def require_token(authorization: Optional[str] = Header(None)) -> None:
     # constant-time comparison: this guards a real secret, not just a UX check
     if not hmac.compare_digest(token, API_TOKEN):
         raise HTTPException(status_code=401, detail="invalid bearer token")
+
+
+# ─── Rate limiting ─────────────────────────────────────────────────
+# In-memory, per-client-IP sliding window (forge/ratelimit.py). Set
+# RATE_LIMIT_ENABLED=false to disable entirely -- e.g. for local dev,
+# or if you're fronting this with a proxy that already rate-limits.
+
+async def rate_limit(request: Request) -> None:
+    client_key = request.client.host if request.client else "unknown"
+    allowed, retry_after = ratelimit.check(client_key)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded, try again shortly",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 # ─── Models ────────────────────────────────────────────────────────
@@ -126,7 +147,7 @@ async def health():
     }
 
 
-@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_token)])
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_token), Depends(rate_limit)])
 async def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
@@ -141,7 +162,7 @@ async def chat(req: ChatRequest):
     )
 
 
-@app.post("/review", response_model=ReviewResponse, dependencies=[Depends(require_token)])
+@app.post("/review", response_model=ReviewResponse, dependencies=[Depends(require_token), Depends(rate_limit)])
 async def review(req: ReviewRequest):
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="content cannot be empty")
@@ -167,12 +188,12 @@ async def review(req: ReviewRequest):
     return ReviewResponse(output=output, ok=bool(output))
 
 
-@app.get("/traces", dependencies=[Depends(require_token)])
+@app.get("/traces", dependencies=[Depends(require_token), Depends(rate_limit)])
 async def get_traces(n: int = 10):
     return {"traces": trace.read_last(n)}
 
 
-@app.get("/tools", dependencies=[Depends(require_token)])
+@app.get("/tools", dependencies=[Depends(require_token), Depends(rate_limit)])
 async def list_tools():
     """Return the list of currently enabled tools and available graphs."""
     from forge.tools.registry import available_tools
@@ -182,7 +203,7 @@ async def list_tools():
     }
 
 
-@app.post("/run", response_model=RunResponse, dependencies=[Depends(require_token)])
+@app.post("/run", response_model=RunResponse, dependencies=[Depends(require_token), Depends(rate_limit)])
 async def run_graph(req: RunRequest):
     """Run any registered graph by name with an optional initial context."""
     registry = _graph_registry()

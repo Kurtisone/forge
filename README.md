@@ -236,6 +236,14 @@ unless you opt in. `/` and `/health` always stay open, for the UI shell and
 monitoring probes. The web UI has a 🔑 **Token** button in the header that
 prompts for the token and remembers it (localStorage) for subsequent requests.
 
+**Rate limiting:** the same "optional" routes are also behind an in-memory
+sliding-window limiter — `RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW_SECONDS`
+per client IP (default: 30 per 60s), `429 Too Many Requests` with a
+`Retry-After` header past that. No external service (no redis) — a plain
+process-local counter, single-worker only: running uvicorn with multiple
+workers gives each its own counter. Set `RATE_LIMIT_ENABLED=false` to disable,
+e.g. behind a proxy that already rate-limits.
+
 **`POST /run` example:**
 ```json
 { "graph": "review", "input": "src/forge/main.py", "context": {"question": "Security issues?"} }
@@ -267,6 +275,9 @@ prompts for the token and remembers it (localStorage) for subsequent requests.
 | `TRACE_FILE` | Path to the JSONL trace file | `data/traces.jsonl` |
 | `SHOW_DEBUG` | Emit full structured trace to stderr (prompt, raw output, timings) | `false` |
 | `API_TOKEN` | Bearer token required on `/chat`, `/review`, `/run`, `/tools`, `/traces`. Empty = API stays open | *(empty)* |
+| `RATE_LIMIT_ENABLED` | In-memory sliding-window rate limit on the same routes as `API_TOKEN` | `true` |
+| `RATE_LIMIT_REQUESTS` | Max requests per client IP per window | `30` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds | `60` |
 
 ---
 
