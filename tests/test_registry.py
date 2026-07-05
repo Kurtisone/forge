@@ -66,6 +66,12 @@ def test_broken_tool_module_does_not_crash_load(tmp_path, monkeypatch):
     finally:
         for name in ("tool_ok_case", "tool_broken_case", "tool_no_run_case"):
             sys.modules.pop(f"forge.tools.{name}", None)
+        # Undo tools_pkg.__path__ / ENABLED_TOOLS BEFORE reloading --
+        # otherwise load_tools() here still scans tmp_path with the
+        # test's ENABLED_TOOLS, leaving the shared, module-level TOOLS
+        # registry pointed at this test's fake tool set for every test
+        # that runs after it instead of the real one.
+        monkeypatch.undo()
         registry.load_tools()  # restore the real tool set for later tests
 
 
@@ -91,4 +97,5 @@ def test_tool_with_run_but_not_enabled_is_skipped(tmp_path, monkeypatch):
         assert registry.get_tool("tool_not_enabled_case") is None
     finally:
         sys.modules.pop("forge.tools.tool_not_enabled_case", None)
+        monkeypatch.undo()
         registry.load_tools()
