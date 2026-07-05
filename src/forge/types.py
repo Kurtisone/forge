@@ -13,10 +13,20 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class RouterDecision:
-    """What the router LLM decided to do, already validated."""
+    """
+    What the router LLM decided to do, already validated.
+
+    `done` defaults to True so every extraction path that predates the
+    multi-step orchestrator (JSON without the field, XML, markdown
+    fence, plain-text fallback) keeps producing exactly one step,
+    unchanged. Only an explicit `"done": false` in the router's JSON
+    can ask the orchestrator to loop back with the tool's result and
+    route again, and only up to MAX_STEPS.
+    """
     tool: str
     content: str
     raw: str = field(repr=False, default="")
+    done: bool = True
 
 
 @dataclass(frozen=True)

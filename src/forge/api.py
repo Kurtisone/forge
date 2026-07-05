@@ -8,6 +8,11 @@ Endpoints:
   POST /review      → file content review
   GET  /traces      → recent execution traces
 
+Auth: set API_TOKEN in the environment to require
+`Authorization: Bearer <token>` on every endpoint except / and
+/health. Unset (default) means the API stays open, unchanged from
+before this was added.
+
 Run:
   uvicorn forge.api:app --host 0.0.0.0 --port 8000
 
@@ -16,21 +21,38 @@ in a thread-pool executor so FastAPI's event loop is never blocked.
 """
 
 import asyncio
+import hmac
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from forge import trace
-from forge.config import FORGE_PROVIDER, LLM_MODEL
+from forge.config import API_TOKEN, FORGE_PROVIDER, LLM_MODEL
 from forge.orchestrator import Orchestrator
 
 app = FastAPI(title="Forge", version="3.1.0", docs_url="/docs")
 _executor = ThreadPoolExecutor(max_workers=2)
 _orchestrator = Orchestrator()
+
+
+# ─── Auth ──────────────────────────────────────────────────────────
+# Optional: only enforced when API_TOKEN is set in the environment.
+# Unset (the default) means the API is open, exactly as before this
+# was added -- nothing changes for anyone not opting in.
+
+async def require_token(authorization: Optional[str] = Header(None)) -> None:
+    if not API_TOKEN:
+        return
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    token = authorization.removeprefix("Bearer ").strip()
+    # constant-time comparison: this guards a real secret, not just a UX check
+    if not hmac.compare_digest(token, API_TOKEN):
+        raise HTTPException(status_code=401, detail="invalid bearer token")
 
 
 # ─── Models ────────────────────────────────────────────────────────
@@ -104,7 +126,7 @@ async def health():
     }
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_token)])
 async def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
@@ -119,12 +141,14 @@ async def chat(req: ChatRequest):
     )
 
 
-@app.post("/review", response_model=ReviewResponse)
+@app.post("/review", response_model=ReviewResponse, dependencies=[Depends(require_token)])
 async def review(req: ReviewRequest):
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="content cannot be empty")
 
-    import tempfile, os
+    import os
+    import tempfile
+
     from forge.graphs.review import run as review_run
 
     # Write the content to a temp file so the review graph can read it
@@ -143,12 +167,12 @@ async def review(req: ReviewRequest):
     return ReviewResponse(output=output, ok=bool(output))
 
 
-@app.get("/traces")
+@app.get("/traces", dependencies=[Depends(require_token)])
 async def get_traces(n: int = 10):
     return {"traces": trace.read_last(n)}
 
 
-@app.get("/tools")
+@app.get("/tools", dependencies=[Depends(require_token)])
 async def list_tools():
     """Return the list of currently enabled tools and available graphs."""
     from forge.tools.registry import available_tools
@@ -158,7 +182,7 @@ async def list_tools():
     }
 
 
-@app.post("/run", response_model=RunResponse)
+@app.post("/run", response_model=RunResponse, dependencies=[Depends(require_token)])
 async def run_graph(req: RunRequest):
     """Run any registered graph by name with an optional initial context."""
     registry = _graph_registry()

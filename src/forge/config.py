@@ -89,3 +89,11 @@ TRACE_FILE = os.getenv("TRACE_FILE", "data/traces.jsonl")
 
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")
+
+# --- API auth -----------------------------------------------------------
+# Optional bearer token for the HTTP API (api.py). Empty by default:
+# the API stays open, exactly like before this was added. Set this
+# before exposing forge-core on anything beyond localhost/trusted LAN
+# -- /chat, /review, /run, /traces and /tools currently have zero
+# protection otherwise.
+API_TOKEN = os.getenv("API_TOKEN", "")

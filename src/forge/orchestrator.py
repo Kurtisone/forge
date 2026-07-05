@@ -90,8 +90,22 @@ class Orchestrator:
             state.final_tool = result.tool
             state.ok = result.ok
             state.error = result.error
-            trace.save(state)
-            return state.to_result()
+
+            # --- Continue or stop -----------------------------------------
+            # decision.done defaults to True, so every extraction path that
+            # predates this field (plain JSON, XML, markdown fence, plain
+            # text fallback) still returns after exactly one step, exactly
+            # like before. A tool failure also always stops the run — a
+            # failed step is never a safe base to route again from. Only
+            # an explicit "done": false, with steps still available and a
+            # successful result, keeps the loop going.
+            if not result.ok or decision.done or state.steps_taken >= self.max_steps:
+                trace.save(state)
+                return state.to_result()
+
+            state.history = state.history + [
+                {"role": "assistant", "content": f"[{result.tool}] {result.output}"}
+            ]
 
         raise LoopGuardError("max_steps exhausted without a result")
 

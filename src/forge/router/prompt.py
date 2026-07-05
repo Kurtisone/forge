@@ -20,6 +20,10 @@ Format:
   "content": "non-empty string"
 }
 
+Optional: add "done": false to this JSON if you need another step
+after this one to fully answer (rare — only for multi-step tasks).
+Omit "done" entirely for a normal, single-step answer.
+
 WHAT "content" MEANS PER TOOL:
 - tool="chat": content is your ACTUAL ANSWER to the user, written
   naturally, in the same language the user wrote in. Never repeat or

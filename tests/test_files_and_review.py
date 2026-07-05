@@ -3,8 +3,6 @@ Tests for forge.tools.files, forge.graphs.review, and forge.cli replay.
 """
 
 import json
-import os
-import tempfile
 
 import forge.config as cfg
 import forge.tools.files as files_mod

@@ -275,9 +275,12 @@
 
 <header>
   <div class="logo">⚙ <span>Forge</span></div>
-  <div class="status">
-    <div class="dot" id="status-dot"></div>
-    <span id="status-text">connecting…</span>
+  <div style="display:flex;align-items:center;gap:14px;">
+    <button class="btn-outline" id="token-btn" onclick="promptForToken()" title="Définir le token API (si API_TOKEN est configuré côté serveur)">🔑 Token</button>
+    <div class="status">
+      <div class="dot" id="status-dot"></div>
+      <span id="status-text">connecting…</span>
+    </div>
   </div>
 </header>
 
@@ -358,10 +361,30 @@
 </div>
 
 <script>
+// ── API token (only needed if the server sets API_TOKEN) ───────────
+// Stored in localStorage purely for convenience across reloads; the
+// server treats it as a bearer secret over the Authorization header.
+function getToken() { return localStorage.getItem('forge_api_token') || '' }
+function promptForToken() {
+  const current = getToken()
+  const next = prompt('Token API Forge (laisser vide si le serveur n\'en exige pas) :', current)
+  if (next === null) return
+  if (next.trim()) localStorage.setItem('forge_api_token', next.trim())
+  else localStorage.removeItem('forge_api_token')
+}
+async function apiFetch(url, opts = {}) {
+  const token = getToken()
+  const headers = Object.assign({}, opts.headers || {})
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const r = await fetch(url, Object.assign({}, opts, { headers }))
+  if (r.status === 401) promptForToken()
+  return r
+}
+
 // ── Tools / Run ───────────────────────────────────────────────────
 async function loadToolsAndGraphs() {
   try {
-    const r = await fetch('/tools')
+    const r = await apiFetch('/tools')
     const data = await r.json()
     const list = document.getElementById('tools-list')
     list.innerHTML = (data.tools || []).map(t =>
@@ -393,7 +416,7 @@ async function sendRun() {
   result.style.display  = 'none'
 
   try {
-    const r = await fetch('/run', {
+    const r = await apiFetch('/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({graph, input, context})
@@ -497,7 +520,7 @@ async function sendChat() {
   showThinking()
 
   try {
-    const r = await fetch('/chat', {
+    const r = await apiFetch('/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({message: text})
@@ -543,7 +566,7 @@ async function sendReview() {
   result.textContent = ''
 
   try {
-    const r = await fetch('/review', {
+    const r = await apiFetch('/review', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({content, filename, question})
@@ -564,7 +587,7 @@ async function loadTraces() {
   const list = document.getElementById('traces-list')
   list.innerHTML = '<div style="color:var(--muted);font-size:.85rem">Chargement…</div>'
   try {
-    const r = await fetch('/traces?n=15')
+    const r = await apiFetch('/traces?n=15')
     const data = await r.json()
     const traces = data.traces || []
     if (!traces.length) {
