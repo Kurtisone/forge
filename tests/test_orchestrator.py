@@ -20,6 +20,52 @@ def test_chat_round_trip(monkeypatch):
     assert result.steps == 1
 
 
+def test_end_to_end_router_reaches_shell_when_enabled(monkeypatch, tmp_path):
+    """
+    Full stack, not mocked at the parser boundary this time: with
+    ENABLED_TOOLS actually including "shell", a router decision naming
+    "shell" must survive parsing and reach the real shell tool --
+    this is the v3.5 change (previously the router's own validation
+    hardcoded {"chat", "code"} regardless of ENABLED_TOOLS, so "shell"
+    would have been silently downgraded to "chat" before ever
+    reaching dispatch).
+    """
+    import forge.config as cfg
+    import forge.tools.registry as registry_mod
+    import forge.tools.shell as shell_mod
+
+    monkeypatch.setattr(cfg, "ENABLED_TOOLS", {"chat", "code", "shell"})
+    monkeypatch.setattr(registry_mod, "ENABLED_TOOLS", {"chat", "code", "shell"})
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "SHELL_ALLOWED_COMMANDS", {"echo"})
+    monkeypatch.setattr(cfg, "SHELL_TIMEOUT", 10)
+    monkeypatch.setattr(shell_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(shell_mod, "SHELL_ALLOWED_COMMANDS", {"echo"})
+    monkeypatch.setattr(shell_mod, "SHELL_TIMEOUT", 10)
+    registry_mod.load_tools()
+
+    try:
+        monkeypatch.setattr(
+            orch_mod,
+            "call_llm",
+            lambda prompt: json.dumps({"tool": "shell", "content": "echo hi-from-shell"}),
+        )
+        result = Orchestrator().run("run echo hi-from-shell")
+
+        assert result.ok
+        assert result.tool == "shell"
+        assert "hi-from-shell" in result.output
+    finally:
+        # Undo every monkeypatch made in this test (ENABLED_TOOLS,
+        # WORKSPACE_DIR, etc.) BEFORE reloading, so load_tools() runs
+        # against the real config -- not the mocked one still in
+        # effect during a plain `finally`, which would otherwise leave
+        # the shared, module-level TOOLS registry permanently pointed
+        # at this test's temporary tool set for every test after it.
+        monkeypatch.undo()
+        registry_mod.load_tools()
+
+
 def test_code_round_trip(monkeypatch):
     monkeypatch.setattr(
         orch_mod,

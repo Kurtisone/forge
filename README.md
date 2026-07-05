@@ -283,6 +283,15 @@ prompts for the token and remembers it (localStorage) for subsequent requests.
 A tool is only dispatchable if it has a `run()` function **and** appears in `ENABLED_TOOLS`.
 Implementing `run()` in a module is not enough — the opt-in is intentional for tools with side effects.
 
+**Router reachability (v3.5):** the router's own prompt and validation are generated from
+`ENABLED_TOOLS` — every enabled tool is offered as a routing option in normal conversation,
+not only via an explicit [Graph](#architecture) (`POST /run`). Before v3.5, `files`/`shell`/`git`
+were reachable only through a Graph even when enabled, because the router's prompt and JSON
+validation hardcoded exactly `{"chat", "code"}` regardless of `ENABLED_TOOLS`. Nothing about the
+opt-in itself changed: a tool still has to be listed in `ENABLED_TOOLS` to be reachable either way,
+and each tool's own sandboxing (allowlist, timeout, `WORKSPACE_DIR` confinement, git's read-only
+subcommand list) applies the same regardless of how it's invoked.
+
 ---
 
 ### Memory
@@ -353,7 +362,8 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.1** | done | HTTP API + web UI, review graph, `forge review` CLI, sandboxed files tool |
 | **v3.2** | done | Shell tool, git tool, `POST /run`, Tools tab in UI |
 | **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
-| **v3.4** | current | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
+| **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
+| **v3.5** | current | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git |
 
 ---
 
