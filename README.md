@@ -236,6 +236,14 @@ unless you opt in. `/` and `/health` always stay open, for the UI shell and
 monitoring probes. The web UI has a 🔑 **Token** button in the header that
 prompts for the token and remembers it (localStorage) for subsequent requests.
 
+**Rate limiting:** the same "optional" routes are also behind an in-memory
+sliding-window limiter — `RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW_SECONDS`
+per client IP (default: 30 per 60s), `429 Too Many Requests` with a
+`Retry-After` header past that. No external service (no redis) — a plain
+process-local counter, single-worker only: running uvicorn with multiple
+workers gives each its own counter. Set `RATE_LIMIT_ENABLED=false` to disable,
+e.g. behind a proxy that already rate-limits.
+
 **`POST /run` example:**
 ```json
 { "graph": "review", "input": "src/forge/main.py", "context": {"question": "Security issues?"} }
@@ -267,6 +275,9 @@ prompts for the token and remembers it (localStorage) for subsequent requests.
 | `TRACE_FILE` | Path to the JSONL trace file | `data/traces.jsonl` |
 | `SHOW_DEBUG` | Emit full structured trace to stderr (prompt, raw output, timings) | `false` |
 | `API_TOKEN` | Bearer token required on `/chat`, `/review`, `/run`, `/tools`, `/traces`. Empty = API stays open | *(empty)* |
+| `RATE_LIMIT_ENABLED` | In-memory sliding-window rate limit on the same routes as `API_TOKEN` | `true` |
+| `RATE_LIMIT_REQUESTS` | Max requests per client IP per window | `30` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds | `60` |
 
 ---
 
@@ -283,6 +294,26 @@ prompts for the token and remembers it (localStorage) for subsequent requests.
 A tool is only dispatchable if it has a `run()` function **and** appears in `ENABLED_TOOLS`.
 Implementing `run()` in a module is not enough — the opt-in is intentional for tools with side effects.
 
+**Router reachability (v3.5):** the router's own prompt and validation are generated from
+`ENABLED_TOOLS` — every enabled tool is offered as a routing option in normal conversation,
+not only via an explicit [Graph](#architecture) (`POST /run`). Before v3.5, `files`/`shell`/`git`
+were reachable only through a Graph even when enabled, because the router's prompt and JSON
+validation hardcoded exactly `{"chat", "code"}` regardless of `ENABLED_TOOLS`. Nothing about the
+opt-in itself changed: a tool still has to be listed in `ENABLED_TOOLS` to be reachable either way,
+and each tool's own sandboxing (allowlist, timeout, `WORKSPACE_DIR` confinement, git's read-only
+subcommand list) applies the same regardless of how it's invoked.
+
+**Why `/chat` isn't streamed (yet):** for `tool="chat"`, the router's single LLM call already
+*is* the answer — `content` in `{"tool":"chat","content":"..."}` is generated in the same call as
+the routing decision, and `tools/chat.py` just returns it unchanged. Streaming that content would
+mean streaming tokens before the JSON (and therefore the tool choice) is even complete — and the
+parser deliberately prefers the *last* complete JSON object it finds, not the first, because small
+local models sometimes echo earlier conversation before producing the real answer. Streaming
+token-by-token would risk showing stale/wrong content that then gets silently replaced — worse
+UX than no streaming. Real streaming needs decision and generation split into two LLM calls (a
+fast classify-only call, then a separate streamed generation call once the tool is known) — a
+real latency trade-off on already-slow local hardware, planned for v3.6.
+
 ---
 
 ### Memory
@@ -291,7 +322,12 @@ Forge keeps a rolling window of the last `MEMORY_MAX_HISTORY` messages in `MEMOR
 and injects it as context into the router prompt on every turn.
 
 Storage is plain JSON — no schema, no migrations, `cat data/memory.json` to inspect it.
-Only successful turns are persisted; error replies are never written to memory.
+Only genuine answers are persisted: a dispatch failure (`result.ok=False`) is never written,
+and neither is a router-generated placeholder (empty/garbled model output, a detected repetition
+loop, or leaked prompt instructions) — those succeed at dispatch (`chat` trivially echoes
+whatever content it's given) but aren't real answers, and saving one as if it were would feed
+it back into the next prompt as context, which can make a model that got confused once more
+likely to get confused again on the very next turn.
 Large pastes are truncated to 300 chars before saving to avoid bloating future prompts.
 
 ---
@@ -353,7 +389,9 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.1** | done | HTTP API + web UI, review graph, `forge review` CLI, sandboxed files tool |
 | **v3.2** | done | Shell tool, git tool, `POST /run`, Tools tab in UI |
 | **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
-| **v3.4** | current | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
+| **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
+| **v3.5** | current | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
+| **v3.6** | planned | True token streaming for `/chat` (needs decision/generation split — see Architecture notes) |
 
 ---
 

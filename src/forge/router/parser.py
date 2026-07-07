@@ -20,6 +20,23 @@ from forge.logger import log
 from forge.types import RouterDecision
 
 _VALID_TOOLS = {"chat", "code"}
+
+
+def _valid_tools() -> set[str]:
+    """
+    The set of tool names the router is allowed to pick, right now.
+
+    Sourced from forge.tools.registry.available_tools() -- the same
+    ENABLED_TOOLS-gated set the Graph engine dispatches against -- so
+    a tool never becomes routable from conversation just because a
+    module happens to exist. _VALID_TOOLS ({"chat", "code"}) is kept
+    as the floor: even a misconfigured ENABLED_TOOLS that excludes
+    them can't make the router unable to fall back to chat.
+    """
+    from forge.tools import registry
+    return _VALID_TOOLS | set(registry.available_tools())
+
+
 _LEAKED_ROLE_PREFIX = re.compile(r"^\s*(assistant|user)\s*:\s*", re.IGNORECASE)
 _XML_CONTENT = re.compile(r"<content>\s*(.*?)\s*</content>", re.DOTALL)
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -111,7 +128,7 @@ def _validate_json_obj(data: dict, cleaned: str) -> RouterDecision | None:
     """
     tool = data.get("tool", "chat")
     content = data.get("content")
-    if tool not in _VALID_TOOLS:
+    if tool not in _valid_tools():
         log.warning("router picked unknown tool %r, falling back to chat", tool)
         tool = "chat"
     if not content or not str(content).strip():
@@ -134,6 +151,7 @@ def parse_router_output(raw: str) -> RouterDecision:
             tool="chat",
             content="Je n'ai pas pu générer une réponse utile. Reformulez ou réessayez.",
             raw=raw,
+            is_fallback=True,
         )
 
     # 1. JSON — try the LAST valid object first, fall back to first.
@@ -169,6 +187,7 @@ def parse_router_output(raw: str) -> RouterDecision:
             tool="chat",
             content="Je n'ai pas pu générer une réponse. Réessayez.",
             raw=raw,
+            is_fallback=True,
         )
 
     if not fallback:
@@ -177,6 +196,7 @@ def parse_router_output(raw: str) -> RouterDecision:
             tool="chat",
             content="Je n'ai pas pu générer une réponse. Réessayez.",
             raw=raw,
+            is_fallback=True,
         )
 
     # Cap length: anything beyond _MAX_FALLBACK_CHARS is almost certainly

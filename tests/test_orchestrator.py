@@ -20,6 +20,52 @@ def test_chat_round_trip(monkeypatch):
     assert result.steps == 1
 
 
+def test_end_to_end_router_reaches_shell_when_enabled(monkeypatch, tmp_path):
+    """
+    Full stack, not mocked at the parser boundary this time: with
+    ENABLED_TOOLS actually including "shell", a router decision naming
+    "shell" must survive parsing and reach the real shell tool --
+    this is the v3.5 change (previously the router's own validation
+    hardcoded {"chat", "code"} regardless of ENABLED_TOOLS, so "shell"
+    would have been silently downgraded to "chat" before ever
+    reaching dispatch).
+    """
+    import forge.config as cfg
+    import forge.tools.registry as registry_mod
+    import forge.tools.shell as shell_mod
+
+    monkeypatch.setattr(cfg, "ENABLED_TOOLS", {"chat", "code", "shell"})
+    monkeypatch.setattr(registry_mod, "ENABLED_TOOLS", {"chat", "code", "shell"})
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "SHELL_ALLOWED_COMMANDS", {"echo"})
+    monkeypatch.setattr(cfg, "SHELL_TIMEOUT", 10)
+    monkeypatch.setattr(shell_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(shell_mod, "SHELL_ALLOWED_COMMANDS", {"echo"})
+    monkeypatch.setattr(shell_mod, "SHELL_TIMEOUT", 10)
+    registry_mod.load_tools()
+
+    try:
+        monkeypatch.setattr(
+            orch_mod,
+            "call_llm",
+            lambda prompt: json.dumps({"tool": "shell", "content": "echo hi-from-shell"}),
+        )
+        result = Orchestrator().run("run echo hi-from-shell")
+
+        assert result.ok
+        assert result.tool == "shell"
+        assert "hi-from-shell" in result.output
+    finally:
+        # Undo every monkeypatch made in this test (ENABLED_TOOLS,
+        # WORKSPACE_DIR, etc.) BEFORE reloading, so load_tools() runs
+        # against the real config -- not the mocked one still in
+        # effect during a plain `finally`, which would otherwise leave
+        # the shared, module-level TOOLS registry permanently pointed
+        # at this test's temporary tool set for every test after it.
+        monkeypatch.undo()
+        registry_mod.load_tools()
+
+
 def test_code_round_trip(monkeypatch):
     monkeypatch.setattr(
         orch_mod,
@@ -111,6 +157,55 @@ def test_unknown_tool_falls_back_to_chat(monkeypatch):
     )
     result = Orchestrator().run("do something dangerous")
     assert result.tool == "chat"  # shell isn't registered, parser/orchestrator fall back
+
+
+def test_fallback_placeholder_is_not_remembered(monkeypatch, tmp_path):
+    """
+    The bug this locks down: a router failure (empty/garbled output)
+    produces a placeholder chat response, dispatch succeeds trivially
+    (chat's tool just echoes content), so result.ok is True -- and
+    before this fix, MEMORY_ENABLED and result.ok was the only gate,
+    so the placeholder got saved as a real assistant turn. The next
+    prompt would then include it as context, which can make a model
+    that got confused once more likely to get confused again on the
+    very next turn -- an escalating failure loop, seen in the wild as
+    repeated 'router output was empty' warnings.
+    """
+    import forge.config as cfg
+    import forge.memory as memory_mod
+
+    monkeypatch.setattr(cfg, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
+
+    # Empty raw output -> the parser's empty-output placeholder path.
+    monkeypatch.setattr(orch_mod, "call_llm", lambda prompt: "   ")
+
+    result = Orchestrator().run("hello")
+
+    assert result.ok  # dispatch of "chat" always succeeds, even for a placeholder
+    assert "Je n'ai pas pu générer" in result.output
+    assert memory_mod.get_history() == []  # must NOT have been remembered
+
+
+def test_real_chat_answer_is_still_remembered(monkeypatch, tmp_path):
+    """Sanity check alongside the test above: a genuine answer must
+    still be persisted -- the fix should only skip placeholders, not
+    memory as a whole."""
+    import forge.config as cfg
+    import forge.memory as memory_mod
+
+    monkeypatch.setattr(cfg, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
+    monkeypatch.setattr(
+        orch_mod, "call_llm", lambda prompt: json.dumps({"tool": "chat", "content": "hi there"})
+    )
+
+    Orchestrator().run("hello")
+
+    history = memory_mod.get_history()
+    assert any(h["content"] == "hi there" for h in history)
 
 
 def test_provider_failure_is_reported_not_raised(monkeypatch):
