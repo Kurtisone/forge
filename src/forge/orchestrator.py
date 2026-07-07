@@ -83,7 +83,7 @@ class Orchestrator:
             result = self._dispatch(decision.tool, decision.content)
             ts.finish(result)
 
-            if MEMORY_ENABLED and result.ok:
+            if MEMORY_ENABLED and result.ok and not decision.is_fallback:
                 self._remember(user_input, result.output)
 
             state.final_output = result.output

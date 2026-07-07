@@ -113,3 +113,36 @@ def test_unknown_tool_without_a_description_gets_generic_wording():
     prompt = build_router_prompt("do the thing", available_tools=["chat", "custom_tool"])
     assert '"custom_tool"' in prompt
     assert "content is the input this tool expects" in prompt
+
+
+# ── parser: is_fallback flag (placeholders must not be remembered) ──
+
+def test_repetition_loop_is_flagged_as_fallback():
+    repeated = " ".join(["banana"] * 20)
+    decision = parse_router_output(repeated)
+    assert decision.is_fallback is True
+
+
+def test_empty_output_is_flagged_as_fallback():
+    decision = parse_router_output("   ")
+    assert decision.is_fallback is True
+
+
+def test_leaked_prompt_is_flagged_as_fallback():
+    decision = parse_router_output("some preamble... NEVER add text outside the JSON, ok?")
+    assert decision.is_fallback is True
+
+
+def test_valid_json_decision_is_not_flagged_as_fallback():
+    decision = parse_router_output('{"tool":"chat","content":"a real answer"}')
+    assert decision.is_fallback is False
+
+
+def test_plain_text_answer_is_not_flagged_as_fallback():
+    """A genuine (if unstructured) answer extracted via the plain-text
+    fallback path is still real content -- only the placeholder-
+    generating branches (repetition, leaked prompt, empty) count as
+    is_fallback."""
+    decision = parse_router_output("Bien sûr, voici la réponse à votre question.")
+    assert decision.is_fallback is False
+    assert "Bien sûr" in decision.content

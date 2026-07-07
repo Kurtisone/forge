@@ -159,6 +159,55 @@ def test_unknown_tool_falls_back_to_chat(monkeypatch):
     assert result.tool == "chat"  # shell isn't registered, parser/orchestrator fall back
 
 
+def test_fallback_placeholder_is_not_remembered(monkeypatch, tmp_path):
+    """
+    The bug this locks down: a router failure (empty/garbled output)
+    produces a placeholder chat response, dispatch succeeds trivially
+    (chat's tool just echoes content), so result.ok is True -- and
+    before this fix, MEMORY_ENABLED and result.ok was the only gate,
+    so the placeholder got saved as a real assistant turn. The next
+    prompt would then include it as context, which can make a model
+    that got confused once more likely to get confused again on the
+    very next turn -- an escalating failure loop, seen in the wild as
+    repeated 'router output was empty' warnings.
+    """
+    import forge.config as cfg
+    import forge.memory as memory_mod
+
+    monkeypatch.setattr(cfg, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
+
+    # Empty raw output -> the parser's empty-output placeholder path.
+    monkeypatch.setattr(orch_mod, "call_llm", lambda prompt: "   ")
+
+    result = Orchestrator().run("hello")
+
+    assert result.ok  # dispatch of "chat" always succeeds, even for a placeholder
+    assert "Je n'ai pas pu générer" in result.output
+    assert memory_mod.get_history() == []  # must NOT have been remembered
+
+
+def test_real_chat_answer_is_still_remembered(monkeypatch, tmp_path):
+    """Sanity check alongside the test above: a genuine answer must
+    still be persisted -- the fix should only skip placeholders, not
+    memory as a whole."""
+    import forge.config as cfg
+    import forge.memory as memory_mod
+
+    monkeypatch.setattr(cfg, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
+    monkeypatch.setattr(
+        orch_mod, "call_llm", lambda prompt: json.dumps({"tool": "chat", "content": "hi there"})
+    )
+
+    Orchestrator().run("hello")
+
+    history = memory_mod.get_history()
+    assert any(h["content"] == "hi there" for h in history)
+
+
 def test_provider_failure_is_reported_not_raised(monkeypatch):
     from forge.errors import ProviderError
 

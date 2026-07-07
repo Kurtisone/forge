@@ -151,6 +151,7 @@ def parse_router_output(raw: str) -> RouterDecision:
             tool="chat",
             content="Je n'ai pas pu générer une réponse utile. Reformulez ou réessayez.",
             raw=raw,
+            is_fallback=True,
         )
 
     # 1. JSON — try the LAST valid object first, fall back to first.
@@ -186,6 +187,7 @@ def parse_router_output(raw: str) -> RouterDecision:
             tool="chat",
             content="Je n'ai pas pu générer une réponse. Réessayez.",
             raw=raw,
+            is_fallback=True,
         )
 
     if not fallback:
@@ -194,6 +196,7 @@ def parse_router_output(raw: str) -> RouterDecision:
             tool="chat",
             content="Je n'ai pas pu générer une réponse. Réessayez.",
             raw=raw,
+            is_fallback=True,
         )
 
     # Cap length: anything beyond _MAX_FALLBACK_CHARS is almost certainly

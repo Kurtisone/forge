@@ -322,7 +322,12 @@ Forge keeps a rolling window of the last `MEMORY_MAX_HISTORY` messages in `MEMOR
 and injects it as context into the router prompt on every turn.
 
 Storage is plain JSON — no schema, no migrations, `cat data/memory.json` to inspect it.
-Only successful turns are persisted; error replies are never written to memory.
+Only genuine answers are persisted: a dispatch failure (`result.ok=False`) is never written,
+and neither is a router-generated placeholder (empty/garbled model output, a detected repetition
+loop, or leaked prompt instructions) — those succeed at dispatch (`chat` trivially echoes
+whatever content it's given) but aren't real answers, and saving one as if it were would feed
+it back into the next prompt as context, which can make a model that got confused once more
+likely to get confused again on the very next turn.
 Large pastes are truncated to 300 chars before saving to avoid bloating future prompts.
 
 ---
