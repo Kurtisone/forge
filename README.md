@@ -312,7 +312,7 @@ local models sometimes echo earlier conversation before producing the real answe
 token-by-token would risk showing stale/wrong content that then gets silently replaced — worse
 UX than no streaming. Real streaming needs decision and generation split into two LLM calls (a
 fast classify-only call, then a separate streamed generation call once the tool is known) — a
-real latency trade-off on already-slow local hardware, planned for v3.6.
+real latency trade-off on already-slow local hardware, planned for v3.7.
 
 ---
 
@@ -390,8 +390,9 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.2** | done | Shell tool, git tool, `POST /run`, Tools tab in UI |
 | **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
 | **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
-| **v3.5** | current | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
-| **v3.6** | planned | True token streaming for `/chat` (needs decision/generation split — see Architecture notes) |
+| **v3.5** | done | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
+| **v3.6** | current | Response quality investigation (prompt/stop-sequence tuning, model behavior under real use) |
+| **v3.7** | planned | True token streaming for `/chat` (needs decision/generation split — see Architecture notes) |
 
 ---
 
