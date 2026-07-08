@@ -261,6 +261,7 @@ e.g. behind a proxy that already rate-limits.
 | `LLAMA_CPP_URL` | llama.cpp endpoint | `http://127.0.0.1:8080` |
 | `LLAMA_CPP_N_PREDICT` | Max tokens per llama.cpp response | `512` |
 | `LLAMA_CPP_TIMEOUT` | HTTP timeout for llama.cpp requests (seconds) | `120` |
+| `LLAMA_CPP_USE_GRAMMAR` | GBNF grammar-constrained decoding for llama.cpp — forces output to match the router's JSON schema at the sampling level | `true` |
 | `OPENROUTER_URL` | OpenRouter endpoint | `https://openrouter.ai/api/v1/chat/completions` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | *(empty)* |
 | `MAX_STEPS` | Hard ceiling on router→tool steps per run (multi-step only happens if the router sends `"done": false`) | `1` |
@@ -302,6 +303,22 @@ validation hardcoded exactly `{"chat", "code"}` regardless of `ENABLED_TOOLS`. N
 opt-in itself changed: a tool still has to be listed in `ENABLED_TOOLS` to be reachable either way,
 and each tool's own sandboxing (allowlist, timeout, `WORKSPACE_DIR` confinement, git's read-only
 subcommand list) applies the same regardless of how it's invoked.
+
+**Grammar-constrained decoding (v3.6, llama.cpp only):** by default, the router's llama.cpp
+requests include a GBNF grammar ([`router/grammar.py`](src/forge/router/grammar.py)) that
+constrains sampling to the router's exact JSON schema — the model cannot emit tokens for
+hallucinated dialogue turns, leaked prompt text, or malformed JSON, because those tokens simply
+aren't valid at that point in the grammar. This was added after a real failure mode: with a long
+enough prompt (many enabled tools) and a stale conversation history in context, a model would
+occasionally answer a *fictional* follow-up question instead of the real one, or emit nothing
+usable at all — the router's fallback chain caught it, but a placeholder isn't a good answer.
+Grammar constraint stops that class of failure before it starts, at the cost of being provider-
+specific (only llama.cpp exposes raw GBNF sampling this way — Ollama has a coarser `"format":
+"json"`, OpenRouter has `response_format`, neither can pin `tool` to a specific set of literal
+values). Set `LLAMA_CPP_USE_GRAMMAR=false` if your server version doesn't support the `grammar`
+completion field, or to rule it out while debugging — the prompt-engineering + parser fallback
+chain underneath it all is unchanged and still does the same job on its own, just with a higher
+failure rate on a stressed prompt.
 
 **Why `/chat` isn't streamed (yet):** for `tool="chat"`, the router's single LLM call already
 *is* the answer — `content` in `{"tool":"chat","content":"..."}` is generated in the same call as
@@ -391,7 +408,7 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
 | **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
 | **v3.5** | done | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
-| **v3.6** | current | Response quality investigation (prompt/stop-sequence tuning, model behavior under real use) |
+| **v3.6** | current | Response quality: GBNF grammar-constrained decoding for llama.cpp |
 | **v3.7** | planned | True token streaming for `/chat` (needs decision/generation split — see Architecture notes) |
 
 ---

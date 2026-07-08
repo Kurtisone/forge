@@ -27,6 +27,13 @@ LLAMA_CPP_URL = os.getenv("LLAMA_CPP_URL", "http://127.0.0.1:8080")
 # but always keep it below LLAMA_CPP_TIMEOUT * tokens_per_second.
 LLAMA_CPP_TIMEOUT = int(os.getenv("LLAMA_CPP_TIMEOUT", "120"))
 LLAMA_CPP_N_PREDICT = int(os.getenv("LLAMA_CPP_N_PREDICT", "512"))
+# Grammar-constrained decoding (see router/grammar.py): forces the
+# model's raw output to match the router's exact JSON schema at the
+# sampling level, instead of relying on prompt instructions + post-hoc
+# parsing alone. Disable if your llama.cpp server version doesn't
+# support the "grammar" completion field, or to rule it out while
+# debugging.
+LLAMA_CPP_USE_GRAMMAR = _bool("LLAMA_CPP_USE_GRAMMAR", "true")
 
 # --- OpenRouter -----------------------------------------------------------
 # These were referenced by providers/llm_provider.py but never defined,
