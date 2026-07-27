@@ -72,6 +72,67 @@ def test_llama_cpp_http_error_raises_provider_error(monkeypatch):
         pass
 
 
+def test_llama_cpp_sends_grammar_by_default(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert "grammar" in captured["payload"]
+    assert "root" in captured["payload"]["grammar"]
+
+
+def test_llama_cpp_grammar_reflects_enabled_tools(monkeypatch):
+    import forge.tools.registry as registry_mod
+
+    monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "shell"])
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert '"\\"shell\\""' in captured["payload"]["grammar"]
+    assert '"\\"code\\""' not in captured["payload"]["grammar"]
+
+
+def test_llama_cpp_grammar_disabled_via_config(monkeypatch):
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_USE_GRAMMAR", False)
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert "grammar" not in captured["payload"]
+
+
+def test_llama_cpp_still_sends_stop_sequences_with_grammar_enabled(monkeypatch):
+    """Grammar is the primary safeguard now, but the stop sequences
+    stay as defense-in-depth -- e.g. against a model that doesn't stop
+    generating right after a complete, valid object."""
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert "User:" in captured["payload"]["stop"]
+
+
 # ---------------------------------------------------------------------
 # ollama
 # ---------------------------------------------------------------------
