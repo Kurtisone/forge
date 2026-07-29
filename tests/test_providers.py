@@ -26,6 +26,7 @@ class FakeResponse:
 # llama_cpp
 # ---------------------------------------------------------------------
 
+
 def test_llama_cpp_call_returns_content(monkeypatch):
     monkeypatch.setattr(
         requests, "post", lambda *a, **kw: FakeResponse({"content": "hello"})
@@ -137,6 +138,7 @@ def test_llama_cpp_still_sends_stop_sequences_with_grammar_enabled(monkeypatch):
 # ollama
 # ---------------------------------------------------------------------
 
+
 def test_ollama_call_returns_response_field(monkeypatch):
     monkeypatch.setattr(
         requests, "post", lambda *a, **kw: FakeResponse({"response": "hello"})
@@ -157,6 +159,7 @@ def test_ollama_empty_response_raises_provider_error(monkeypatch):
 # openrouter
 # ---------------------------------------------------------------------
 
+
 def test_openrouter_missing_api_key_raises_provider_error():
     try:
         openrouter.call("http://fake", "", "model", "prompt")
@@ -169,9 +172,7 @@ def test_openrouter_call_returns_message_content(monkeypatch):
     monkeypatch.setattr(
         requests,
         "post",
-        lambda *a, **kw: FakeResponse(
-            {"choices": [{"message": {"content": "hello"}}]}
-        ),
+        lambda *a, **kw: FakeResponse({"choices": [{"message": {"content": "hello"}}]}),
     )
     assert openrouter.call("http://fake", "sk-fake", "model", "prompt") == "hello"
 

@@ -11,7 +11,9 @@ def call(url: str, model: str, prompt: str) -> str:
         "n_predict": LLAMA_CPP_N_PREDICT,
         "stop": [
             # Prevent the model from hallucinating a new dialogue turn
-            "\nUser:", "\nUser :", "User:",
+            "\nUser:",
+            "\nUser :",
+            "User:",
             # Qwen HERETIC XML tool-call format: stop after the full
             # tool_call block (parser extracts <content> from it)
             "</tool_call>",
@@ -30,6 +32,7 @@ def call(url: str, model: str, prompt: str) -> str:
         # (a model can still choose not to stop generating right after a
         # complete, valid object) rather than the primary safeguard.
         from forge.router.grammar import build_router_grammar
+
         payload["grammar"] = build_router_grammar()
 
     try:

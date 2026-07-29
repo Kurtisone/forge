@@ -18,6 +18,7 @@ from forge.router.prompt import build_router_prompt
 
 # ── parser: dynamic tool validation ─────────────────────────────────
 
+
 def test_unlisted_tool_falls_back_to_chat(monkeypatch):
     monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code"])
     decision = _validate_json_obj({"tool": "shell", "content": "ls"}, "raw")
@@ -25,7 +26,9 @@ def test_unlisted_tool_falls_back_to_chat(monkeypatch):
 
 
 def test_enabled_tool_is_accepted(monkeypatch):
-    monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code", "shell"])
+    monkeypatch.setattr(
+        registry_mod, "available_tools", lambda: ["chat", "code", "shell"]
+    )
     decision = _validate_json_obj({"tool": "shell", "content": "ls -la"}, "raw")
     assert decision.tool == "shell"
     assert decision.content == "ls -la"
@@ -41,7 +44,9 @@ def test_chat_and_code_always_valid_even_if_registry_excludes_them(monkeypatch):
 
 
 def test_parse_router_output_end_to_end_with_files_enabled(monkeypatch):
-    monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code", "files"])
+    monkeypatch.setattr(
+        registry_mod, "available_tools", lambda: ["chat", "code", "files"]
+    )
     raw = '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"x.py\\"}"}'
     decision = parse_router_output(raw)
     assert decision.tool == "files"
@@ -55,6 +60,7 @@ def test_parse_router_output_end_to_end_with_files_disabled(monkeypatch):
 
 
 # ── prompt: dynamic tool descriptions ────────────────────────────────
+
 
 def test_prompt_with_only_chat_and_code_omits_other_tools():
     prompt = build_router_prompt("hi", available_tools=["chat", "code"])
@@ -72,7 +78,9 @@ def test_prompt_includes_shell_when_enabled():
 
 
 def test_prompt_includes_files_description_when_enabled():
-    prompt = build_router_prompt("read a file", available_tools=["chat", "code", "files"])
+    prompt = build_router_prompt(
+        "read a file", available_tools=["chat", "code", "files"]
+    )
     assert "action" in prompt
     assert '"read"' in prompt or "read" in prompt
 
@@ -84,7 +92,9 @@ def test_prompt_includes_git_description_when_enabled():
 
 
 def test_prompt_defaults_to_registry_when_available_tools_not_passed(monkeypatch):
-    monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code", "git"])
+    monkeypatch.setattr(
+        registry_mod, "available_tools", lambda: ["chat", "code", "git"]
+    )
     prompt = build_router_prompt("hi")
     assert '"git"' in prompt
 
@@ -109,12 +119,15 @@ def test_unknown_tool_without_a_description_gets_generic_wording():
     """A custom tool the operator wrote, with no entry in
     TOOL_DESCRIPTIONS, must still produce a valid (if generic) prompt
     section instead of crashing or silently omitting it."""
-    prompt = build_router_prompt("do the thing", available_tools=["chat", "custom_tool"])
+    prompt = build_router_prompt(
+        "do the thing", available_tools=["chat", "custom_tool"]
+    )
     assert '"custom_tool"' in prompt
     assert "content is the input this tool expects" in prompt
 
 
 # ── parser: is_fallback flag (placeholders must not be remembered) ──
+
 
 def test_repetition_loop_is_flagged_as_fallback():
     repeated = " ".join(["banana"] * 20)
@@ -128,7 +141,9 @@ def test_empty_output_is_flagged_as_fallback():
 
 
 def test_leaked_prompt_is_flagged_as_fallback():
-    decision = parse_router_output("some preamble... NEVER add text outside the JSON, ok?")
+    decision = parse_router_output(
+        "some preamble... NEVER add text outside the JSON, ok?"
+    )
     assert decision.is_fallback is True
 
 

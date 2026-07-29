@@ -15,6 +15,7 @@ import forge.cli as cli_mod
 
 # ── forge review ─────────────────────────────────────────────────────
 
+
 def test_review_with_no_file_prints_usage_and_returns_1(capsys):
     code = cli_mod._cmd_review([])
     err = capsys.readouterr().err
@@ -50,6 +51,7 @@ def test_review_joins_extra_args_into_the_question(monkeypatch):
 
 
 # ── forge replay ──────────────────────────────────────────────────────
+
 
 def test_replay_with_no_run_id_prints_usage_and_returns_1(capsys):
     code = cli_mod._cmd_replay([])
@@ -141,6 +143,7 @@ def test_replay_shows_per_step_tool_error(monkeypatch, capsys):
 
 
 # ── main() dispatch ───────────────────────────────────────────────────
+
 
 def test_main_with_no_args_prints_help_and_exits_0(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["forge"])

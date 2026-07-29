@@ -22,9 +22,7 @@ _logger.setLevel(_LEVEL)
 
 if not _logger.handlers:
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(
-        logging.Formatter("[%(levelname)s] %(name)s: %(message)s")
-    )
+    handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
     _logger.addHandler(handler)
     _logger.propagate = False
 

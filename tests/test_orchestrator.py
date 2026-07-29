@@ -11,7 +11,9 @@ from forge.orchestrator import Orchestrator
 
 def test_chat_round_trip(monkeypatch):
     monkeypatch.setattr(
-        orch_mod, "call_llm", lambda prompt: json.dumps({"tool": "chat", "content": "hi there"})
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": "hi there"}),
     )
     result = Orchestrator().run("hello")
     assert result.ok
@@ -48,7 +50,9 @@ def test_end_to_end_router_reaches_shell_when_enabled(monkeypatch, tmp_path):
         monkeypatch.setattr(
             orch_mod,
             "call_llm",
-            lambda prompt: json.dumps({"tool": "shell", "content": "echo hi-from-shell"}),
+            lambda prompt: json.dumps(
+                {"tool": "shell", "content": "echo hi-from-shell"}
+            ),
         )
         result = Orchestrator().run("run echo hi-from-shell")
 
@@ -137,9 +141,11 @@ def test_history_is_passed_as_context_not_dialogue(monkeypatch):
         captured["prompt"] = prompt
         return json.dumps({"tool": "chat", "content": "ok"})
 
-    monkeypatch.setattr(orch_mod, "call_llm", lambda prompt: json.dumps(
-        {"tool": "chat", "content": "Salut Alexandre !"}
-    ))
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": "Salut Alexandre !"}),
+    )
     Orchestrator().run("Je m'appelle Alexandre")
 
     monkeypatch.setattr(orch_mod, "call_llm", capture_and_answer)
@@ -156,7 +162,9 @@ def test_unknown_tool_falls_back_to_chat(monkeypatch):
         lambda prompt: json.dumps({"tool": "shell", "content": "rm -rf /"}),
     )
     result = Orchestrator().run("do something dangerous")
-    assert result.tool == "chat"  # shell isn't registered, parser/orchestrator fall back
+    assert (
+        result.tool == "chat"
+    )  # shell isn't registered, parser/orchestrator fall back
 
 
 def test_fallback_placeholder_is_not_remembered(monkeypatch, tmp_path):
@@ -199,7 +207,9 @@ def test_real_chat_answer_is_still_remembered(monkeypatch, tmp_path):
     monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
     monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
     monkeypatch.setattr(
-        orch_mod, "call_llm", lambda prompt: json.dumps({"tool": "chat", "content": "hi there"})
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": "hi there"}),
     )
 
     Orchestrator().run("hello")
@@ -221,10 +231,13 @@ def test_provider_failure_is_reported_not_raised(monkeypatch):
 
 
 def test_max_steps_is_respected_even_at_zero(monkeypatch):
-    monkeypatch.setattr(orch_mod, "call_llm", lambda prompt: '{"tool":"chat","content":"x"}')
+    monkeypatch.setattr(
+        orch_mod, "call_llm", lambda prompt: '{"tool":"chat","content":"x"}'
+    )
     import pytest
 
     from forge.errors import LoopGuardError
+
     with pytest.raises(LoopGuardError):
         Orchestrator(max_steps=0).run("hello")
 
@@ -236,7 +249,9 @@ def test_missing_done_field_stays_single_step(monkeypatch):
     exactly one step, even when max_steps allows more.
     """
     monkeypatch.setattr(
-        orch_mod, "call_llm", lambda prompt: json.dumps({"tool": "chat", "content": "hi"})
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": "hi"}),
     )
     result = Orchestrator(max_steps=5).run("hello")
     assert result.ok
@@ -273,6 +288,7 @@ def test_done_false_stops_at_max_steps_without_crashing(monkeypatch):
     of raising — max_steps is a ceiling on continued looping, not an
     additional failure mode on top of it.
     """
+
     def fake_llm(prompt):
         # Vary content so the loop-guard (seen_calls) never triggers.
         n = fake_llm.n
@@ -296,7 +312,9 @@ def test_failed_step_stops_the_loop_even_if_not_done(monkeypatch):
     monkeypatch.setattr(
         orch_mod,
         "call_llm",
-        lambda prompt: json.dumps({"tool": "unknown_tool", "content": "x", "done": False}),
+        lambda prompt: json.dumps(
+            {"tool": "unknown_tool", "content": "x", "done": False}
+        ),
     )
     result = Orchestrator(max_steps=3).run("hello")
     # unknown tool falls back to chat in the parser, which always

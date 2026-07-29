@@ -18,6 +18,7 @@ from forge.tools.registry import load_tools
 # Helpers
 # -------------------------------------------------------------------
 
+
 def _identity(state):
     return state
 
@@ -26,6 +27,7 @@ def _set_output(value):
     def fn(state):
         state.final_output = value
         return state
+
     return fn
 
 
@@ -46,6 +48,7 @@ def _recover(state):
 # -------------------------------------------------------------------
 # Graph engine tests
 # -------------------------------------------------------------------
+
 
 def test_single_node_executes():
     g = Graph("t")
@@ -128,6 +131,7 @@ def test_trace_recorded_per_node():
 
 def test_unknown_node_in_edge_raises():
     import pytest
+
     g = Graph("t")
     g.add_node("a", _identity)
     with pytest.raises(ValueError, match="not registered"):
@@ -138,11 +142,13 @@ def test_unknown_node_in_edge_raises():
 # Default graph tests
 # -------------------------------------------------------------------
 
+
 def test_default_graph_successful_run(monkeypatch):
     load_tools()
     monkeypatch.setattr(
-        default_mod, "call_llm",
-        lambda p: json.dumps({"tool": "chat", "content": "Bonjour !"})
+        default_mod,
+        "call_llm",
+        lambda p: json.dumps({"tool": "chat", "content": "Bonjour !"}),
     )
     state = build().run("Salut")
     assert state.ok
@@ -155,20 +161,18 @@ def test_default_graph_successful_run(monkeypatch):
 def test_default_graph_provider_failure_triggers_fallback(monkeypatch):
     load_tools()
     monkeypatch.setattr(
-        default_mod, "call_llm",
-        lambda p: (_ for _ in ()).throw(ProviderError("down"))
+        default_mod, "call_llm", lambda p: (_ for _ in ()).throw(ProviderError("down"))
     )
     state = build().run("hello")
-    assert state.ok        # fallback recovered
+    assert state.ok  # fallback recovered
     assert "went wrong" in (state.final_output or "")
-    assert state.steps_taken == 3   # router + dispatch + fallback
+    assert state.steps_taken == 3  # router + dispatch + fallback
 
 
 def test_default_graph_to_result(monkeypatch):
     load_tools()
     monkeypatch.setattr(
-        default_mod, "call_llm",
-        lambda p: json.dumps({"tool": "chat", "content": "hi"})
+        default_mod, "call_llm", lambda p: json.dumps({"tool": "chat", "content": "hi"})
     )
     result = build().run("hello").to_result()
     assert result.ok

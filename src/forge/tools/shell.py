@@ -76,7 +76,9 @@ def run(content: str) -> str:
             timeout=SHELL_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        log.warning("shell: command timed out after %ds: %s", SHELL_TIMEOUT, command[:60])
+        log.warning(
+            "shell: command timed out after %ds: %s", SHELL_TIMEOUT, command[:60]
+        )
         return f"[error] command timed out after {SHELL_TIMEOUT}s"
     except FileNotFoundError:
         return f"[error] executable not found: {base!r}"
@@ -97,7 +99,10 @@ def run(content: str) -> str:
     output = "\n".join(output_parts) if output_parts else "[no output]"
 
     if len(output) > _MAX_OUTPUT_CHARS:
-        output = output[:_MAX_OUTPUT_CHARS] + f"\n... (truncated at {_MAX_OUTPUT_CHARS} chars)"
+        output = (
+            output[:_MAX_OUTPUT_CHARS]
+            + f"\n... (truncated at {_MAX_OUTPUT_CHARS} chars)"
+        )
 
     log.event("shell.done", returncode=result.returncode, output_chars=len(output))
     return output

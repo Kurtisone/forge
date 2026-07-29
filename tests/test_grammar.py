@@ -31,7 +31,9 @@ def test_has_a_root_rule():
 
 
 def test_every_referenced_rule_is_defined():
-    grammar = build_router_grammar(available_tools=["chat", "code", "files", "shell", "git"])
+    grammar = build_router_grammar(
+        available_tools=["chat", "code", "files", "shell", "git"]
+    )
     defined = _rule_names(grammar)
     referenced = _referenced_names(grammar)
     assert referenced <= defined
@@ -47,7 +49,9 @@ def test_tool_alternation_matches_available_tools_only():
 
 
 def test_all_five_tools_appear_when_all_enabled():
-    grammar = build_router_grammar(available_tools=["chat", "code", "files", "shell", "git"])
+    grammar = build_router_grammar(
+        available_tools=["chat", "code", "files", "shell", "git"]
+    )
     for tool in ("chat", "code", "files", "shell", "git"):
         assert f'"\\"{tool}\\""' in grammar
 
@@ -67,14 +71,16 @@ def test_falls_back_to_default_pair_if_registry_returns_empty(monkeypatch):
 
 
 _TOKEN = re.compile(
-    r'"(?:[^"\\]|\\.)*"'          # string literal
-    r'|\[\^?(?:[^\]\\]|\\.)*\]'   # char class (may itself contain a literal ")
-    r'|[()]'                       # parens
+    r'"(?:[^"\\]|\\.)*"'  # string literal
+    r"|\[\^?(?:[^\]\\]|\\.)*\]"  # char class (may itself contain a literal ")
+    r"|[()]"  # parens
 )
 
 
 def test_grammar_has_balanced_parens_and_brackets():
-    grammar = build_router_grammar(available_tools=["chat", "code", "files", "shell", "git"])
+    grammar = build_router_grammar(
+        available_tools=["chat", "code", "files", "shell", "git"]
+    )
     depth = 0
     for tok in _TOKEN.findall(grammar):
         if tok == "(":

@@ -24,7 +24,7 @@ from pathlib import Path
 from forge.config import WORKSPACE_DIR
 from forge.logger import log
 
-_MAX_READ_BYTES = 64 * 1024   # 64 KB — refuse to read huge files
+_MAX_READ_BYTES = 64 * 1024  # 64 KB — refuse to read huge files
 
 
 def _safe_path(relative: str) -> Path:
@@ -39,9 +39,7 @@ def _safe_path(relative: str) -> Path:
     try:
         target.relative_to(workspace)
     except ValueError:
-        raise PermissionError(
-            f"path {relative!r} escapes workspace {str(workspace)!r}"
-        )
+        raise PermissionError(f"path {relative!r} escapes workspace {str(workspace)!r}")
     return target
 
 

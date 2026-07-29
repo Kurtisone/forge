@@ -54,8 +54,9 @@ def _collect_fence_block() -> str | None:
     Returns the collected content, or None if the user cancelled.
     Prints a clear prompt so the user always knows how to exit.
     """
-    print("  (paste code, then type ``` on an empty line to submit,"
-          " or 'cancel' to abort)")
+    print(
+        "  (paste code, then type ``` on an empty line to submit, or 'cancel' to abort)"
+    )
     lines = []
     while True:
         try:
@@ -98,7 +99,7 @@ def _read_input() -> str | None:
     # Case 2a: explicit fence on its own line
     if first_line.strip() == _FENCE:
         content = _collect_fence_block()
-        return content   # None = cancelled → caller skips
+        return content  # None = cancelled → caller skips
 
     # Case 2b: question ending with ``` (with optional spaces or lang tag)
     # Matches: "Optimise ce fichier ```"
@@ -121,7 +122,7 @@ def _read_input() -> str | None:
             break
 
     if not extra_lines:
-        return first_line   # Case 1
+        return first_line  # Case 1
 
     # Strip enclosing fences from the pasted block if present,
     # then combine as "question\n\ncode"
@@ -146,13 +147,15 @@ def main():
     orchestrator = Orchestrator()
 
     print("Forge ready" + (" [debug]" if SHOW_DEBUG else "") + ". Type 'exit' to quit.")
-    print("Tip: just type your question. Use ``` only to paste code blocks. !help for more.\n")
+    print(
+        "Tip: just type your question. Use ``` only to paste code blocks. !help for more.\n"
+    )
 
     while True:
         user_input = _read_input()
 
         if user_input is None:
-            continue   # None = cancelled fence, not EOF
+            continue  # None = cancelled fence, not EOF
 
         stripped = user_input.strip()
         if not stripped:

@@ -14,11 +14,14 @@ from forge.graphs.review import build as build_review
 # files tool
 # -------------------------------------------------------------------
 
+
 def test_files_write_and_read(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
 
-    r = files_mod.run(json.dumps({"action": "write", "path": "hello.txt", "content": "Bonjour !"}))
+    r = files_mod.run(
+        json.dumps({"action": "write", "path": "hello.txt", "content": "Bonjour !"})
+    )
     assert "[ok]" in r
 
     r = files_mod.run(json.dumps({"action": "read", "path": "hello.txt"}))
@@ -71,6 +74,7 @@ def test_files_unknown_action(tmp_path, monkeypatch):
 # review graph
 # -------------------------------------------------------------------
 
+
 def test_review_reads_file_and_calls_llm(tmp_path, monkeypatch):
     test_file = tmp_path / "sample.py"
     test_file.write_text("def add(a, b):\n    return a + b\n")
@@ -94,18 +98,18 @@ def test_review_missing_file_is_graceful(monkeypatch):
         "/nonexistent/file.py",
         initial_context={"file_path": "/nonexistent/file.py"},
     )
-    assert state.ok            # error node recovered
+    assert state.ok  # error node recovered
     assert "[error]" in state.final_output
 
 
 def test_review_provider_failure(tmp_path, monkeypatch):
     from forge.errors import ProviderError
+
     test_file = tmp_path / "f.py"
     test_file.write_text("x = 1")
 
     monkeypatch.setattr(
-        review_mod, "call_llm",
-        lambda p: (_ for _ in ()).throw(ProviderError("down"))
+        review_mod, "call_llm", lambda p: (_ for _ in ()).throw(ProviderError("down"))
     )
     state = build_review().run(
         str(test_file),
@@ -118,6 +122,7 @@ def test_review_provider_failure(tmp_path, monkeypatch):
 # -------------------------------------------------------------------
 # initial_context flows through graph
 # -------------------------------------------------------------------
+
 
 def test_initial_context_reaches_node():
     def ctx_node(state):

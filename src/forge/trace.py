@@ -29,14 +29,16 @@ def _build_record(state) -> dict:
     """Build a serializable trace record from an AgentState."""
     steps = []
     for ts in state.trace:
-        steps.append({
-            "step": ts.step,
-            "router_tool": ts.decision_tool,
-            "router_content_preview": (ts.decision_content or "")[:120],
-            "tool_ok": ts.tool_ok,
-            "tool_error": ts.tool_error,
-            "duration_ms": ts.duration_ms,
-        })
+        steps.append(
+            {
+                "step": ts.step,
+                "router_tool": ts.decision_tool,
+                "router_content_preview": (ts.decision_content or "")[:120],
+                "tool_ok": ts.tool_ok,
+                "tool_error": ts.tool_error,
+                "duration_ms": ts.duration_ms,
+            }
+        )
     return {
         "run_id": str(uuid.uuid4())[:8],
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -45,9 +47,7 @@ def _build_record(state) -> dict:
         "final_tool": state.final_tool,
         "ok": state.ok,
         "error": state.error,
-        "total_ms": sum(
-            (s.get("duration_ms") or 0) for s in steps
-        ),
+        "total_ms": sum((s.get("duration_ms") or 0) for s in steps),
     }
 
 
@@ -101,9 +101,7 @@ def format_for_display(traces: list[dict]) -> str:
     for t in traces:
         ok_mark = "✓" if t.get("ok") else "✗"
         steps = t.get("steps", [])
-        step_summary = " → ".join(
-            s.get("router_tool") or "?" for s in steps
-        )
+        step_summary = " → ".join(s.get("router_tool") or "?" for s in steps)
         lines.append(
             f"[{ok_mark}] {t.get('timestamp')}  #{t.get('run_id')}  "
             f"{t.get('total_ms')}ms  {step_summary or 'no steps'}"

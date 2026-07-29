@@ -26,6 +26,7 @@ def _cmd_review(args: list[str]) -> int:
     question = " ".join(args[1:]) if len(args) > 1 else "Que peut-on améliorer ?"
 
     from forge.graphs.review import run
+
     print(f"Reviewing {file_path!r}…\n")
     result = run(file_path, question=question)
     print(result)
@@ -39,6 +40,7 @@ def _cmd_replay(args: list[str]) -> int:
 
     run_id = args[0]
     from forge import trace
+
     traces = trace.read_last(100)
     matches = [t for t in traces if t.get("run_id", "").startswith(run_id)]
 

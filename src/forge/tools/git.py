@@ -22,15 +22,22 @@ from pathlib import Path
 from forge.logger import log
 
 _ALLOWED_SUBCOMMANDS = {
-    "status", "diff", "log", "show", "branch",
-    "stash", "shortlog", "describe", "rev-parse",
+    "status",
+    "diff",
+    "log",
+    "show",
+    "branch",
+    "stash",
+    "shortlog",
+    "describe",
+    "rev-parse",
 }
 _TIMEOUT = 15
 _MAX_OUTPUT_CHARS = 6_000
 
 # Sane defaults appended when the user doesn't specify
 _DEFAULTS = {
-    "log":  ["--oneline", "-15"],
+    "log": ["--oneline", "-15"],
     "diff": ["--stat"],
 }
 
@@ -42,7 +49,7 @@ def _find_git_root() -> Path:
         if (p / ".git").exists():
             return p
         p = p.parent
-    return Path.cwd()   # fallback: use cwd even if not a git repo
+    return Path.cwd()  # fallback: use cwd even if not a git repo
 
 
 def run(content: str) -> str:
@@ -59,8 +66,7 @@ def run(content: str) -> str:
     if subcommand not in _ALLOWED_SUBCOMMANDS:
         allowed = ", ".join(sorted(_ALLOWED_SUBCOMMANDS))
         return (
-            f"[error] git subcommand {subcommand!r} is not allowed.\n"
-            f"Allowed: {allowed}"
+            f"[error] git subcommand {subcommand!r} is not allowed.\nAllowed: {allowed}"
         )
 
     args = parts[1:] or _DEFAULTS.get(subcommand, [])
