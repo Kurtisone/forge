@@ -199,7 +199,7 @@ podman run -it --rm \
   forge-core python -m forge.main
 ```
 
-REPL commands: `!help`, `!clear`, `!trace`. Multi-line paste: type your question
+REPL commands: `!help`, `!clear`, `!trace`, `!remember`, `!recall`. Multi-line paste: type your question
 then append ` ``` ` or paste question + code in one go (auto-detected via `select()`).
 
 **CLI (one-shot commands, no REPL):**
@@ -227,6 +227,8 @@ python -m forge.cli replay <run_id>
 | `POST` | `/run` | optional | Run any graph by name |
 | `GET` | `/tools` | optional | Active tools + available graphs |
 | `GET` | `/traces?n=10` | optional | Recent execution traces |
+| `POST` | `/remember` | optional | Store a decision/todo in vector memory (v3.7) |
+| `GET` | `/search?q=...` | optional | Semantic search over remembered decisions/todos |
 | `GET` | `/docs` | open | Interactive API docs (Swagger) |
 
 **Auth:** set `API_TOKEN` in the environment to require
@@ -279,6 +281,10 @@ e.g. behind a proxy that already rate-limits.
 | `RATE_LIMIT_ENABLED` | In-memory sliding-window rate limit on the same routes as `API_TOKEN` | `true` |
 | `RATE_LIMIT_REQUESTS` | Max requests per client IP per window | `30` |
 | `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds | `60` |
+| `EMBEDDING_URL` | Embedding-only llama.cpp endpoint (separate instance from `LLAMA_CPP_URL`) for `/remember`, `/search` (v3.7) | `http://127.0.0.1:8082/embedding` |
+| `EMBEDDING_DIM` | Embedding vector dimension, must match the served model | `1024` |
+| `EMBEDDING_TIMEOUT` | HTTP timeout for embedding requests (seconds) | `30` |
+| `RAG_DB_FILE` | Path to the SQLite-vec vector memory file | `data/forge_rag.db` |
 
 ---
 
