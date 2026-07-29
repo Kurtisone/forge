@@ -5,11 +5,10 @@ Tests for forge.tools.files, forge.graphs.review, and forge.cli replay.
 import json
 
 import forge.config as cfg
-import forge.tools.files as files_mod
 import forge.graphs.review as review_mod
-from forge.graphs.review import build as build_review
+import forge.tools.files as files_mod
 from forge.graph import Graph
-
+from forge.graphs.review import build as build_review
 
 # -------------------------------------------------------------------
 # files tool

@@ -56,8 +56,10 @@ _TOOL_EXAMPLES = {
         ("Hello", '{"tool":"chat","content":"Hello! How can I help you?"}'),
         (
             "Connais-tu d'autres langages que Python ?",
-            '{"tool":"chat","content":"Oui, je connais aussi JavaScript, '
-            'C, C++, Rust, Go, entre autres."}',
+            (
+                '{"tool":"chat","content":"Oui, je connais aussi JavaScript, '
+                'C, C++, Rust, Go, entre autres."}'
+            ),
         ),
     ],
     "code": [

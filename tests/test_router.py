@@ -16,7 +16,6 @@ import forge.tools.registry as registry_mod
 from forge.router.parser import _validate_json_obj, parse_router_output
 from forge.router.prompt import build_router_prompt
 
-
 # ── parser: dynamic tool validation ─────────────────────────────────
 
 def test_unlisted_tool_falls_back_to_chat(monkeypatch):
@@ -91,7 +90,7 @@ def test_prompt_defaults_to_registry_when_available_tools_not_passed(monkeypatch
 
 
 def test_prompt_falls_back_to_default_pair_if_registry_returns_empty(monkeypatch):
-    monkeypatch.setattr(registry_mod, "available_tools", lambda: [])
+    monkeypatch.setattr(registry_mod, "available_tools", list)
     prompt = build_router_prompt("hi")
     assert '"chat" or "code"' in prompt
 

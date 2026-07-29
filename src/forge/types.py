@@ -8,7 +8,6 @@ a convention people forget after two commits.
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -45,7 +44,7 @@ class ToolResult:
     tool: str
     output: str
     ok: bool = True
-    error: Optional[str] = None
+    error: str | None = None
 
 
 @dataclass
@@ -59,12 +58,12 @@ class TraceStep:
     """
     step: int
     started_at: float = field(default_factory=time.monotonic)
-    decision_tool: Optional[str] = None
-    decision_content: Optional[str] = None
+    decision_tool: str | None = None
+    decision_content: str | None = None
     router_raw: str = field(repr=False, default="")
-    tool_ok: Optional[bool] = None
-    tool_error: Optional[str] = None
-    duration_ms: Optional[int] = None
+    tool_ok: bool | None = None
+    tool_error: str | None = None
+    duration_ms: int | None = None
 
     def finish(self, result: "ToolResult") -> None:
         self.tool_ok = result.ok
@@ -98,10 +97,10 @@ class AgentState:
     seen_calls: set = field(default_factory=set)
     steps_taken: int = 0
     trace: list[TraceStep] = field(default_factory=list)
-    final_output: Optional[str] = None
-    final_tool: Optional[str] = None
+    final_output: str | None = None
+    final_tool: str | None = None
     ok: bool = True
-    error: Optional[str] = None
+    error: str | None = None
     # Arbitrary key/value store for inter-node data passing in a graph.
     # Nodes can write results here (e.g. file content) and downstream
     # nodes can read them, without needing direct coupling.
@@ -115,7 +114,7 @@ class AgentState:
         self.trace.append(ts)
         return ts
 
-    def current_step(self) -> Optional[TraceStep]:
+    def current_step(self) -> TraceStep | None:
         return self.trace[-1] if self.trace else None
 
     def to_result(self) -> "AgentResult":
@@ -136,6 +135,6 @@ class AgentResult:
     tool: str
     steps: int
     ok: bool = True
-    error: Optional[str] = None
+    error: str | None = None
     trace: list = field(default_factory=list, compare=False)
 

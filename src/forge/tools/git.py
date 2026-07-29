@@ -73,6 +73,7 @@ def run(content: str) -> str:
         result = subprocess.run(
             full_cmd,
             cwd=str(cwd),
+            check=False,
             capture_output=True,
             text=True,
             timeout=_TIMEOUT,

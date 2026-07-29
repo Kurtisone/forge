@@ -8,7 +8,7 @@ the repo (and tests never bleed state into each other through it).
 
 import pytest
 
-import forge.memory as memory
+from forge import memory
 
 
 @pytest.fixture(autouse=True)

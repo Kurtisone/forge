@@ -29,7 +29,6 @@ import asyncio
 import hmac
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -49,7 +48,7 @@ _orchestrator = Orchestrator()
 # Unset (the default) means the API is open, exactly as before this
 # was added -- nothing changes for anyone not opting in.
 
-async def require_token(authorization: Optional[str] = Header(None)) -> None:
+async def require_token(authorization: str | None = Header(None)) -> None:
     if not API_TOKEN:
         return
     if not authorization or not authorization.startswith("Bearer "):
@@ -80,7 +79,7 @@ async def rate_limit(request: Request) -> None:
 
 class ChatRequest(BaseModel):
     message: str
-    history: Optional[list[dict]] = None   # reserved for future multi-session use
+    history: list[dict] | None = None   # reserved for future multi-session use
 
 
 class ReviewRequest(BaseModel):
@@ -94,13 +93,13 @@ class ChatResponse(BaseModel):
     tool: str
     ok: bool
     steps: int
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ReviewResponse(BaseModel):
     output: str
     ok: bool
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ─── Helpers ───────────────────────────────────────────────────────
@@ -113,7 +112,7 @@ async def _run_in_thread(fn, *args):
 class RunRequest(BaseModel):
     graph: str                          # registered graph name: "review"
     input: str                          # user_input passed to Graph.run()
-    context: Optional[dict] = None      # initial_context for the graph
+    context: dict | None = None      # initial_context for the graph
 
 
 class RunResponse(BaseModel):
@@ -121,7 +120,7 @@ class RunResponse(BaseModel):
     ok: bool
     steps: int
     graph: str
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # ─── Graph registry ────────────────────────────────────────────────

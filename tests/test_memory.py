@@ -4,7 +4,7 @@ module-level MEMORY_FILE constant) so nothing touches the real
 data/memory.json.
 """
 
-import forge.memory as memory
+from forge import memory
 
 
 def test_add_and_get_history(tmp_path, monkeypatch):

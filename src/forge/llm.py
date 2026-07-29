@@ -39,7 +39,7 @@ def call_llm(prompt: str) -> str:
             raise ProviderError(f"Unknown provider: {FORGE_PROVIDER!r}")
     except ProviderError:
         raise
-    except Exception as e:  # noqa: BLE001 - convert any surprise into ProviderError
+    except Exception as e:
         raise ProviderError(f"unexpected provider failure: {e}") from e
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
