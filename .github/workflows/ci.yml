@@ -54,5 +54,9 @@ jobs:
           pip install -r requirements-dev.txt
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      - name: Install forge package (editable)
+        run: pip install -e .
+
+
       - name: Run tests
         run: pytest -v
