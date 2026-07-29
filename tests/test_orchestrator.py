@@ -223,8 +223,8 @@ def test_provider_failure_is_reported_not_raised(monkeypatch):
 def test_max_steps_is_respected_even_at_zero(monkeypatch):
     monkeypatch.setattr(orch_mod, "call_llm", lambda prompt: '{"tool":"chat","content":"x"}')
     import pytest
-
-    with pytest.raises(RuntimeError):
+    from forge.errors import LoopGuardError
+    with pytest.raises(LoopGuardError):
         Orchestrator(max_steps=0).run("hello")
 
 
