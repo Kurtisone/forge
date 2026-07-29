@@ -33,11 +33,14 @@ def _client():
 
 def _mock_llm(monkeypatch, tool="chat", content="hi there"):
     monkeypatch.setattr(
-        orch_mod, "call_llm", lambda prompt: json.dumps({"tool": tool, "content": content})
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": tool, "content": content}),
     )
 
 
 # ── Open by default (API_TOKEN unset) ───────────────────────────────
+
 
 def test_health_is_always_open(monkeypatch):
     monkeypatch.setattr(api_mod, "API_TOKEN", "")
@@ -60,6 +63,7 @@ def test_tools_open_when_no_token_configured(monkeypatch):
 
 
 # ── Gated when API_TOKEN is set ──────────────────────────────────────
+
 
 def test_chat_requires_token_when_configured(monkeypatch):
     monkeypatch.setattr(api_mod, "API_TOKEN", "s3cret")
@@ -110,6 +114,7 @@ def test_run_requires_token_when_configured(monkeypatch):
 
 
 # ── Rate limiting ─────────────────────────────────────────────────────
+
 
 def test_requests_within_limit_all_succeed(monkeypatch):
     monkeypatch.setattr(api_mod, "API_TOKEN", "")
@@ -167,8 +172,8 @@ def test_different_clients_have_independent_limits(monkeypatch):
     allowed_b, _ = ratelimit.check("5.6.7.8")
 
     assert allowed_a is True
-    assert allowed_a_again is False   # second hit from the same client, over the limit
-    assert allowed_b is True          # different client, untouched by A's usage
+    assert allowed_a_again is False  # second hit from the same client, over the limit
+    assert allowed_b is True  # different client, untouched by A's usage
 
 
 def test_old_hits_expire_out_of_the_sliding_window(monkeypatch):

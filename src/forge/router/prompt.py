@@ -24,13 +24,13 @@ _SENTINEL_HISTORY = "\x00HISTORY_BLOCK\x00"
 # and shouldn't shift silently if a docstring is reworded.
 TOOL_DESCRIPTIONS = {
     "chat": (
-        'content is your ACTUAL ANSWER to the user, written naturally, in '
+        "content is your ACTUAL ANSWER to the user, written naturally, in "
         "the same language the user wrote in. Never repeat or rephrase the "
         "user's message as the answer."
     ),
     "code": "content is the code itself, nothing else.",
     "files": (
-        'content is a JSON string describing ONE file operation: '
+        "content is a JSON string describing ONE file operation: "
         '{"action":"read","path":"..."} or '
         '{"action":"write","path":"...","content":"..."} or '
         '{"action":"list","path":"..."}. Only use this when the user '
@@ -42,7 +42,7 @@ TOOL_DESCRIPTIONS = {
         "to run a command; only allowlisted commands will actually execute."
     ),
     "git": (
-        'content is one git subcommand: status, diff, log, show, branch, '
+        "content is one git subcommand: status, diff, log, show, branch, "
         'or stash, optionally with flags, e.g. "log --oneline -5". '
         "Read-only. Only use this when the user explicitly asks about git "
         "history, status, or diffs."
@@ -63,7 +63,10 @@ _TOOL_EXAMPLES = {
         ),
     ],
     "code": [
-        ("Write Hello World in Python", '{"tool":"code","content":"print(\'Hello World\')"}'),
+        (
+            "Write Hello World in Python",
+            '{"tool":"code","content":"print(\'Hello World\')"}',
+        ),
     ],
     "files": [
         (
@@ -179,11 +182,10 @@ def build_router_prompt(
     """
     if available_tools is None:
         from forge.tools import registry
+
         available_tools = registry.available_tools() or list(_FALLBACK_TOOLS)
 
     template = _build_template(available_tools)
-    return (
-        template
-        .replace(_SENTINEL_HISTORY, _format_history(history))
-        .replace(_SENTINEL_INPUT, user_input)
+    return template.replace(_SENTINEL_HISTORY, _format_history(history)).replace(
+        _SENTINEL_INPUT, user_input
     )

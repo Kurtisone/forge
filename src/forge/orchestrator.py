@@ -72,7 +72,9 @@ class Orchestrator:
                 log.error(str(err))
                 state.ok = False
                 state.error = str(err)
-                state.final_output = "Stopped: the router tried to repeat the same step."
+                state.final_output = (
+                    "Stopped: the router tried to repeat the same step."
+                )
                 state.final_tool = decision.tool
                 trace.save(state)
                 return state.to_result()
@@ -131,10 +133,14 @@ class Orchestrator:
             output = self._validate_tool_output(tool, output)
         except ToolExecutionError as e:
             log.error("tool %r violated its contract: %s", tool, e)
-            return ToolResult(tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e))
+            return ToolResult(
+                tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
+            )
         except Exception as e:  # noqa: BLE001
             log.error("tool %r raised: %s", tool, e)
-            return ToolResult(tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e))
+            return ToolResult(
+                tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
+            )
 
         log.event("tool.result", tool=tool, length=len(output))
         return ToolResult(tool=tool, output=output, ok=True)

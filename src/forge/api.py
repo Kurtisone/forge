@@ -48,6 +48,7 @@ _orchestrator = Orchestrator()
 # Unset (the default) means the API is open, exactly as before this
 # was added -- nothing changes for anyone not opting in.
 
+
 async def require_token(authorization: str | None = Header(None)) -> None:
     if not API_TOKEN:
         return
@@ -64,6 +65,7 @@ async def require_token(authorization: str | None = Header(None)) -> None:
 # RATE_LIMIT_ENABLED=false to disable entirely -- e.g. for local dev,
 # or if you're fronting this with a proxy that already rate-limits.
 
+
 async def rate_limit(request: Request) -> None:
     client_key = request.client.host if request.client else "unknown"
     allowed, retry_after = ratelimit.check(client_key)
@@ -77,13 +79,14 @@ async def rate_limit(request: Request) -> None:
 
 # ─── Models ────────────────────────────────────────────────────────
 
+
 class ChatRequest(BaseModel):
     message: str
-    history: list[dict] | None = None   # reserved for future multi-session use
+    history: list[dict] | None = None  # reserved for future multi-session use
 
 
 class ReviewRequest(BaseModel):
-    content: str                            # file content (not a path)
+    content: str  # file content (not a path)
     filename: str = "untitled"
     question: str = "Que peut-on améliorer ?"
 
@@ -104,15 +107,16 @@ class ReviewResponse(BaseModel):
 
 # ─── Helpers ───────────────────────────────────────────────────────
 
+
 async def _run_in_thread(fn, *args):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(_executor, fn, *args)
 
 
 class RunRequest(BaseModel):
-    graph: str                          # registered graph name: "review"
-    input: str                          # user_input passed to Graph.run()
-    context: dict | None = None      # initial_context for the graph
+    graph: str  # registered graph name: "review"
+    input: str  # user_input passed to Graph.run()
+    context: dict | None = None  # initial_context for the graph
 
 
 class RunResponse(BaseModel):
@@ -125,17 +129,20 @@ class RunResponse(BaseModel):
 
 # ─── Graph registry ────────────────────────────────────────────────
 
+
 def _graph_registry() -> dict:
     """Return all available graph builders, keyed by name."""
     from forge.graphs.default import build as default_build
     from forge.graphs.review import build as review_build
+
     return {
         "default": default_build,
-        "review":  review_build,
+        "review": review_build,
     }
 
 
 # ─── Endpoints ─────────────────────────────────────────────────────
+
 
 @app.get("/health")
 async def health():
@@ -146,7 +153,11 @@ async def health():
     }
 
 
-@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_token), Depends(rate_limit)])
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
 async def chat(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
@@ -161,7 +172,11 @@ async def chat(req: ChatRequest):
     )
 
 
-@app.post("/review", response_model=ReviewResponse, dependencies=[Depends(require_token), Depends(rate_limit)])
+@app.post(
+    "/review",
+    response_model=ReviewResponse,
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
 async def review(req: ReviewRequest):
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="content cannot be empty")
@@ -196,20 +211,25 @@ async def get_traces(n: int = 10):
 async def list_tools():
     """Return the list of currently enabled tools and available graphs."""
     from forge.tools.registry import available_tools
+
     return {
         "tools": available_tools(),
         "graphs": list(_graph_registry().keys()),
     }
 
 
-@app.post("/run", response_model=RunResponse, dependencies=[Depends(require_token), Depends(rate_limit)])
+@app.post(
+    "/run",
+    response_model=RunResponse,
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
 async def run_graph(req: RunRequest):
     """Run any registered graph by name with an optional initial context."""
     registry = _graph_registry()
     if req.graph not in registry:
         raise HTTPException(
             status_code=404,
-            detail=f"graph {req.graph!r} not found. Available: {sorted(registry)}"
+            detail=f"graph {req.graph!r} not found. Available: {sorted(registry)}",
         )
     if not req.input.strip():
         raise HTTPException(status_code=400, detail="input cannot be empty")
@@ -230,9 +250,12 @@ async def run_graph(req: RunRequest):
 
 # ─── UI ────────────────────────────────────────────────────────────
 
+
 @app.get("/", response_class=HTMLResponse)
 async def ui():
     static = Path(__file__).parent / "static" / "index.html"
     if static.exists():
         return HTMLResponse(static.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>Forge UI not found</h1><p>Run from the installed package.</p>")
+    return HTMLResponse(
+        "<h1>Forge UI not found</h1><p>Run from the installed package.</p>"
+    )

@@ -31,6 +31,7 @@ class RouterDecision:
     more likely to be confused again by seeing its own garbled output
     reflected back at it.
     """
+
     tool: str
     content: str
     raw: str = field(repr=False, default="")
@@ -41,6 +42,7 @@ class RouterDecision:
 @dataclass(frozen=True)
 class ToolResult:
     """The outcome of running a tool."""
+
     tool: str
     output: str
     ok: bool = True
@@ -56,6 +58,7 @@ class TraceStep:
     executes: decision is set by _route(), result and duration_ms
     are filled in by _dispatch().
     """
+
     step: int
     started_at: float = field(default_factory=time.monotonic)
     decision_tool: str | None = None
@@ -91,6 +94,7 @@ class AgentState:
     Carrying state explicitly makes each step inspectable and makes
     the execution trace a natural by-product, not an afterthought.
     """
+
     user_input: str
     max_steps: int
     history: list[dict] = field(default_factory=list)
@@ -131,10 +135,10 @@ class AgentState:
 @dataclass(frozen=True)
 class AgentResult:
     """What run_agent() / Orchestrator.run() ultimately returns."""
+
     output: str
     tool: str
     steps: int
     ok: bool = True
     error: str | None = None
     trace: list = field(default_factory=list, compare=False)
-

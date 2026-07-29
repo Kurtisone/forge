@@ -28,6 +28,7 @@ def _state_with_one_step(ok=True, error=None) -> AgentState:
 
 # ── save() ───────────────────────────────────────────────────────────
 
+
 def test_save_does_nothing_when_trace_disabled(monkeypatch, tmp_path):
     trace_file = tmp_path / "traces.jsonl"
     monkeypatch.setattr(trace_mod, "TRACE_ENABLED", False)
@@ -79,6 +80,7 @@ def test_save_is_best_effort_and_never_raises(monkeypatch, tmp_path):
 
 # ── read_last() ───────────────────────────────────────────────────────
 
+
 def test_read_last_returns_empty_list_when_file_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(trace_mod, "TRACE_FILE", str(tmp_path / "does_not_exist.jsonl"))
     assert trace_mod.read_last() == []
@@ -102,7 +104,7 @@ def test_read_last_skips_corrupt_lines(monkeypatch, tmp_path):
         json.dumps({"run_id": "good1"}) + "\n"
         "{not valid json\n"
         "\n"  # blank line
-        + json.dumps({"run_id": "good2"}) + "\n"
+         + json.dumps({"run_id": "good2"}) + "\n"
     )
     monkeypatch.setattr(trace_mod, "TRACE_FILE", str(trace_file))
 
@@ -119,19 +121,22 @@ def test_read_last_handles_unreadable_file_gracefully(monkeypatch, tmp_path):
 
 # ── format_for_display() ────────────────────────────────────────────
 
+
 def test_format_for_display_empty():
     assert trace_mod.format_for_display([]) == "(no traces yet)"
 
 
 def test_format_for_display_ok_run():
-    traces = [{
-        "ok": True,
-        "timestamp": "2026-07-01T00:00:00",
-        "run_id": "abc123",
-        "total_ms": 42,
-        "steps": [{"router_tool": "chat"}, {"router_tool": "code"}],
-        "user_input_preview": "hello",
-    }]
+    traces = [
+        {
+            "ok": True,
+            "timestamp": "2026-07-01T00:00:00",
+            "run_id": "abc123",
+            "total_ms": 42,
+            "steps": [{"router_tool": "chat"}, {"router_tool": "code"}],
+            "user_input_preview": "hello",
+        }
+    ]
     out = trace_mod.format_for_display(traces)
     assert "✓" in out
     assert "abc123" in out
@@ -140,15 +145,17 @@ def test_format_for_display_ok_run():
 
 
 def test_format_for_display_failed_run_shows_error():
-    traces = [{
-        "ok": False,
-        "timestamp": "2026-07-01T00:00:00",
-        "run_id": "err001",
-        "total_ms": 5,
-        "steps": [],
-        "user_input_preview": "boom",
-        "error": "provider unavailable",
-    }]
+    traces = [
+        {
+            "ok": False,
+            "timestamp": "2026-07-01T00:00:00",
+            "run_id": "err001",
+            "total_ms": 5,
+            "steps": [],
+            "user_input_preview": "boom",
+            "error": "provider unavailable",
+        }
+    ]
     out = trace_mod.format_for_display(traces)
     assert "✗" in out
     assert "no steps" in out
@@ -157,14 +164,16 @@ def test_format_for_display_failed_run_shows_error():
 
 def test_format_for_display_ok_run_does_not_show_error_even_if_present():
     """error is only meaningful (and only shown) on failed runs."""
-    traces = [{
-        "ok": True,
-        "timestamp": "t",
-        "run_id": "r1",
-        "total_ms": 1,
-        "steps": [],
-        "user_input_preview": "x",
-        "error": "stale leftover field",
-    }]
+    traces = [
+        {
+            "ok": True,
+            "timestamp": "t",
+            "run_id": "r1",
+            "total_ms": 1,
+            "steps": [],
+            "user_input_preview": "x",
+            "error": "stale leftover field",
+        }
+    ]
     out = trace_mod.format_for_display(traces)
     assert "stale leftover field" not in out

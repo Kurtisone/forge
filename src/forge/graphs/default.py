@@ -81,10 +81,9 @@ def _fallback_node(state: AgentState) -> AgentState:
     """
     log.warning("graph fallback: recovering from error: %s", state.error)
     state.final_output = (
-        f"Something went wrong: {state.error or 'unknown error'}. "
-        "Please try again."
+        f"Something went wrong: {state.error or 'unknown error'}. Please try again."
     )
-    state.ok = True   # error was handled; caller gets a result, not a crash
+    state.ok = True  # error was handled; caller gets a result, not a crash
     state.error = None
     return state
 
@@ -92,6 +91,7 @@ def _fallback_node(state: AgentState) -> AgentState:
 def build() -> Graph:
     """Build and return the default router+dispatch+fallback graph."""
     from forge.config import MAX_STEPS
+
     g = Graph("default", max_steps=MAX_STEPS + 2)  # +2 for potential fallback
 
     g.add_node("router", _router_node)

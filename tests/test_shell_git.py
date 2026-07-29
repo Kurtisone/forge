@@ -6,6 +6,7 @@ import forge.tools.shell as shell_mod
 
 # ── shell ──────────────────────────────────────────────────────────
 
+
 def test_shell_allowed_command(tmp_path, monkeypatch):
     # shell.py imports SHELL_ALLOWED_COMMANDS / SHELL_TIMEOUT by value at
     # import time (`from forge.config import ...`), so patching forge.config
@@ -48,6 +49,7 @@ def test_shell_python(tmp_path, monkeypatch):
 
 
 # ── git ────────────────────────────────────────────────────────────
+
 
 def test_git_blocked_subcommand():
     r = git_mod.run("push origin main")

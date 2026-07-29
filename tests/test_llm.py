@@ -32,7 +32,9 @@ def test_dispatches_to_ollama(monkeypatch):
 
 def test_dispatches_to_llama_cpp(monkeypatch):
     monkeypatch.setattr(llm_mod, "FORGE_PROVIDER", "llama_cpp")
-    monkeypatch.setattr(llm_mod.llama_cpp, "call", lambda url, model, prompt: "llama.cpp says hi")
+    monkeypatch.setattr(
+        llm_mod.llama_cpp, "call", lambda url, model, prompt: "llama.cpp says hi"
+    )
 
     result = llm_mod.call_llm("hello")
     assert result == "llama.cpp says hi"

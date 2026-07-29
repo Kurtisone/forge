@@ -34,13 +34,19 @@ _FALLBACK_TOOLS = ["chat", "code"]
 # else there.
 _TEMPLATE = (
     r'root    ::= "{" ws "\"tool\"" ws ":" ws tool ws "," ws "\"content\"" '
-    r'ws ":" ws string (ws "," ws "\"done\"" ws ":" ws boolean)? ws "}"' "\n"
+    r'ws ":" ws string (ws "," ws "\"done\"" ws ":" ws boolean)? ws "}"'
+    "\n"
     r"tool    ::= " + _TOOL_SENTINEL + "\n"
-    r'string  ::= "\"" schar* "\""' "\n"
-    r'schar   ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)' "\n"
-    r"hex     ::= [0-9a-fA-F]" "\n"
-    r'boolean ::= "true" | "false"' "\n"
-    r"ws      ::= [ \t\n]*" "\n"
+    r'string  ::= "\"" schar* "\""'
+    "\n"
+    r'schar   ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)'
+    "\n"
+    r"hex     ::= [0-9a-fA-F]"
+    "\n"
+    r'boolean ::= "true" | "false"'
+    "\n"
+    r"ws      ::= [ \t\n]*"
+    "\n"
 )
 
 
@@ -61,6 +67,7 @@ def build_router_grammar(available_tools: list[str] | None = None) -> str:
     """
     if available_tools is None:
         from forge.tools import registry
+
         available_tools = registry.available_tools() or list(_FALLBACK_TOOLS)
 
     return _TEMPLATE.replace(_TOOL_SENTINEL, _tool_alternation(available_tools))

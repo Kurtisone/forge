@@ -69,7 +69,9 @@ def _read_file_node(state: AgentState) -> AgentState:
         return state
 
     if len(content) > _MAX_FILE_CHARS:
-        content = content[:_MAX_FILE_CHARS] + f"\n... (truncated at {_MAX_FILE_CHARS} chars)"
+        content = (
+            content[:_MAX_FILE_CHARS] + f"\n... (truncated at {_MAX_FILE_CHARS} chars)"
+        )
         log.warning("review: file truncated to %d chars", _MAX_FILE_CHARS)
 
     state.context["file_content"] = content
@@ -119,7 +121,7 @@ def build() -> Graph:
     g.add_node("llm_review", _llm_review_node)
     g.add_node("error", _error_node)
     g.add_edge("read_file", "llm_review", condition=lambda s: s.ok)
-    g.add_edge("read_file", "error",      condition=lambda s: not s.ok)
+    g.add_edge("read_file", "error", condition=lambda s: not s.ok)
     return g
 
 

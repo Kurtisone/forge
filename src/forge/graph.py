@@ -53,6 +53,7 @@ NodeFn = Callable[[AgentState], AgentState]
 @dataclass
 class Edge:
     """A directed connection between two nodes, with an optional condition."""
+
     to_node: str
     condition: Callable[[AgentState], bool] | None = None
 
@@ -69,6 +70,7 @@ class Node:
     - never raise (catch internally and mark state.ok=False)
     - always return the state object (mutated or replaced)
     """
+
     name: str
     fn: NodeFn
     edges: list[Edge] = field(default_factory=list)
@@ -93,8 +95,9 @@ class Node:
 
         ts.duration_ms = int((time.monotonic() - started) * 1000)
         state.trace.append(ts)
-        log.event("graph.node.exit", node=self.name, ok=state.ok,
-                  duration_ms=ts.duration_ms)
+        log.event(
+            "graph.node.exit", node=self.name, ok=state.ok, duration_ms=ts.duration_ms
+        )
         return state
 
     def next_node(self, state: AgentState) -> str | None:
@@ -108,6 +111,7 @@ class Node:
 # ---------------------------------------------------------------------------
 # Graph
 # ---------------------------------------------------------------------------
+
 
 class Graph:
     """
@@ -151,8 +155,7 @@ class Graph:
             raise ValueError(f"node {from_node!r} not registered")
         if to_node not in self._nodes:
             raise ValueError(f"node {to_node!r} not registered")
-        self._nodes[from_node].edges.append(Edge(to_node=to_node,
-                                                  condition=condition))
+        self._nodes[from_node].edges.append(Edge(to_node=to_node, condition=condition))
         return self
 
     def set_entry(self, name: str) -> Graph:
@@ -166,9 +169,12 @@ class Graph:
     # Execution
     # ------------------------------------------------------------------
 
-    def run(self, user_input: str,
-            history: list[dict] | None = None,
-            initial_context: dict | None = None) -> AgentState:
+    def run(
+        self,
+        user_input: str,
+        history: list[dict] | None = None,
+        initial_context: dict | None = None,
+    ) -> AgentState:
         """
         Execute the graph starting from the entry node.
         Returns the final AgentState (use .to_result() for AgentResult).
@@ -204,9 +210,7 @@ class Graph:
                 and visited_sequence[-1] == visited_sequence[-2]
                 and state.ok == (visited_sequence[-1] == current)
             ):
-                err = LoopGuardError(
-                    f"graph cycle detected at node {current!r}"
-                )
+                err = LoopGuardError(f"graph cycle detected at node {current!r}")
                 log.error(str(err))
                 state.ok = False
                 state.error = str(err)

@@ -34,6 +34,7 @@ def _valid_tools() -> set[str]:
     them can't make the router unable to fall back to chat.
     """
     from forge.tools import registry
+
     return _VALID_TOOLS | set(registry.available_tools())
 
 
@@ -47,7 +48,7 @@ _CODE_FENCE = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
 _PROMPT_LEAK_MARKERS = [
     "No explanation or text outside the JSON",
     "NEVER add text outside the JSON",
-    "WHAT \"content\" MEANS PER TOOL",
+    'WHAT "content" MEANS PER TOOL',
     "Stop generating immediately after the closing brace",
     "they said:",
     "you answered:",
@@ -132,7 +133,7 @@ def _validate_json_obj(data: dict, cleaned: str) -> RouterDecision | None:
         log.warning("router picked unknown tool %r, falling back to chat", tool)
         tool = "chat"
     if not content or not str(content).strip():
-        return None   # empty content → try next extraction
+        return None  # empty content → try next extraction
     # Optional multi-step continuation flag. Absent (the common case,
     # and every fine-tune/model that predates this field) means True:
     # one step, same as before. Only an explicit false continues the
@@ -182,7 +183,9 @@ def parse_router_output(raw: str) -> RouterDecision:
 
     # If the output leaked prompt instructions, it's noise, not an answer.
     if _contains_leaked_prompt(fallback):
-        log.warning("router output contains leaked prompt instructions, returning placeholder")
+        log.warning(
+            "router output contains leaked prompt instructions, returning placeholder"
+        )
         return RouterDecision(
             tool="chat",
             content="Je n'ai pas pu générer une réponse. Réessayez.",
