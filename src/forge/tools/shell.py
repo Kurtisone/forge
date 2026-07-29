@@ -69,6 +69,7 @@ def run(content: str) -> str:
         result = subprocess.run(
             parts,
             cwd=str(cwd),
+            check=False,
             env=env,
             capture_output=True,
             text=True,

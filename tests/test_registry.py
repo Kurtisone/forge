@@ -7,7 +7,7 @@ never make load_tools() crash or vanish without a trace).
 import sys
 
 import forge.tools as tools_pkg
-import forge.tools.registry as registry
+from forge.tools import registry
 
 
 def test_real_tools_are_discovered():

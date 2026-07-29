@@ -30,12 +30,12 @@ import re
 import select
 import sys
 
+from forge import trace
 from forge.config import SHOW_DEBUG
 from forge.errors import ForgeError
 from forge.logger import log
 from forge.memory import clear_history
 from forge.orchestrator import Orchestrator
-from forge import trace
 
 _FENCE = "```"
 _CANCEL = "cancel"

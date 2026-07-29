@@ -60,7 +60,7 @@ def test_defaults_to_registry_when_available_tools_not_passed(monkeypatch):
 
 
 def test_falls_back_to_default_pair_if_registry_returns_empty(monkeypatch):
-    monkeypatch.setattr(registry_mod, "available_tools", lambda: [])
+    monkeypatch.setattr(registry_mod, "available_tools", list)
     grammar = build_router_grammar()
     assert '"\\"chat\\""' in grammar
     assert '"\\"code\\""' in grammar

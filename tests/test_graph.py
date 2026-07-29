@@ -14,7 +14,6 @@ from forge.graph import Graph
 from forge.graphs.default import build
 from forge.tools.registry import load_tools
 
-
 # -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------

@@ -13,7 +13,6 @@ import pytest
 
 import forge.cli as cli_mod
 
-
 # ── forge review ─────────────────────────────────────────────────────
 
 def test_review_with_no_file_prints_usage_and_returns_1(capsys):

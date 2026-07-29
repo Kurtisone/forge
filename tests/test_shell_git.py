@@ -1,9 +1,8 @@
 """Tests for forge.tools.shell and forge.tools.git."""
 
 import forge.config as cfg
-import forge.tools.shell as shell_mod
 import forge.tools.git as git_mod
-
+import forge.tools.shell as shell_mod
 
 # ── shell ──────────────────────────────────────────────────────────
 

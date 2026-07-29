@@ -36,13 +36,12 @@ Example — a two-node router/fallback graph:
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 from forge.errors import LoopGuardError
 from forge.logger import log
 from forge.types import AgentState, TraceStep
-
 
 # ---------------------------------------------------------------------------
 # Types
@@ -55,7 +54,7 @@ NodeFn = Callable[[AgentState], AgentState]
 class Edge:
     """A directed connection between two nodes, with an optional condition."""
     to_node: str
-    condition: Optional[Callable[[AgentState], bool]] = None
+    condition: Callable[[AgentState], bool] | None = None
 
     def matches(self, state: AgentState) -> bool:
         return self.condition is None or self.condition(state)
@@ -98,7 +97,7 @@ class Node:
                   duration_ms=ts.duration_ms)
         return state
 
-    def next_node(self, state: AgentState) -> Optional[str]:
+    def next_node(self, state: AgentState) -> str | None:
         """Return the name of the next node to execute, or None if terminal."""
         for edge in self.edges:
             if edge.matches(state):
@@ -128,13 +127,13 @@ class Graph:
         self.name = name
         self.max_steps = max_steps
         self._nodes: dict[str, Node] = {}
-        self._entry: Optional[str] = None
+        self._entry: str | None = None
 
     # ------------------------------------------------------------------
     # Building
     # ------------------------------------------------------------------
 
-    def add_node(self, name: str, fn: NodeFn) -> "Graph":
+    def add_node(self, name: str, fn: NodeFn) -> Graph:
         """Register a node. The first node added becomes the entry point."""
         self._nodes[name] = Node(name=name, fn=fn)
         if self._entry is None:
@@ -145,8 +144,8 @@ class Graph:
         self,
         from_node: str,
         to_node: str,
-        condition: Optional[Callable[[AgentState], bool]] = None,
-    ) -> "Graph":
+        condition: Callable[[AgentState], bool] | None = None,
+    ) -> Graph:
         """Add an edge from from_node to to_node, optionally conditional."""
         if from_node not in self._nodes:
             raise ValueError(f"node {from_node!r} not registered")
@@ -156,7 +155,7 @@ class Graph:
                                                   condition=condition))
         return self
 
-    def set_entry(self, name: str) -> "Graph":
+    def set_entry(self, name: str) -> Graph:
         """Override the default entry point."""
         if name not in self._nodes:
             raise ValueError(f"node {name!r} not registered")
@@ -168,8 +167,8 @@ class Graph:
     # ------------------------------------------------------------------
 
     def run(self, user_input: str,
-            history: Optional[list[dict]] = None,
-            initial_context: Optional[dict] = None) -> AgentState:
+            history: list[dict] | None = None,
+            initial_context: dict | None = None) -> AgentState:
         """
         Execute the graph starting from the entry node.
         Returns the final AgentState (use .to_result() for AgentResult).
@@ -200,16 +199,18 @@ class Graph:
 
             # Cycle detection: same node twice in a row with same
             # ok/error state means we're spinning.
-            if len(visited_sequence) >= 2:
-                if (visited_sequence[-1] == visited_sequence[-2]
-                        and state.ok == (visited_sequence[-1] == current)):
-                    err = LoopGuardError(
-                        f"graph cycle detected at node {current!r}"
-                    )
-                    log.error(str(err))
-                    state.ok = False
-                    state.error = str(err)
-                    break
+            if (
+                len(visited_sequence) >= 2
+                and visited_sequence[-1] == visited_sequence[-2]
+                and state.ok == (visited_sequence[-1] == current)
+            ):
+                err = LoopGuardError(
+                    f"graph cycle detected at node {current!r}"
+                )
+                log.error(str(err))
+                state.ok = False
+                state.error = str(err)
+                break
 
             nxt = node.next_node(state)
             if nxt is None:

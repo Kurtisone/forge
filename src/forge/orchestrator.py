@@ -19,8 +19,7 @@ Rules enforced here, by construction:
    step and trace.save() writes it to disk when TRACE_ENABLED=true.
 """
 
-from forge import memory
-from forge import trace
+from forge import memory, trace
 from forge.config import MAX_STEPS, MEMORY_ENABLED
 from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
 from forge.llm import call_llm

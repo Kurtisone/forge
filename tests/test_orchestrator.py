@@ -224,7 +224,7 @@ def test_max_steps_is_respected_even_at_zero(monkeypatch):
     monkeypatch.setattr(orch_mod, "call_llm", lambda prompt: '{"tool":"chat","content":"x"}')
     import pytest
 
-    with pytest.raises(Exception):
+    with pytest.raises(RuntimeError):
         Orchestrator(max_steps=0).run("hello")
 
 
