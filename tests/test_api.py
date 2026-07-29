@@ -176,6 +176,124 @@ def test_different_clients_have_independent_limits(monkeypatch):
     assert allowed_b is True  # different client, untouched by A's usage
 
 
+# ── Vector memory / RAG (v3.7) ───────────────────────────────────────
+
+
+def _mock_embed(monkeypatch, vec=None):
+    from forge import rag
+
+    monkeypatch.setattr(rag, "_embed", lambda text: vec or [0.1] * rag.EMBEDDING_DIM)
+
+
+def _use_tmp_rag_db(tmp_path, monkeypatch):
+    from forge import rag
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+
+
+def test_remember_open_when_no_token_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    r = _client().post(
+        "/remember",
+        json={"kind": "decision", "content": "use sqlite-vec", "project": "forge"},
+    )
+    assert r.status_code == 200
+    assert r.json()["id"] == 1
+
+
+def test_remember_requires_token_when_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "s3cret")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    r = _client().post(
+        "/remember", json={"kind": "decision", "content": "x", "project": None}
+    )
+    assert r.status_code == 401
+
+
+def test_remember_rejects_empty_content(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    r = _client().post("/remember", json={"kind": "todo", "content": "   "})
+    assert r.status_code == 400
+
+
+def test_remember_rejects_invalid_kind(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    r = _client().post("/remember", json={"kind": "note", "content": "x"})
+    assert r.status_code == 422  # pydantic Literal validation
+
+
+def test_remember_returns_502_when_embedding_server_down(monkeypatch, tmp_path):
+    from forge import rag
+
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+
+    def _raise(text):
+        raise rag.EmbeddingError("connection refused")
+
+    monkeypatch.setattr(rag, "_embed", _raise)
+
+    r = _client().post("/remember", json={"kind": "decision", "content": "x"})
+    assert r.status_code == 502
+
+
+def test_search_returns_stored_entry(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    _client().post(
+        "/remember",
+        json={"kind": "decision", "content": "use sqlite-vec", "project": "forge"},
+    )
+
+    r = _client().get("/search", params={"q": "sqlite"})
+    assert r.status_code == 200
+    results = r.json()
+    assert len(results) == 1
+    assert results[0]["content"] == "use sqlite-vec"
+
+
+def test_search_filters_by_kind_and_project(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    client = _client()
+    client.post(
+        "/remember",
+        json={"kind": "decision", "content": "forge decision", "project": "forge"},
+    )
+    client.post(
+        "/remember",
+        json={"kind": "todo", "content": "nipogi todo", "project": "nipogi"},
+    )
+
+    r = client.get("/search", params={"q": "anything", "kind": "todo"})
+    assert len(r.json()) == 1
+    assert r.json()[0]["project"] == "nipogi"
+
+
+def test_search_requires_token_when_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "s3cret")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    r = _client().get("/search", params={"q": "anything"})
+    assert r.status_code == 401
+
+
 def test_old_hits_expire_out_of_the_sliding_window(monkeypatch):
     """Once a hit ages past the window, it must stop counting against
     the limit -- the whole point of a sliding window over a hard
