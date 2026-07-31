@@ -413,10 +413,25 @@ Qwen3-Embedding-0.6B.
 router itself can dispatch a `remember`/`recall` without a human typing a command —
 "Remember that we decided X" or "What did we decide about Y" gets routed there like
 any other tool, using the exact same `forge/rag.py` backend as the REPL commands and
-the API. It stays opt-in and explicit-request-only by prompt design (see
-`TOOL_DESCRIPTIONS["memory"]` in `router/prompt.py`): the model is told to use it only
-when asked to remember/recall something, never as a side effect of an unrelated
-answer — consistent with how `files`/`shell`/`git` are already scoped.
+the API. The prompt (`TOOL_DESCRIPTIONS["memory"]` in `router/prompt.py`) tells the
+model to use it only on an explicit ask, matching how `files`/`shell`/`git` are
+scoped — in practice a plain declarative statement ("I have a Steam Deck") gets
+treated as an implicit remember too, which is closer to what a personal-assistant
+usage pattern actually wants; tighten the wording there if you'd rather require an
+explicit cue.
+
+`kind` is `"decision"`, `"todo"`, or `"fact"` (a plain piece of information — the
+one that matters for casual statements like the Steam Deck example above). If the
+router's JSON omits `kind` entirely, the memory tool defaults to `"fact"` rather
+than failing — a small local model asked to classify a plain statement on the fly
+won't always supply one.
+
+Recall's raw output is a bullet list (`- [fact] Possède un Steam Deck`), not a
+sentence — same as `git`/`files` returning raw output directly. To get a natural
+reply instead, the recall example in the router prompt sets `"done": false`, which
+folds the raw result into history and lets the router run a second step to phrase
+it as chat. **This requires `MAX_STEPS >= 2`** — at the default `MAX_STEPS=1` the
+second step never runs and recall answers stay as a raw list, silently.
 
 If the embedding server is unreachable, all three entry points fail the same
 predictable way: `!remember`/`!recall` print a one-line error instead of crashing the

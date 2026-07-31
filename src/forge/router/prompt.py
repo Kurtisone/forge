@@ -58,7 +58,11 @@ TOOL_DESCRIPTIONS = {
         'environment) -- when unsure, use "fact". "project" is optional. '
         "Only use this tool when the user explicitly asks you to "
         "remember/save something or to recall/look up something they said "
-        "before -- never as a side effect of an unrelated answer."
+        "before -- never as a side effect of an unrelated answer. "
+        'For "recall", ALWAYS also add "done": false to this JSON -- the '
+        "raw search results are not a real answer, you need one more step "
+        'to phrase them as a natural reply to the user. For "remember", '
+        '"done": false is optional; a short confirmation is usually enough.'
     ),
 }
 
@@ -110,6 +114,17 @@ _TOOL_EXAMPLES = {
             (
                 '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
                 '\\"kind\\":\\"fact\\",\\"content\\":\\"Possède un Steam Deck\\"}"}'
+            ),
+        ),
+        # Third example, same reasoning: recall's raw output is a bullet
+        # list, not a sentence -- "done": false is what turns it into a
+        # real answer on the next step, and a small model needs to see
+        # the field used, not just read about it in prose.
+        (
+            "Tu peux me lister mon matériel ?",
+            (
+                '{"tool":"memory","content":"{\\"action\\":\\"recall\\",'
+                '\\"query\\":\\"matériel équipement\\"}","done":false}'
             ),
         ),
     ],

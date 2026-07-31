@@ -117,6 +117,36 @@ def test_prompt_includes_memory_description_when_enabled():
     assert "explicitly asks" in prompt
 
 
+def test_prompt_memory_recall_example_demonstrates_done_false():
+    """The recall example must show "done": false -- that's what
+    teaches a small local model to chain a rephrasing step instead of
+    returning the raw bullet-list search results as the final answer."""
+    prompt = build_router_prompt(
+        "list my hardware", available_tools=["chat", "code", "memory"]
+    )
+    assert '"action\\":\\"recall\\"' in prompt
+    assert '"done":false' in prompt
+
+
+def test_prompt_memory_recall_example_json_is_well_formed():
+    import json
+    import re
+
+    prompt = build_router_prompt(
+        "list my hardware", available_tools=["chat", "code", "memory"]
+    )
+    match = re.search(
+        r'\{"tool":"memory","content":"\{\\"action\\":\\"recall\\".*?"done":false\}',
+        prompt,
+    )
+    assert match, "recall example not found in prompt"
+    outer = json.loads(match.group(0))
+    assert outer["tool"] == "memory"
+    assert outer["done"] is False
+    inner = json.loads(outer["content"])
+    assert inner["action"] == "recall"
+
+
 def test_prompt_with_only_chat_and_code_omits_memory():
     prompt = build_router_prompt("hi", available_tools=["chat", "code"])
     assert "memory" not in prompt
