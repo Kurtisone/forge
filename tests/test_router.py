@@ -193,6 +193,26 @@ def test_prompt_steers_toward_chat_after_a_memory_result():
     assert '"tool":"chat"' in prompt.split("already contains the answer")[-1]
 
 
+def test_prompt_memory_hint_includes_a_concrete_rephrasing_example():
+    """Second round of live testing: the abstract "in your own words"
+    instruction got the model to stop repeating the memory call, but
+    it then just copied the raw bullet line verbatim instead of
+    actually rephrasing it. A worked before/after example is what
+    small local models actually follow -- assert it's really there,
+    not just the abstract rule."""
+    prompt = build_router_prompt(
+        "Tu peux me lister mon matériel ?",
+        history=[
+            {"role": "user", "content": "Tu peux me lister mon matériel ?"},
+            {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
+        ],
+        available_tools=["chat", "code", "memory"],
+    )
+    assert "do NOT copy the" in prompt
+    assert "bullet format verbatim" in prompt
+    assert "Tu as un Steam Deck !" in prompt  # the worked example itself
+
+
 def test_prompt_omits_memory_steering_hint_for_non_memory_history():
     prompt = build_router_prompt(
         "what's next?",

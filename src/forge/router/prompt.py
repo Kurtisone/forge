@@ -226,12 +226,23 @@ def _format_history(history: list[dict] | None) -> str:
     # failure in testing, not a hypothetical. This is a best-effort
     # nudge, not a guarantee; the loop guard in orchestrator.py is the
     # actual safety net if the model still repeats the call.
+    #
+    # The concrete before/after example below was added after a
+    # second round of live testing: the abstract instruction alone
+    # ("in your own words") got the model to correctly switch to
+    # "tool":"chat" and stop calling memory again, but it then just
+    # copied the raw "- [kind] ..." bullet verbatim as its "answer"
+    # instead of actually rephrasing it. A small local model follows a
+    # worked example far more reliably than a stated rule.
     if last_was_memory_result:
         lines.append(
             'The last "[memory]" line above already contains the answer. '
-            'Respond now with "tool":"chat" and write the answer in your '
-            "own words using that information. Do NOT call the memory "
-            "tool again for this."
+            'Respond now with "tool":"chat" and write ONE natural sentence '
+            "answering the user -- Do NOT call the memory tool again, and "
+            'do NOT copy the "- [kind] ..." bullet format verbatim as your '
+            'answer. Example: if that line says "- [fact] Possède un Steam '
+            'Deck", a good answer is "Tu as un Steam Deck !", not the '
+            "bullet line itself."
         )
 
     return "\n".join(lines) + "\n"
