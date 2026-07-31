@@ -98,6 +98,15 @@ class AgentState:
     user_input: str
     max_steps: int
     history: list[dict] = field(default_factory=list)
+    # Transient tool-result context for a multi-step run, kept separate
+    # from `history`. `history` must always mirror exactly what's
+    # persisted to memory.json -- see orchestrator.py's _finish() --
+    # so that the KV-cache-relevant prefix of the router prompt stays
+    # identical turn to turn. step_context holds this run's in-progress
+    # tool results instead (e.g. a memory recall the router needs to
+    # see before its next decision); it's appended to the end of the
+    # prompt, after history, and is discarded once the run finishes.
+    step_context: list[dict] = field(default_factory=list)
     seen_calls: set = field(default_factory=set)
     steps_taken: int = 0
     trace: list[TraceStep] = field(default_factory=list)

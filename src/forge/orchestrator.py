@@ -56,8 +56,7 @@ class Orchestrator:
                 state.error = str(e)
                 state.final_output = "The model backend is unavailable."
                 state.final_tool = "none"
-                trace.save(state)
-                return state.to_result()
+                return self._finish(state, remember=False)
 
             ts.decision_tool = decision.tool
             ts.decision_content = decision.content
@@ -84,8 +83,7 @@ class Orchestrator:
                         "a loop-guard error",
                         decision.content,
                     )
-                    trace.save(state)
-                    return state.to_result()
+                    return self._finish(state, remember=True)
 
                 err = LoopGuardError(
                     f"repeated call to tool={decision.tool!r} with identical content"
@@ -97,16 +95,12 @@ class Orchestrator:
                     "Stopped: the router tried to repeat the same step."
                 )
                 state.final_tool = decision.tool
-                trace.save(state)
-                return state.to_result()
+                return self._finish(state, remember=False)
             state.seen_calls.add(call_signature)
 
             # --- Dispatch ------------------------------------------------
             result = self._dispatch(decision.tool, decision.content)
             ts.finish(result)
-
-            if MEMORY_ENABLED and result.ok and not decision.is_fallback:
-                self._remember(user_input, result.output)
 
             state.final_output = result.output
             state.final_tool = result.tool
@@ -122,10 +116,19 @@ class Orchestrator:
             # an explicit "done": false, with steps still available and a
             # successful result, keeps the loop going.
             if not result.ok or decision.done or state.steps_taken >= self.max_steps:
-                trace.save(state)
-                return state.to_result()
+                return self._finish(
+                    state, remember=result.ok and not decision.is_fallback
+                )
 
-            state.history = state.history + [
+            # This step isn't final -- feed its tool result to the next
+            # routing decision via step_context, NOT history. history
+            # must stay an exact mirror of what's persisted to
+            # memory.json (see _finish below), so that the router
+            # prompt's history block is byte-identical between the last
+            # call of one turn and the first call of the next, and
+            # llama-server can reuse its KV cache for that whole prefix
+            # instead of invalidating it every turn.
+            state.step_context = state.step_context + [
                 {"role": "assistant", "content": f"[{result.tool}] {result.output}"}
             ]
 
@@ -133,8 +136,27 @@ class Orchestrator:
 
     # ------------------------------------------------------------------
 
+    def _finish(self, state: AgentState, remember: bool) -> AgentResult:
+        """
+        Single exit point for every run(): saves the trace and, at
+        most once per run, persists the turn to memory.json.
+
+        Persisting here instead of once per step (the old behavior)
+        fixes two things at once: memory.json no longer accumulates a
+        duplicate, raw intermediate tool-result exchange alongside the
+        real final answer for every multi-step run, and `history` (see
+        _recall/_route) stays a stable, cacheable prefix across turns
+        instead of drifting every time a run takes more than one step.
+        """
+        trace.save(state)
+        if MEMORY_ENABLED and remember:
+            self._remember(state.user_input, state.final_output or "")
+        return state.to_result()
+
     def _route(self, state: AgentState):
-        prompt = build_router_prompt(state.user_input, history=state.history)
+        prompt = build_router_prompt(
+            state.user_input, history=state.history, step_context=state.step_context
+        )
         log.event("router.prompt", chars=len(prompt))
         raw = call_llm(prompt)
         log.event("router.raw_output", raw=raw)
