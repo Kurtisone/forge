@@ -2,10 +2,7 @@
 !.env.example
 LINKEDIN_POST.md
 docs/LINKEDIN_POST.md
-data/memory.json
-data/traces.jsonl
-data/__pycache__/
-data/workspace/
+data/*
 __pycache__/
 *.pyc
 *.egg-info/
