@@ -203,9 +203,13 @@ def _format_history(history: list[dict] | None) -> str:
     # Entries are also truncated: a code paste saved before this fix
     # landed would otherwise blow up the prompt with hundreds of lines.
     lines = ["\nContext from earlier in this conversation (for reference only):"]
+    last_was_memory_result = False
     for turn in history:
         speaker = "they said" if turn.get("role") == "user" else "you answered"
         content = turn.get("content", "")
+        last_was_memory_result = turn.get("role") == "assistant" and content.startswith(
+            "[memory]"
+        )
         if len(content) > _MAX_HISTORY_ENTRY:
             content = content[:_MAX_HISTORY_ENTRY] + "…"
         lines.append(f"- {speaker}: {content}")
@@ -214,6 +218,22 @@ def _format_history(history: list[dict] | None) -> str:
         "the new message below with a single JSON object, exactly like the "
         "examples earlier."
     )
+
+    # Steering hint, added only right after a memory-tool result: in
+    # practice a small local model asked to route again after seeing
+    # its own tool output tends to just call the same tool again
+    # instead of answering with it -- observed as a real loop-guard
+    # failure in testing, not a hypothetical. This is a best-effort
+    # nudge, not a guarantee; the loop guard in orchestrator.py is the
+    # actual safety net if the model still repeats the call.
+    if last_was_memory_result:
+        lines.append(
+            'The last "[memory]" line above already contains the answer. '
+            'Respond now with "tool":"chat" and write the answer in your '
+            "own words using that information. Do NOT call the memory "
+            "tool again for this."
+        )
+
     return "\n".join(lines) + "\n"
 
 

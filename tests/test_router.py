@@ -176,6 +176,40 @@ def test_prompt_still_fills_in_user_input_and_history():
     assert "earlier message" in prompt
 
 
+def test_prompt_steers_toward_chat_after_a_memory_result():
+    """The real failure this guards against: a small local model asked
+    to route again right after its own [memory] tool output tends to
+    call memory a second time instead of answering -- this hint pushes
+    explicitly toward "tool":"chat" instead."""
+    prompt = build_router_prompt(
+        "Tu peux me lister mon matériel ?",
+        history=[
+            {"role": "user", "content": "Tu peux me lister mon matériel ?"},
+            {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
+        ],
+        available_tools=["chat", "code", "memory"],
+    )
+    assert "Do NOT call the memory tool again" in prompt
+    assert '"tool":"chat"' in prompt.split("already contains the answer")[-1]
+
+
+def test_prompt_omits_memory_steering_hint_for_non_memory_history():
+    prompt = build_router_prompt(
+        "what's next?",
+        history=[
+            {"role": "user", "content": "run some code"},
+            {"role": "assistant", "content": "[code] print(1)"},
+        ],
+        available_tools=["chat", "code", "memory"],
+    )
+    assert "Do NOT call the memory tool again" not in prompt
+
+
+def test_prompt_omits_memory_steering_hint_with_no_history():
+    prompt = build_router_prompt("hello", available_tools=["chat", "code", "memory"])
+    assert "Do NOT call the memory tool again" not in prompt
+
+
 def test_unknown_tool_without_a_description_gets_generic_wording():
     """A custom tool the operator wrote, with no entry in
     TOOL_DESCRIPTIONS, must still produce a valid (if generic) prompt

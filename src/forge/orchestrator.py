@@ -66,6 +66,27 @@ class Orchestrator:
             # --- Loop guard ----------------------------------------------
             call_signature = (decision.tool, decision.content)
             if call_signature in state.seen_calls:
+                if decision.tool == "memory":
+                    # A repeated recall -> rephrase attempt is a known,
+                    # non-fatal failure mode with small local models: the
+                    # steering hint in router/prompt.py asks them to
+                    # switch to chat on the second step, but in practice
+                    # they sometimes call memory again instead. state
+                    # already holds the previous (successful) memory
+                    # result at this point -- degrade to that instead of
+                    # surfacing an internal loop-guard message. Every
+                    # other tool still hard-fails below: a repeat there
+                    # is a genuine signal worth surfacing, not something
+                    # to paper over.
+                    log.warning(
+                        "memory tool repeated identical call (%r) -- "
+                        "falling back to its previous result instead of "
+                        "a loop-guard error",
+                        decision.content,
+                    )
+                    trace.save(state)
+                    return state.to_result()
+
                 err = LoopGuardError(
                     f"repeated call to tool={decision.tool!r} with identical content"
                 )
