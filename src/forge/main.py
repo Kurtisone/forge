@@ -21,16 +21,19 @@ Multi-line code paste — two ways:
      Type 'cancel' on an empty ... line to abort without submitting.
 
 Special commands (prefix with !):
-  !clear   wipe conversation history so the next turn starts fresh
-  !trace   show the last 5 execution traces
-  !help    show this message
+  !clear                              wipe conversation history so the next turn starts fresh
+  !trace                              show the last 5 execution traces
+  !remember <decision|todo|fact> <project|-> <content>
+                                       store a decision/todo/fact in vector memory (v3.7)
+  !recall <query>                     semantic search over remembered entries
+  !help                                show this message
 """
 
 import re
 import select
 import sys
 
-from forge import trace
+from forge import rag, trace
 from forge.config import SHOW_DEBUG
 from forge.errors import ForgeError
 from forge.logger import log
@@ -133,14 +136,80 @@ def _read_input() -> str | None:
     return first_line
 
 
-def _handle_command(cmd: str) -> None:
+def _handle_remember(arg: str) -> None:
+    parts = arg.split(maxsplit=2)
+    if len(parts) < 3:
+        print("Usage: !remember <decision|todo|fact> <project|-> <content>\n")
+        return
+
+    kind, project, content = parts
+    if kind not in ("decision", "todo", "fact"):
+        print("kind must be 'decision', 'todo', or 'fact'\n")
+        return
+    project = None if project == "-" else project
+
+    conn = rag.get_connection()
+    try:
+        try:
+            entry_id = rag.remember(conn, kind=kind, content=content, project=project)
+        except rag.EmbeddingError as e:
+            print(f"[remember failed: embedding server unreachable ({e})]\n")
+            return
+    finally:
+        conn.close()
+    print(f"[remembered #{entry_id}]\n")
+
+
+def _handle_recall(arg: str) -> None:
+    query = arg.strip()
+    if not query:
+        print("Usage: !recall <query>\n")
+        return
+
+    conn = rag.get_connection()
+    try:
+        try:
+            results = rag.search(conn, query=query, top_k=5)
+        except rag.EmbeddingError as e:
+            print(f"[recall failed: embedding server unreachable ({e})]\n")
+            return
+    finally:
+        conn.close()
+
+    if not results:
+        print("[no matches]\n")
+        return
+
+    lines = []
+    for r in results:
+        proj = f"/{r['project']}" if r["project"] else ""
+        lines.append(
+            f"  [{r['kind']}{proj}] {r['content']}  (distance={r['distance']:.3f})"
+        )
+    print("\n".join(lines) + "\n")
+
+
+def _handle_command(raw: str) -> None:
+    # Only the command keyword is case-insensitive -- lowercasing the
+    # whole line here would also lowercase !remember/!recall content,
+    # which is real text meant to be stored/searched as typed.
+    parts = raw.split(maxsplit=1)
+    cmd = parts[0].lower()
+    arg = parts[1] if len(parts) > 1 else ""
+
     if cmd == "!clear":
         clear_history()
         print("[context cleared]\n")
     elif cmd == "!trace":
         print(trace.format_for_display(trace.read_last(5)) + "\n")
+    elif cmd == "!remember":
+        _handle_remember(arg)
+    elif cmd == "!recall":
+        _handle_recall(arg)
     elif cmd == "!help":
         print(__doc__)
+    else:
+        print(f"[unknown command: {cmd}] Type !help for the list.\n")
 
 
 def main():
@@ -163,7 +232,7 @@ def main():
         if stripped.lower() in ("exit", "quit"):
             break
         if stripped.startswith("!"):
-            _handle_command(stripped.lower())
+            _handle_command(stripped)
             continue
 
         try:

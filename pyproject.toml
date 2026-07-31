@@ -2,7 +2,7 @@
 name = "forge"
 version = "3.3.0"
 requires-python = ">=3.12"
-dependencies = ["requests", "fastapi", "uvicorn[standard]"]
+dependencies = ["requests", "fastapi", "uvicorn[standard]", "sqlite-vec"]
 
 [project.scripts]
 forge = "forge.cli:main"

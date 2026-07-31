@@ -59,6 +59,22 @@ def test_parse_router_output_end_to_end_with_files_disabled(monkeypatch):
     assert decision.tool == "chat"
 
 
+def test_parse_router_output_end_to_end_with_memory_enabled(monkeypatch):
+    monkeypatch.setattr(
+        registry_mod, "available_tools", lambda: ["chat", "code", "memory"]
+    )
+    raw = '{"tool":"memory","content":"{\\"action\\":\\"recall\\",\\"query\\":\\"podman\\"}"}'
+    decision = parse_router_output(raw)
+    assert decision.tool == "memory"
+
+
+def test_parse_router_output_end_to_end_with_memory_disabled(monkeypatch):
+    monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code"])
+    raw = '{"tool":"memory","content":"{\\"action\\":\\"recall\\",\\"query\\":\\"podman\\"}"}'
+    decision = parse_router_output(raw)
+    assert decision.tool == "chat"
+
+
 # ── prompt: dynamic tool descriptions ────────────────────────────────
 
 
@@ -91,6 +107,51 @@ def test_prompt_includes_git_description_when_enabled():
     assert "Read-only" in prompt
 
 
+def test_prompt_includes_memory_description_when_enabled():
+    prompt = build_router_prompt(
+        "remember this decision", available_tools=["chat", "code", "memory"]
+    )
+    assert '"memory"' in prompt
+    assert "remember" in prompt
+    assert "recall" in prompt
+    assert "explicitly asks" in prompt
+
+
+def test_prompt_memory_recall_example_demonstrates_done_false():
+    """The recall example must show "done": false -- that's what
+    teaches a small local model to chain a rephrasing step instead of
+    returning the raw bullet-list search results as the final answer."""
+    prompt = build_router_prompt(
+        "list my hardware", available_tools=["chat", "code", "memory"]
+    )
+    assert '"action\\":\\"recall\\"' in prompt
+    assert '"done":false' in prompt
+
+
+def test_prompt_memory_recall_example_json_is_well_formed():
+    import json
+    import re
+
+    prompt = build_router_prompt(
+        "list my hardware", available_tools=["chat", "code", "memory"]
+    )
+    match = re.search(
+        r'\{"tool":"memory","content":"\{\\"action\\":\\"recall\\".*?"done":false\}',
+        prompt,
+    )
+    assert match, "recall example not found in prompt"
+    outer = json.loads(match.group(0))
+    assert outer["tool"] == "memory"
+    assert outer["done"] is False
+    inner = json.loads(outer["content"])
+    assert inner["action"] == "recall"
+
+
+def test_prompt_with_only_chat_and_code_omits_memory():
+    prompt = build_router_prompt("hi", available_tools=["chat", "code"])
+    assert "memory" not in prompt
+
+
 def test_prompt_defaults_to_registry_when_available_tools_not_passed(monkeypatch):
     monkeypatch.setattr(
         registry_mod, "available_tools", lambda: ["chat", "code", "git"]
@@ -113,6 +174,60 @@ def test_prompt_still_fills_in_user_input_and_history():
     )
     assert "what's next?" in prompt
     assert "earlier message" in prompt
+
+
+def test_prompt_steers_toward_chat_after_a_memory_result():
+    """The real failure this guards against: a small local model asked
+    to route again right after its own [memory] tool output tends to
+    call memory a second time instead of answering -- this hint pushes
+    explicitly toward "tool":"chat" instead."""
+    prompt = build_router_prompt(
+        "Tu peux me lister mon matériel ?",
+        history=[
+            {"role": "user", "content": "Tu peux me lister mon matériel ?"},
+            {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
+        ],
+        available_tools=["chat", "code", "memory"],
+    )
+    assert "Do NOT call the memory tool again" in prompt
+    assert '"tool":"chat"' in prompt.split("already contains the answer")[-1]
+
+
+def test_prompt_memory_hint_includes_a_concrete_rephrasing_example():
+    """Second round of live testing: the abstract "in your own words"
+    instruction got the model to stop repeating the memory call, but
+    it then just copied the raw bullet line verbatim instead of
+    actually rephrasing it. A worked before/after example is what
+    small local models actually follow -- assert it's really there,
+    not just the abstract rule."""
+    prompt = build_router_prompt(
+        "Tu peux me lister mon matériel ?",
+        history=[
+            {"role": "user", "content": "Tu peux me lister mon matériel ?"},
+            {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
+        ],
+        available_tools=["chat", "code", "memory"],
+    )
+    assert "do NOT copy the" in prompt
+    assert "bullet format verbatim" in prompt
+    assert "Tu as un Steam Deck !" in prompt  # the worked example itself
+
+
+def test_prompt_omits_memory_steering_hint_for_non_memory_history():
+    prompt = build_router_prompt(
+        "what's next?",
+        history=[
+            {"role": "user", "content": "run some code"},
+            {"role": "assistant", "content": "[code] print(1)"},
+        ],
+        available_tools=["chat", "code", "memory"],
+    )
+    assert "Do NOT call the memory tool again" not in prompt
+
+
+def test_prompt_omits_memory_steering_hint_with_no_history():
+    prompt = build_router_prompt("hello", available_tools=["chat", "code", "memory"])
+    assert "Do NOT call the memory tool again" not in prompt
 
 
 def test_unknown_tool_without_a_description_gets_generic_wording():

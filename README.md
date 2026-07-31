@@ -60,6 +60,7 @@ flowchart TD
     D --> T3["files<br/>(sandboxed)"]
     D --> T4["shell<br/>(sandboxed)"]
     D --> T5["git<br/>(read-only)"]
+    D --> T6["memory<br/>(remember / recall)"]
 
     subgraph Providers["LLM providers (llm.py)"]
         direction LR
@@ -70,10 +71,24 @@ flowchart TD
     R -.-> Providers
 
     O --> TR["TraceStep / AgentState<br/>→ traces.jsonl"]
-    O --> MEM["Memory<br/>(rolling JSON history)"]
+    O --> MEM["Conversation memory<br/>(rolling JSON history)"]
 
     G["Graph engine<br/>(Node / Edge / conditional Edge)"] -.->|POST /run| D
     style G stroke-dasharray: 4 3
+
+    subgraph RAG["Vector memory / RAG (v3.7)"]
+        direction TB
+        RE["rag.py<br/>(remember / search)"]
+        VDB[("SQLite-vec<br/>memory_entries + memory_vectors")]
+        RE --> VDB
+    end
+
+    U -->|"!remember / !recall<br/>POST /remember · GET /search"| RE
+    T6 -.-> RE
+    EMB["forge-embedding<br/>(llama.cpp, embedding-only<br/>Qwen3-Embedding-0.6B)"]
+    RE -.->|HTTP| EMB
+    style RAG stroke-dasharray: 4 3
+    style EMB stroke-dasharray: 4 3
 ```
 
 GitHub renders this diagram automatically; if you're reading this elsewhere, the ASCII
@@ -105,11 +120,14 @@ src/forge/
 │   ├── code.py
 │   ├── files.py         # sandboxed read/write/list within WORKSPACE_DIR
 │   ├── shell.py         # sandboxed subprocess within WORKSPACE_DIR + allowlist
-│   └── git.py           # read-only git operations (status/diff/log/show/branch)
+│   ├── git.py           # read-only git operations (status/diff/log/show/branch)
+│   └── memory.py        # router-dispatchable remember/recall (v3.7) — same rag.py backend
 │
-├── memory.py            # JSON-backed rolling history + key/value facts
-├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools)
+├── memory.py            # JSON-backed rolling conversation history + key/value facts
+├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
+├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search)
 ├── cli.py               # forge review <file> / forge replay <run_id>
+├── main.py              # REPL — !clear, !trace, !remember, !recall, !help
 │
 └── providers/
     ├── llama_cpp.py
@@ -199,7 +217,7 @@ podman run -it --rm \
   forge-core python -m forge.main
 ```
 
-REPL commands: `!help`, `!clear`, `!trace`. Multi-line paste: type your question
+REPL commands: `!help`, `!clear`, `!trace`, `!remember`, `!recall`. Multi-line paste: type your question
 then append ` ``` ` or paste question + code in one go (auto-detected via `select()`).
 
 **CLI (one-shot commands, no REPL):**
@@ -227,6 +245,8 @@ python -m forge.cli replay <run_id>
 | `POST` | `/run` | optional | Run any graph by name |
 | `GET` | `/tools` | optional | Active tools + available graphs |
 | `GET` | `/traces?n=10` | optional | Recent execution traces |
+| `POST` | `/remember` | optional | Store a decision/todo in vector memory (v3.7) |
+| `GET` | `/search?q=...` | optional | Semantic search over remembered decisions/todos |
 | `GET` | `/docs` | open | Interactive API docs (Swagger) |
 
 **Auth:** set `API_TOKEN` in the environment to require
@@ -279,6 +299,10 @@ e.g. behind a proxy that already rate-limits.
 | `RATE_LIMIT_ENABLED` | In-memory sliding-window rate limit on the same routes as `API_TOKEN` | `true` |
 | `RATE_LIMIT_REQUESTS` | Max requests per client IP per window | `30` |
 | `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds | `60` |
+| `EMBEDDING_URL` | Embedding-only llama.cpp endpoint (separate instance from `LLAMA_CPP_URL`) for `/remember`, `/search` (v3.7) | `http://127.0.0.1:8082/embedding` |
+| `EMBEDDING_DIM` | Embedding vector dimension, must match the served model | `1024` |
+| `EMBEDDING_TIMEOUT` | HTTP timeout for embedding requests (seconds) | `30` |
+| `RAG_DB_FILE` | Path to the SQLite-vec vector memory file | `data/forge_rag.db` |
 
 ---
 
@@ -329,11 +353,13 @@ local models sometimes echo earlier conversation before producing the real answe
 token-by-token would risk showing stale/wrong content that then gets silently replaced — worse
 UX than no streaming. Real streaming needs decision and generation split into two LLM calls (a
 fast classify-only call, then a separate streamed generation call once the tool is known) — a
-real latency trade-off on already-slow local hardware, planned for v3.7.
+real latency trade-off on already-slow local hardware. Deferred, no version scheduled yet:
+v3.7 went to vector memory/RAG instead (see below), on the reasoning that Forge not knowing
+the user's own decisions/projects mattered more than response latency.
 
 ---
 
-### Memory
+### Conversation Memory
 
 Forge keeps a rolling window of the last `MEMORY_MAX_HISTORY` messages in `MEMORY_FILE`
 and injects it as context into the router prompt on every turn.
@@ -346,6 +372,71 @@ whatever content it's given) but aren't real answers, and saving one as if it we
 it back into the next prompt as context, which can make a model that got confused once more
 likely to get confused again on the very next turn.
 Large pastes are truncated to 300 chars before saving to avoid bloating future prompts.
+
+---
+
+### Vector Memory / RAG (v3.7)
+
+Separate from conversation memory above: a place to deliberately store decisions and
+TODOs and retrieve them later by meaning, not just by recency. Backed by
+[sqlite-vec](https://github.com/asg017/sqlite-vec), a single file (`RAG_DB_FILE`,
+default `data/forge_rag.db`) with two tables — `memory_entries` (the actual rows) and
+`memory_vectors` (a `vec0` virtual table), linked by `rowid`.
+
+Two ways in:
+
+```bash
+# REPL — captures a decision/todo without leaving the session
+Forge > !remember decision forge Use SQLite-vec instead of an external vector DB
+Forge > !recall how should I index embeddings
+  [decision/forge] Use SQLite-vec instead of an external vector DB  (distance=0.234)
+
+# HTTP API — same auth/rate-limiting as every other route
+curl -X POST http://localhost:8000/remember \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"kind": "decision", "content": "Use SQLite-vec", "project": "forge"}'
+
+curl "http://localhost:8000/search?q=vector+db&top_k=5" \
+  -H "Authorization: Bearer $API_TOKEN"
+```
+
+Embeddings are generated by a **separate, embedding-only llama.cpp instance**
+(`EMBEDDING_URL`, default `http://127.0.0.1:8082/embedding`) — distinct from
+`LLAMA_CPP_URL`, which stays dedicated to chat/tool-dispatch. This project uses
+Qwen3-Embedding-0.6B (q8_0), served with `--embeddings --pooling last` (required for
+this model: decoder-only, aggregates via the EOS token rather than mean/cls pooling)
+and `--embd-normalize 2` (L2-normalized, so distance in `/search` is a plain cosine
+similarity). `EMBEDDING_DIM` must match whatever model you actually serve — 1024 for
+Qwen3-Embedding-0.6B.
+
+**A third entry point, autonomous this time:** with `memory` in `ENABLED_TOOLS`, the
+router itself can dispatch a `remember`/`recall` without a human typing a command —
+"Remember that we decided X" or "What did we decide about Y" gets routed there like
+any other tool, using the exact same `forge/rag.py` backend as the REPL commands and
+the API. The prompt (`TOOL_DESCRIPTIONS["memory"]` in `router/prompt.py`) tells the
+model to use it only on an explicit ask, matching how `files`/`shell`/`git` are
+scoped — in practice a plain declarative statement ("I have a Steam Deck") gets
+treated as an implicit remember too, which is closer to what a personal-assistant
+usage pattern actually wants; tighten the wording there if you'd rather require an
+explicit cue.
+
+`kind` is `"decision"`, `"todo"`, or `"fact"` (a plain piece of information — the
+one that matters for casual statements like the Steam Deck example above). If the
+router's JSON omits `kind` entirely, the memory tool defaults to `"fact"` rather
+than failing — a small local model asked to classify a plain statement on the fly
+won't always supply one.
+
+Recall's raw output is a bullet list (`- [fact] Possède un Steam Deck`), not a
+sentence — same as `git`/`files` returning raw output directly. To get a natural
+reply instead, the recall example in the router prompt sets `"done": false`, which
+folds the raw result into history and lets the router run a second step to phrase
+it as chat. **This requires `MAX_STEPS >= 2`** — at the default `MAX_STEPS=1` the
+second step never runs and recall answers stay as a raw list, silently.
+
+If the embedding server is unreachable, all three entry points fail the same
+predictable way: `!remember`/`!recall` print a one-line error instead of crashing the
+REPL, `/remember`/`/search` return `502`, and the `memory` tool returns a `[error]`
+string the router treats as a normal (if unhelpful) tool result rather than a crash.
 
 ---
 
@@ -389,6 +480,9 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 - **Typed boundaries** — `AgentState`, `RouterDecision`, `ToolResult`, `TraceStep` at every
   interface; raw dicts never cross module boundaries.
 - **Best-effort memory and trace** — failures are logged and ignored; they never break a turn.
+  Vector memory (v3.7) is the deliberate exception: an unreachable embedding server surfaces as
+  a clear error (`502` on the API, a one-line message in the REPL) rather than failing silently —
+  a decision that silently wasn't remembered is worse than one that visibly wasn't.
 - **Local-first** — llama.cpp and Ollama are first-class backends; no cloud dependency required.
 - **Graph over magic** — multi-step flows are expressed as explicit `Node/Edge/Graph` structures,
   not as implicit LLM reasoning loops.
@@ -408,8 +502,8 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.3** | done | Hardening: real multi-step orchestrator, CI (ruff + pytest), optional API bearer-token auth |
 | **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
 | **v3.5** | done | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
-| **v3.6** | current | Response quality: GBNF grammar-constrained decoding for llama.cpp |
-| **v3.7** | planned | True token streaming for `/chat` (needs decision/generation split — see Architecture notes) |
+| **v3.6** | done | Response quality: GBNF grammar-constrained decoding for llama.cpp |
+| **v3.7** | current | Vector memory / RAG: SQLite-vec, `/remember` + `/search`, `!remember`/`!recall` REPL commands, a router-dispatchable `memory` tool, Qwen3-Embedding-0.6B |
 
 ---
 

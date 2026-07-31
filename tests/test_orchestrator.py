@@ -281,6 +281,143 @@ def test_done_false_continues_to_a_second_step(monkeypatch):
     assert result.output == "here is the explanation"
 
 
+def test_memory_recall_done_false_rephrases_naturally(monkeypatch, tmp_path):
+    """
+    Reproduces the real usage pattern this was built for: a recall
+    step (raw bullet-list output, not a sentence) chains into a second
+    step via "done": false, and the router's second call sees the
+    folded-in result and can phrase a natural reply -- the whole
+    reason the memory tool's recall example sets done:false.
+    """
+    from forge import rag
+    from forge.tools import memory as memory_tool
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    monkeypatch.setitem(TOOLS, "memory", memory_tool.run)
+
+    conn = rag.get_connection()
+    rag.remember(conn, kind="fact", content="Possède un Steam Deck", project=None)
+    conn.close()
+
+    calls = {"n": 0}
+
+    def fake_llm(prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return json.dumps(
+                {
+                    "tool": "memory",
+                    "content": json.dumps({"action": "recall", "query": "matériel"}),
+                    "done": False,
+                }
+            )
+        assert "Possède un Steam Deck" in prompt  # folded result reached step 2
+        return json.dumps({"tool": "chat", "content": "Tu as un Steam Deck !"})
+
+    monkeypatch.setattr(orch_mod, "call_llm", fake_llm)
+    result = Orchestrator(max_steps=2).run("Tu peux me lister mon matériel ?")
+
+    assert result.ok
+    assert result.steps == 2
+    assert result.tool == "chat"
+    assert result.output == "Tu as un Steam Deck !"
+
+
+def test_memory_recall_done_false_has_no_effect_at_max_steps_one(monkeypatch, tmp_path):
+    """The documented gotcha: with MAX_STEPS=1 (the default), done:false
+    is silently ignored and the raw list is what the user sees."""
+    from forge import rag
+    from forge.tools import memory as memory_tool
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    monkeypatch.setitem(TOOLS, "memory", memory_tool.run)
+
+    conn = rag.get_connection()
+    rag.remember(conn, kind="fact", content="Possède un Steam Deck", project=None)
+    conn.close()
+
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {
+                "tool": "memory",
+                "content": json.dumps({"action": "recall", "query": "matériel"}),
+                "done": False,
+            }
+        ),
+    )
+    result = Orchestrator(max_steps=1).run("Tu peux me lister mon matériel ?")
+
+    assert result.ok
+    assert result.steps == 1
+    assert result.output == "- [fact] Possède un Steam Deck"
+
+
+def test_memory_repeated_recall_degrades_gracefully_instead_of_erroring(
+    monkeypatch, tmp_path
+):
+    """
+    Reproduces a real failure from live testing: the small local model
+    sometimes calls memory/recall again on the second step instead of
+    switching to chat, tripping the generic loop guard. For the memory
+    tool specifically this must fall back to the already-good previous
+    result (same as MAX_STEPS=1 would have given) rather than surface
+    the internal "Stopped: the router tried to repeat the same step."
+    message to the user.
+    """
+    from forge import rag
+    from forge.tools import memory as memory_tool
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    monkeypatch.setitem(TOOLS, "memory", memory_tool.run)
+
+    conn = rag.get_connection()
+    rag.remember(conn, kind="fact", content="Possède un Steam Deck", project=None)
+    conn.close()
+
+    recall_call = json.dumps(
+        {
+            "tool": "memory",
+            "content": json.dumps({"action": "recall", "query": "matériel"}),
+            "done": False,
+        }
+    )
+    # Always returns the identical call -> the loop guard trips on step 2.
+    monkeypatch.setattr(orch_mod, "call_llm", lambda p: recall_call)
+
+    result = Orchestrator(max_steps=2).run("Tu peux me lister mon matériel ?")
+
+    assert result.ok
+    assert result.error is None
+    assert result.tool == "memory"
+    assert result.output == "- [fact] Possède un Steam Deck"
+    assert "Stopped" not in result.output
+
+
+def test_non_memory_tool_repeat_still_hard_fails(monkeypatch):
+    """The safety net above is scoped to the memory tool only -- every
+    other tool must keep failing loud on a repeated call, since that's
+    a genuine bug signal there, not a known small-model quirk."""
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda p: json.dumps({"tool": "code", "content": "print(1)", "done": False}),
+    )
+    result = Orchestrator(max_steps=3).run("write code")
+
+    assert not result.ok
+    assert result.error is not None
+    assert "repeated call" in result.error
+    assert "Stopped" in result.output
+
+
 def test_done_false_stops_at_max_steps_without_crashing(monkeypatch):
     """
     If the router keeps asking for more steps (done: false) beyond

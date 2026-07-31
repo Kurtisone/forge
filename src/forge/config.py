@@ -112,3 +112,11 @@ API_TOKEN = os.getenv("API_TOKEN", "")
 RATE_LIMIT_ENABLED = _bool("RATE_LIMIT_ENABLED", "true")
 RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "30"))
 RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+
+# --- Vector memory / RAG (v3.7) --------------------------------------------
+# Separate llama.cpp instance (forge-embedding container), embedding-only,
+# distinct from LLAMA_CPP_URL which stays dedicated to chat/tool-dispatch.
+EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://127.0.0.1:8082/embedding")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
+EMBEDDING_TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT", "30"))
+RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")

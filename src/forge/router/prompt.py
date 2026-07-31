@@ -47,6 +47,23 @@ TOOL_DESCRIPTIONS = {
         "Read-only. Only use this when the user explicitly asks about git "
         "history, status, or diffs."
     ),
+    "memory": (
+        "content is a JSON string describing ONE memory operation: "
+        '{"action":"remember","kind":"decision" or "todo" or "fact","content":"...","project":"..."} '
+        'to store something, or {"action":"recall","query":"..."} to search '
+        'past entries by meaning. Use kind="decision" for a choice that was '
+        'made, kind="todo" for something still to do, kind="fact" for a '
+        "plain piece of information worth keeping (equipment, setup, "
+        "preferences, anything the user states about themselves or their "
+        'environment) -- when unsure, use "fact". "project" is optional. '
+        "Only use this tool when the user explicitly asks you to "
+        "remember/save something or to recall/look up something they said "
+        "before -- never as a side effect of an unrelated answer. "
+        'For "recall", ALWAYS also add "done": false to this JSON -- the '
+        "raw search results are not a real answer, you need one more step "
+        'to phrase them as a natural reply to the user. For "remember", '
+        '"done": false is optional; a short confirmation is usually enough.'
+    ),
 }
 
 # One worked example per tool, shown only if that tool is enabled.
@@ -79,6 +96,37 @@ _TOOL_EXAMPLES = {
     ],
     "git": [
         ("What changed in the last commit?", '{"tool":"git","content":"show"}'),
+    ],
+    "memory": [
+        (
+            "Remember: we decided to use SQLite-vec for the RAG",
+            (
+                '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
+                '\\"kind\\":\\"decision\\",\\"content\\":\\"Use SQLite-vec for the RAG\\"}"}'
+            ),
+        ),
+        # Deliberate second example (every other tool gets exactly one):
+        # a plain personal fact, not a decision or a todo, is the case
+        # that actually failed in real usage before "fact" existed as a
+        # kind -- the model needs to see it, not just be told about it.
+        (
+            "Mémorise, je possède un Steam Deck",
+            (
+                '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
+                '\\"kind\\":\\"fact\\",\\"content\\":\\"Possède un Steam Deck\\"}"}'
+            ),
+        ),
+        # Third example, same reasoning: recall's raw output is a bullet
+        # list, not a sentence -- "done": false is what turns it into a
+        # real answer on the next step, and a small model needs to see
+        # the field used, not just read about it in prose.
+        (
+            "Tu peux me lister mon matériel ?",
+            (
+                '{"tool":"memory","content":"{\\"action\\":\\"recall\\",'
+                '\\"query\\":\\"matériel équipement\\"}","done":false}'
+            ),
+        ),
     ],
 }
 
@@ -155,9 +203,13 @@ def _format_history(history: list[dict] | None) -> str:
     # Entries are also truncated: a code paste saved before this fix
     # landed would otherwise blow up the prompt with hundreds of lines.
     lines = ["\nContext from earlier in this conversation (for reference only):"]
+    last_was_memory_result = False
     for turn in history:
         speaker = "they said" if turn.get("role") == "user" else "you answered"
         content = turn.get("content", "")
+        last_was_memory_result = turn.get("role") == "assistant" and content.startswith(
+            "[memory]"
+        )
         if len(content) > _MAX_HISTORY_ENTRY:
             content = content[:_MAX_HISTORY_ENTRY] + "…"
         lines.append(f"- {speaker}: {content}")
@@ -166,6 +218,33 @@ def _format_history(history: list[dict] | None) -> str:
         "the new message below with a single JSON object, exactly like the "
         "examples earlier."
     )
+
+    # Steering hint, added only right after a memory-tool result: in
+    # practice a small local model asked to route again after seeing
+    # its own tool output tends to just call the same tool again
+    # instead of answering with it -- observed as a real loop-guard
+    # failure in testing, not a hypothetical. This is a best-effort
+    # nudge, not a guarantee; the loop guard in orchestrator.py is the
+    # actual safety net if the model still repeats the call.
+    #
+    # The concrete before/after example below was added after a
+    # second round of live testing: the abstract instruction alone
+    # ("in your own words") got the model to correctly switch to
+    # "tool":"chat" and stop calling memory again, but it then just
+    # copied the raw "- [kind] ..." bullet verbatim as its "answer"
+    # instead of actually rephrasing it. A small local model follows a
+    # worked example far more reliably than a stated rule.
+    if last_was_memory_result:
+        lines.append(
+            'The last "[memory]" line above already contains the answer. '
+            'Respond now with "tool":"chat" and write ONE natural sentence '
+            "answering the user -- Do NOT call the memory tool again, and "
+            'do NOT copy the "- [kind] ..." bullet format verbatim as your '
+            'answer. Example: if that line says "- [fact] Possède un Steam '
+            'Deck", a good answer is "Tu as un Steam Deck !", not the '
+            "bullet line itself."
+        )
+
     return "\n".join(lines) + "\n"
 
 

@@ -29,12 +29,13 @@ import asyncio
 import hmac
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from forge import ratelimit, trace
+from forge import rag, ratelimit, trace
 from forge.config import API_TOKEN, FORGE_PROVIDER, LLM_MODEL
 from forge.orchestrator import Orchestrator
 
@@ -117,6 +118,26 @@ class RunRequest(BaseModel):
     graph: str  # registered graph name: "review"
     input: str  # user_input passed to Graph.run()
     context: dict | None = None  # initial_context for the graph
+
+
+class RememberRequest(BaseModel):
+    kind: Literal["decision", "todo", "fact"]
+    content: str
+    project: str | None = None
+
+
+class RememberResponse(BaseModel):
+    id: int
+
+
+class SearchResult(BaseModel):
+    id: int
+    kind: str
+    content: str
+    project: str | None
+    status: str
+    created_at: str
+    distance: float
 
 
 class RunResponse(BaseModel):
@@ -246,6 +267,66 @@ async def run_graph(req: RunRequest):
         graph=req.graph,
         error=state.error,
     )
+
+
+# ─── Vector memory / RAG (v3.7) ────────────────────────────────────
+
+
+@app.post(
+    "/remember",
+    response_model=RememberResponse,
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def remember(req: RememberRequest):
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="content cannot be empty")
+
+    def _execute():
+        conn = rag.get_connection()
+        try:
+            return rag.remember(
+                conn, kind=req.kind, content=req.content, project=req.project
+            )
+        finally:
+            conn.close()
+
+    try:
+        entry_id = await _run_in_thread(_execute)
+    except rag.EmbeddingError as e:
+        raise HTTPException(
+            status_code=502, detail=f"embedding server unreachable: {e}"
+        ) from e
+    return RememberResponse(id=entry_id)
+
+
+@app.get(
+    "/search",
+    response_model=list[SearchResult],
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def search(
+    q: str = Query(..., description="query text"),
+    top_k: int = Query(5, ge=1, le=50),
+    kind: Literal["decision", "todo", "fact"] | None = Query(None),
+    project: str | None = Query(None),
+):
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="q cannot be empty")
+
+    def _execute():
+        conn = rag.get_connection()
+        try:
+            return rag.search(conn, query=q, top_k=top_k, kind=kind, project=project)
+        finally:
+            conn.close()
+
+    try:
+        results = await _run_in_thread(_execute)
+    except rag.EmbeddingError as e:
+        raise HTTPException(
+            status_code=502, detail=f"embedding server unreachable: {e}"
+        ) from e
+    return results
 
 
 # ─── UI ────────────────────────────────────────────────────────────
