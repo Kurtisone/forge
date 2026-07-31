@@ -224,6 +224,17 @@ def test_remember_rejects_empty_content(monkeypatch, tmp_path):
     assert r.status_code == 400
 
 
+def test_remember_accepts_fact_kind(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_rag_db(tmp_path, monkeypatch)
+    _mock_embed(monkeypatch)
+
+    r = _client().post(
+        "/remember", json={"kind": "fact", "content": "Possède un Steam Deck"}
+    )
+    assert r.status_code == 200
+
+
 def test_remember_rejects_invalid_kind(monkeypatch, tmp_path):
     monkeypatch.setattr(api_mod, "API_TOKEN", "")
     _use_tmp_rag_db(tmp_path, monkeypatch)

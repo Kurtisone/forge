@@ -43,6 +43,35 @@ def test_remember_with_project():
     assert "Remembered" in out
 
 
+def test_remember_accepts_fact_kind():
+    out = memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "Possède un Steam Deck"}
+        )
+    )
+    assert out == "Remembered (#1)."
+
+
+def test_remember_defaults_to_fact_when_kind_missing():
+    """The real failure this guards against: a casual mention like
+    "Mémorise, je possède un Steam Deck" isn't a decision or a todo,
+    and a small router model asked to classify a plain statement may
+    not supply a kind at all -- this must not hard-fail."""
+    out = memory_tool.run(
+        json.dumps({"action": "remember", "content": "Possède un Steam Deck"})
+    )
+    assert out == "Remembered (#1)."
+
+
+def test_remember_defaults_to_fact_when_kind_empty():
+    out = memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "", "content": "Possède un Steam Deck"}
+        )
+    )
+    assert out == "Remembered (#1)."
+
+
 def test_remember_rejects_invalid_kind():
     out = memory_tool.run(
         json.dumps({"action": "remember", "kind": "note", "content": "x"})

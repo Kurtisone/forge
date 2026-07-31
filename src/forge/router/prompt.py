@@ -49,11 +49,15 @@ TOOL_DESCRIPTIONS = {
     ),
     "memory": (
         "content is a JSON string describing ONE memory operation: "
-        '{"action":"remember","kind":"decision" or "todo","content":"...","project":"..."} '
+        '{"action":"remember","kind":"decision" or "todo" or "fact","content":"...","project":"..."} '
         'to store something, or {"action":"recall","query":"..."} to search '
-        'past decisions/todos by meaning. "project" is optional. Only use '
-        "this when the user explicitly asks you to remember/save a decision "
-        "or todo, or to recall/look up something they decided or noted "
+        'past entries by meaning. Use kind="decision" for a choice that was '
+        'made, kind="todo" for something still to do, kind="fact" for a '
+        "plain piece of information worth keeping (equipment, setup, "
+        "preferences, anything the user states about themselves or their "
+        'environment) -- when unsure, use "fact". "project" is optional. '
+        "Only use this tool when the user explicitly asks you to "
+        "remember/save something or to recall/look up something they said "
         "before -- never as a side effect of an unrelated answer."
     ),
 }
@@ -95,6 +99,17 @@ _TOOL_EXAMPLES = {
             (
                 '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
                 '\\"kind\\":\\"decision\\",\\"content\\":\\"Use SQLite-vec for the RAG\\"}"}'
+            ),
+        ),
+        # Deliberate second example (every other tool gets exactly one):
+        # a plain personal fact, not a decision or a todo, is the case
+        # that actually failed in real usage before "fact" existed as a
+        # kind -- the model needs to see it, not just be told about it.
+        (
+            "Mémorise, je possède un Steam Deck",
+            (
+                '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
+                '\\"kind\\":\\"fact\\",\\"content\\":\\"Possède un Steam Deck\\"}"}'
             ),
         ),
     ],

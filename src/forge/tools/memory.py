@@ -12,11 +12,14 @@ Interface (consistent with all Forge tools):
     run(content: str) -> str
 
 content is a JSON instruction:
-    {"action": "remember", "kind": "decision"|"todo", "content": "...", "project": "..."}
+    {"action": "remember", "kind": "decision"|"todo"|"fact", "content": "...", "project": "..."}
     {"action": "recall", "query": "...", "top_k": 5, "kind": "...", "project": "..."}
 
 "project" is always optional. "top_k"/"kind"/"project" on recall are
-also optional (top_k defaults to 5).
+also optional (top_k defaults to 5). "kind" on remember defaults to
+"fact" if omitted or empty -- a casual mention ("I have a Steam Deck")
+isn't a decision or a todo, and a small local model asked to route a
+plain statement won't reliably invent a kind for it either.
 
 To activate this tool add it to ENABLED_TOOLS in .env.local:
     ENABLED_TOOLS=chat,code,memory
@@ -27,14 +30,16 @@ import json
 from forge import rag
 from forge.logger import log
 
+_VALID_KINDS = ("decision", "todo", "fact")
+
 
 def _remember(instruction: dict) -> str:
-    kind = instruction.get("kind", "").strip().lower()
+    kind = instruction.get("kind", "").strip().lower() or "fact"
     text = instruction.get("content", "").strip()
     project = instruction.get("project") or None
 
-    if kind not in ("decision", "todo"):
-        return "[error] 'remember' requires kind to be 'decision' or 'todo'"
+    if kind not in _VALID_KINDS:
+        return "[error] 'remember' requires kind to be 'decision', 'todo', or 'fact'"
     if not text:
         return "[error] 'remember' requires a non-empty 'content' field"
 

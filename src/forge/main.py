@@ -23,9 +23,9 @@ Multi-line code paste — two ways:
 Special commands (prefix with !):
   !clear                              wipe conversation history so the next turn starts fresh
   !trace                              show the last 5 execution traces
-  !remember <decision|todo> <project|-> <content>
-                                       store a decision/todo in vector memory (v3.7)
-  !recall <query>                     semantic search over remembered decisions/todos
+  !remember <decision|todo|fact> <project|-> <content>
+                                       store a decision/todo/fact in vector memory (v3.7)
+  !recall <query>                     semantic search over remembered entries
   !help                                show this message
 """
 
@@ -139,12 +139,12 @@ def _read_input() -> str | None:
 def _handle_remember(arg: str) -> None:
     parts = arg.split(maxsplit=2)
     if len(parts) < 3:
-        print("Usage: !remember <decision|todo> <project|-> <content>\n")
+        print("Usage: !remember <decision|todo|fact> <project|-> <content>\n")
         return
 
     kind, project, content = parts
-    if kind not in ("decision", "todo"):
-        print("kind must be 'decision' or 'todo'\n")
+    if kind not in ("decision", "todo", "fact"):
+        print("kind must be 'decision', 'todo', or 'fact'\n")
         return
     project = None if project == "-" else project
 

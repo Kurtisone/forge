@@ -121,7 +121,7 @@ class RunRequest(BaseModel):
 
 
 class RememberRequest(BaseModel):
-    kind: Literal["decision", "todo"]
+    kind: Literal["decision", "todo", "fact"]
     content: str
     project: str | None = None
 
@@ -307,7 +307,7 @@ async def remember(req: RememberRequest):
 async def search(
     q: str = Query(..., description="query text"),
     top_k: int = Query(5, ge=1, le=50),
-    kind: Literal["decision", "todo"] | None = Query(None),
+    kind: Literal["decision", "todo", "fact"] | None = Query(None),
     project: str | None = Query(None),
 ):
     if not q.strip():

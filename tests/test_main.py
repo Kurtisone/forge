@@ -34,6 +34,12 @@ def test_remember_accepts_dash_as_no_project(_rag_conn, capsys):
     assert "remembered #1" in out
 
 
+def test_remember_accepts_fact_kind(_rag_conn, capsys):
+    main_mod._handle_command("!remember fact - Possède un Steam Deck")
+    out = capsys.readouterr().out
+    assert "remembered #1" in out
+
+
 def test_remember_preserves_content_case(_rag_conn, monkeypatch):
     captured = {}
     original_remember = rag.remember
