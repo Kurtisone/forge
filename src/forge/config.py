@@ -34,6 +34,13 @@ LLAMA_CPP_N_PREDICT = int(os.getenv("LLAMA_CPP_N_PREDICT", "512"))
 # support the "grammar" completion field, or to rule it out while
 # debugging.
 LLAMA_CPP_USE_GRAMMAR = _bool("LLAMA_CPP_USE_GRAMMAR", "true")
+# --- Prompt cache (v3.8) -------------------------------------------------
+# Forge only ever drives a single conversation against this server, so
+# there's no per-session slot pool to manage -- pin every request to the
+# same slot so llama-server can reuse its KV cache across turns instead
+# of treating each call as a fresh, unrelated prompt.
+LLAMA_CPP_ID_SLOT = int(os.getenv("LLAMA_CPP_ID_SLOT", "0"))
+LLAMA_CPP_CACHE_PROMPT = _bool("LLAMA_CPP_CACHE_PROMPT", "true")
 
 # --- OpenRouter -----------------------------------------------------------
 # These were referenced by providers/llm_provider.py but never defined,

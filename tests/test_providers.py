@@ -134,6 +134,100 @@ def test_llama_cpp_still_sends_stop_sequences_with_grammar_enabled(monkeypatch):
     assert "User:" in captured["payload"]["stop"]
 
 
+def test_llama_cpp_sends_fixed_id_slot_and_cache_prompt_by_default(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert captured["payload"]["id_slot"] == 0
+    assert captured["payload"]["cache_prompt"] is True
+
+
+def test_llama_cpp_id_slot_configurable(monkeypatch):
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_ID_SLOT", 3)
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert captured["payload"]["id_slot"] == 3
+
+
+def test_llama_cpp_cache_prompt_disabled_via_config(monkeypatch):
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_CACHE_PROMPT", False)
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert captured["payload"]["cache_prompt"] is False
+
+
+def test_llama_cpp_logs_cache_ratio_from_top_level_fields(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda *a, **kw: FakeResponse(
+            {"content": "hi", "prompt_n": 100, "cache_n": 80}
+        ),
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == [
+        ("llama_cpp.cache", {"cache_n": 80, "prompt_n": 100, "ratio": 0.8})
+    ]
+
+
+def test_llama_cpp_logs_cache_ratio_from_timings_fields(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda *a, **kw: FakeResponse(
+            {"content": "hi", "timings": {"prompt_n": 50, "cache_n": 0}}
+        ),
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == [("llama_cpp.cache", {"cache_n": 0, "prompt_n": 50, "ratio": 0.0})]
+
+
+def test_llama_cpp_no_cache_log_when_prompt_n_missing(monkeypatch):
+    monkeypatch.setattr(
+        requests, "post", lambda *a, **kw: FakeResponse({"content": "hi"})
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == []
+
+
 # ---------------------------------------------------------------------
 # ollama
 # ---------------------------------------------------------------------
