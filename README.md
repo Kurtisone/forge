@@ -60,6 +60,7 @@ flowchart TD
     D --> T3["files<br/>(sandboxed)"]
     D --> T4["shell<br/>(sandboxed)"]
     D --> T5["git<br/>(read-only)"]
+    D --> T6["memory<br/>(remember / recall)"]
 
     subgraph Providers["LLM providers (llm.py)"]
         direction LR
@@ -83,6 +84,7 @@ flowchart TD
     end
 
     U -->|"!remember / !recall<br/>POST /remember · GET /search"| RE
+    T6 -.-> RE
     EMB["forge-embedding<br/>(llama.cpp, embedding-only<br/>Qwen3-Embedding-0.6B)"]
     RE -.->|HTTP| EMB
     style RAG stroke-dasharray: 4 3
@@ -118,7 +120,8 @@ src/forge/
 │   ├── code.py
 │   ├── files.py         # sandboxed read/write/list within WORKSPACE_DIR
 │   ├── shell.py         # sandboxed subprocess within WORKSPACE_DIR + allowlist
-│   └── git.py           # read-only git operations (status/diff/log/show/branch)
+│   ├── git.py           # read-only git operations (status/diff/log/show/branch)
+│   └── memory.py        # router-dispatchable remember/recall (v3.7) — same rag.py backend
 │
 ├── memory.py            # JSON-backed rolling conversation history + key/value facts
 ├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
@@ -406,10 +409,19 @@ and `--embd-normalize 2` (L2-normalized, so distance in `/search` is a plain cos
 similarity). `EMBEDDING_DIM` must match whatever model you actually serve — 1024 for
 Qwen3-Embedding-0.6B.
 
-Writing is manual only for now (explicit `!remember` / `POST /remember`) — no automatic
-capture from conversation turns yet. If the embedding server is unreachable, `!remember`/
-`!recall` print a one-line error instead of crashing the REPL, and `/remember`/`/search`
-return `502`.
+**A third entry point, autonomous this time:** with `memory` in `ENABLED_TOOLS`, the
+router itself can dispatch a `remember`/`recall` without a human typing a command —
+"Remember that we decided X" or "What did we decide about Y" gets routed there like
+any other tool, using the exact same `forge/rag.py` backend as the REPL commands and
+the API. It stays opt-in and explicit-request-only by prompt design (see
+`TOOL_DESCRIPTIONS["memory"]` in `router/prompt.py`): the model is told to use it only
+when asked to remember/recall something, never as a side effect of an unrelated
+answer — consistent with how `files`/`shell`/`git` are already scoped.
+
+If the embedding server is unreachable, all three entry points fail the same
+predictable way: `!remember`/`!recall` print a one-line error instead of crashing the
+REPL, `/remember`/`/search` return `502`, and the `memory` tool returns a `[error]`
+string the router treats as a normal (if unhelpful) tool result rather than a crash.
 
 ---
 
@@ -476,7 +488,7 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
 | **v3.5** | done | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
 | **v3.6** | done | Response quality: GBNF grammar-constrained decoding for llama.cpp |
-| **v3.7** | current | Vector memory / RAG: SQLite-vec, `/remember` + `/search`, `!remember`/`!recall` REPL commands, Qwen3-Embedding-0.6B |
+| **v3.7** | current | Vector memory / RAG: SQLite-vec, `/remember` + `/search`, `!remember`/`!recall` REPL commands, a router-dispatchable `memory` tool, Qwen3-Embedding-0.6B |
 
 ---
 

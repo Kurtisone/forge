@@ -47,6 +47,15 @@ TOOL_DESCRIPTIONS = {
         "Read-only. Only use this when the user explicitly asks about git "
         "history, status, or diffs."
     ),
+    "memory": (
+        "content is a JSON string describing ONE memory operation: "
+        '{"action":"remember","kind":"decision" or "todo","content":"...","project":"..."} '
+        'to store something, or {"action":"recall","query":"..."} to search '
+        'past decisions/todos by meaning. "project" is optional. Only use '
+        "this when the user explicitly asks you to remember/save a decision "
+        "or todo, or to recall/look up something they decided or noted "
+        "before -- never as a side effect of an unrelated answer."
+    ),
 }
 
 # One worked example per tool, shown only if that tool is enabled.
@@ -79,6 +88,15 @@ _TOOL_EXAMPLES = {
     ],
     "git": [
         ("What changed in the last commit?", '{"tool":"git","content":"show"}'),
+    ],
+    "memory": [
+        (
+            "Remember: we decided to use SQLite-vec for the RAG",
+            (
+                '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
+                '\\"kind\\":\\"decision\\",\\"content\\":\\"Use SQLite-vec for the RAG\\"}"}'
+            ),
+        ),
     ],
 }
 

@@ -59,6 +59,22 @@ def test_parse_router_output_end_to_end_with_files_disabled(monkeypatch):
     assert decision.tool == "chat"
 
 
+def test_parse_router_output_end_to_end_with_memory_enabled(monkeypatch):
+    monkeypatch.setattr(
+        registry_mod, "available_tools", lambda: ["chat", "code", "memory"]
+    )
+    raw = '{"tool":"memory","content":"{\\"action\\":\\"recall\\",\\"query\\":\\"podman\\"}"}'
+    decision = parse_router_output(raw)
+    assert decision.tool == "memory"
+
+
+def test_parse_router_output_end_to_end_with_memory_disabled(monkeypatch):
+    monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code"])
+    raw = '{"tool":"memory","content":"{\\"action\\":\\"recall\\",\\"query\\":\\"podman\\"}"}'
+    decision = parse_router_output(raw)
+    assert decision.tool == "chat"
+
+
 # ── prompt: dynamic tool descriptions ────────────────────────────────
 
 
@@ -89,6 +105,21 @@ def test_prompt_includes_git_description_when_enabled():
     prompt = build_router_prompt("git log", available_tools=["chat", "code", "git"])
     assert "git subcommand" in prompt
     assert "Read-only" in prompt
+
+
+def test_prompt_includes_memory_description_when_enabled():
+    prompt = build_router_prompt(
+        "remember this decision", available_tools=["chat", "code", "memory"]
+    )
+    assert '"memory"' in prompt
+    assert "remember" in prompt
+    assert "recall" in prompt
+    assert "explicitly asks" in prompt
+
+
+def test_prompt_with_only_chat_and_code_omits_memory():
+    prompt = build_router_prompt("hi", available_tools=["chat", "code"])
+    assert "memory" not in prompt
 
 
 def test_prompt_defaults_to_registry_when_available_tools_not_passed(monkeypatch):
