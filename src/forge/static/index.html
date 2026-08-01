@@ -46,6 +46,13 @@
     .status {
       display: flex; align-items: center; gap: 6px;
       font-size: .8rem; color: var(--muted);
+      min-width: 0;
+    }
+    #status-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 220px;
     }
     .dot {
       width: 8px; height: 8px; border-radius: 50%;
@@ -287,9 +294,9 @@
 <body>
 
 <header>
-  <div class="logo">⚙ <span>Forge</span></div>
+  <div class="logo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:4px"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Forge</span></div>
   <div style="display:flex;align-items:center;gap:14px;">
-    <button class="btn-outline" id="token-btn" onclick="promptForToken()" title="Définir le token API (si API_TOKEN est configuré côté serveur)">🔑 Token</button>
+    <button class="btn-outline" id="token-btn" onclick="promptForToken()" title="Définir le token API (si API_TOKEN est configuré côté serveur)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>Token</button>
     <div class="status">
       <div class="dot" id="status-dot"></div>
       <span id="status-text">connecting…</span>
@@ -314,13 +321,13 @@
 
 <!-- Drawer -->
 <div class="panel" id="drawer-panel">
-  <button class="btn-outline" id="compact-btn" onclick="compactNow()">🗜 Compacter maintenant</button>
+  <button class="btn-outline" id="compact-btn" onclick="compactNow()"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><polyline points="7 13 12 18 17 13"></polyline><polyline points="7 6 12 11 17 6"></polyline></svg>Compacter maintenant</button>
   <div id="drawer-list"></div>
 </div>
 
 <!-- Traces -->
 <div class="panel" id="traces-panel">
-  <button class="btn-outline" id="traces-refresh" onclick="loadTraces()">↺ Rafraîchir</button>
+  <button class="btn-outline" id="traces-refresh" onclick="loadTraces()"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Rafraîchir</button>
   <div id="traces-list"></div>
 </div>
 
@@ -367,8 +374,10 @@ async function checkHealth() {
     const r = await fetch('/health')
     const data = await r.json()
     document.getElementById('status-dot').className = 'dot ok'
-    document.getElementById('status-text').textContent =
-      `${data.provider} · ${data.model.slice(0, 30)}`
+    const text = `${data.provider} · ${data.model}`
+    const el = document.getElementById('status-text')
+    el.textContent = text
+    el.title = text
   } catch {
     document.getElementById('status-dot').className = 'dot err'
     document.getElementById('status-text').textContent = 'offline'
@@ -384,7 +393,7 @@ let _busy = false
 // (muted/hover/pinned) apply without touching this markup.
 const PIN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg>'
 
-function appendMsg(id, text, role, meta, pinned, pairRole) {
+function appendMsg(id, text, role, meta, pinned, pairRole, scroll = true) {
   const bubble = document.createElement('div')
   bubble.className = `msg ${role}`
   bubble.innerHTML = formatContent(text)
@@ -406,7 +415,7 @@ function appendMsg(id, text, role, meta, pinned, pairRole) {
   }
 
   messages.appendChild(bubble)
-  messages.scrollTop = messages.scrollHeight
+  if (scroll) messages.scrollTop = messages.scrollHeight
   return bubble
 }
 
@@ -445,8 +454,9 @@ async function loadHistory() {
     messages.innerHTML = ''
     history.forEach(m => {
       const role = m.role === 'user' ? 'user' : (m.role === 'system' ? 'system' : 'bot')
-      appendMsg(m.id, m.content, role, null, m.pinned, m.role)
+      appendMsg(m.id, m.content, role, null, m.pinned, m.role, false)
     })
+    messages.scrollTop = messages.scrollHeight
   } catch (e) {
     // History is a convenience layer -- a failed load shouldn't block chat.
   }
