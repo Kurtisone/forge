@@ -185,6 +185,8 @@ def test_prompt_steers_toward_chat_after_a_memory_result():
         "Tu peux me lister mon matériel ?",
         history=[
             {"role": "user", "content": "Tu peux me lister mon matériel ?"},
+        ],
+        step_context=[
             {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
         ],
         available_tools=["chat", "code", "memory"],
@@ -204,6 +206,8 @@ def test_prompt_memory_hint_includes_a_concrete_rephrasing_example():
         "Tu peux me lister mon matériel ?",
         history=[
             {"role": "user", "content": "Tu peux me lister mon matériel ?"},
+        ],
+        step_context=[
             {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
         ],
         available_tools=["chat", "code", "memory"],
@@ -213,19 +217,17 @@ def test_prompt_memory_hint_includes_a_concrete_rephrasing_example():
     assert "Tu as un Steam Deck !" in prompt  # the worked example itself
 
 
-def test_prompt_omits_memory_steering_hint_for_non_memory_history():
+def test_prompt_omits_memory_steering_hint_for_non_memory_step_context():
     prompt = build_router_prompt(
         "what's next?",
-        history=[
-            {"role": "user", "content": "run some code"},
-            {"role": "assistant", "content": "[code] print(1)"},
-        ],
+        history=[{"role": "user", "content": "run some code"}],
+        step_context=[{"role": "assistant", "content": "[code] print(1)"}],
         available_tools=["chat", "code", "memory"],
     )
     assert "Do NOT call the memory tool again" not in prompt
 
 
-def test_prompt_omits_memory_steering_hint_with_no_history():
+def test_prompt_omits_memory_steering_hint_with_no_step_context():
     prompt = build_router_prompt("hello", available_tools=["chat", "code", "memory"])
     assert "Do NOT call the memory tool again" not in prompt
 
@@ -253,6 +255,44 @@ def test_repetition_loop_is_flagged_as_fallback():
 def test_empty_output_is_flagged_as_fallback():
     decision = parse_router_output("   ")
     assert decision.is_fallback is True
+
+
+def test_history_block_is_stable_regardless_of_step_context():
+    """
+    The v3.8 cache fix: the history section of the prompt must be
+    byte-identical whether or not step_context is present or what it
+    contains -- history is meant to always mirror memory.json exactly,
+    so llama-server can reuse the KV cache for that whole prefix
+    across turns. Only the text after it (step_context, then the user
+    input) should ever differ.
+    """
+    history = [
+        {"role": "user", "content": "Tu peux me lister mon matériel ?"},
+        {"role": "assistant", "content": "Tu as un Steam Deck !"},
+    ]
+
+    no_step_context = build_router_prompt(
+        "next question", history=history, available_tools=["chat", "code", "memory"]
+    )
+    with_step_context = build_router_prompt(
+        "next question",
+        history=history,
+        step_context=[{"role": "assistant", "content": "[code] print(1)"}],
+        available_tools=["chat", "code", "memory"],
+    )
+
+    history_block_marker = "Context from earlier in this conversation"
+    prefix_no_ctx = no_step_context.split(history_block_marker)[0]
+    prefix_with_ctx = with_step_context.split(history_block_marker)[0]
+    assert prefix_no_ctx == prefix_with_ctx  # static template unaffected
+
+    # And the history bullets themselves are identical in both, right
+    # up to where step_context's own block would start.
+    history_and_after_no_ctx = no_step_context.split(history_block_marker)[1]
+    history_and_after_with_ctx = with_step_context.split(history_block_marker)[1]
+    common_history_text = "they said: Tu peux me lister mon matériel ?"
+    assert common_history_text in history_and_after_no_ctx
+    assert common_history_text in history_and_after_with_ctx
 
 
 def test_leaked_prompt_is_flagged_as_fallback():

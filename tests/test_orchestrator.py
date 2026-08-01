@@ -218,6 +218,96 @@ def test_real_chat_answer_is_still_remembered(monkeypatch, tmp_path):
     assert any(h["content"] == "hi there" for h in history)
 
 
+def test_multi_step_run_persists_exactly_one_clean_exchange(monkeypatch, tmp_path):
+    """
+    Regression test for the v3.8 cache-invalidation bug: before this
+    fix, _remember() fired once per step, so a 2-step run (recall then
+    chat) persisted the turn TWICE -- once with the raw tool-result
+    dump as the "answer" and once with the real final answer, with the
+    user's message duplicated alongside each. Both the duplication and
+    the raw-dump entry are wrong: memory.json must end up with exactly
+    one exchange per turn, and it must be the clean final answer, not
+    an intermediate tool result.
+    """
+    import forge.memory as memory_mod
+    from forge import rag
+    from forge.tools import memory as memory_tool
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    monkeypatch.setitem(TOOLS, "memory", memory_tool.run)
+
+    conn = rag.get_connection()
+    rag.remember(conn, kind="fact", content="Possède un Steam Deck", project=None)
+    conn.close()
+
+    calls = {"n": 0}
+
+    def fake_llm(prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return json.dumps(
+                {
+                    "tool": "memory",
+                    "content": json.dumps({"action": "recall", "query": "matériel"}),
+                    "done": False,
+                }
+            )
+        return json.dumps({"tool": "chat", "content": "Tu as un Steam Deck !"})
+
+    monkeypatch.setattr(orch_mod, "call_llm", fake_llm)
+    result = Orchestrator(max_steps=2).run("Tu peux me lister mon matériel ?")
+
+    assert result.ok
+    history = memory_mod.get_history()
+    assert len(history) == 2  # exactly one user/assistant exchange, not two
+    assert history[0] == {
+        "role": "user",
+        "content": "Tu peux me lister mon matériel ?",
+    }
+    assert history[1] == {"role": "assistant", "content": "Tu as un Steam Deck !"}
+
+
+def test_multi_step_run_keeps_history_untouched_by_step_context(monkeypatch):
+    """
+    The actual cache fix: `history` passed to the router must stay
+    exactly what was loaded from memory.json for the whole run --
+    intermediate tool results go through step_context instead, never
+    mutating history. This is what keeps the router prompt's history
+    block byte-identical between the last call of one turn and the
+    first call of the next, so llama-server can reuse the KV cache for
+    it instead of invalidating it every turn.
+    """
+    calls = {"n": 0}
+    seen_history_by_call = []
+
+    def fake_llm(prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return json.dumps({"tool": "code", "content": "print(1)", "done": False})
+        return json.dumps({"tool": "chat", "content": "done"})
+
+    import forge.router as router_mod
+
+    real_build = router_mod.build_router_prompt
+
+    def spying_build(user_input, history=None, step_context=None, **kw):
+        seen_history_by_call.append(history)
+        return real_build(user_input, history=history, step_context=step_context, **kw)
+
+    monkeypatch.setattr(orch_mod, "call_llm", fake_llm)
+    monkeypatch.setattr(orch_mod, "build_router_prompt", spying_build)
+
+    Orchestrator(max_steps=3).run("write code and explain it")
+
+    assert len(seen_history_by_call) == 2
+    # Same history object contents on both calls of this run -- the
+    # step 1 tool result never got folded into it.
+    assert seen_history_by_call[0] == seen_history_by_call[1]
+
+
 def test_provider_failure_is_reported_not_raised(monkeypatch):
     from forge.errors import ProviderError
 

@@ -134,6 +134,149 @@ def test_llama_cpp_still_sends_stop_sequences_with_grammar_enabled(monkeypatch):
     assert "User:" in captured["payload"]["stop"]
 
 
+def test_llama_cpp_sends_fixed_id_slot_and_cache_prompt_by_default(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert captured["payload"]["id_slot"] == 0
+    assert captured["payload"]["cache_prompt"] is True
+
+
+def test_llama_cpp_id_slot_configurable(monkeypatch):
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_ID_SLOT", 3)
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert captured["payload"]["id_slot"] == 3
+
+
+def test_llama_cpp_cache_prompt_disabled_via_config(monkeypatch):
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_CACHE_PROMPT", False)
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["payload"] = json
+        return FakeResponse({"content": "hi"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert captured["payload"]["cache_prompt"] is False
+
+
+def test_llama_cpp_logs_ms_per_token(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda *a, **kw: FakeResponse(
+            {
+                "content": "hi",
+                "tokens_evaluated": 100,
+                "tokens_cached": 12,
+                "timings": {"prompt_ms": 250.0},
+            }
+        ),
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == [
+        (
+            "llama_cpp.cache",
+            {
+                "prompt_n": 100,
+                "prompt_ms": 250.0,
+                "ms_per_token": 2.5,
+                "tokens_cached": 12,
+            },
+        )
+    ]
+
+
+def test_llama_cpp_falls_back_to_timings_prompt_n(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda *a, **kw: FakeResponse(
+            {"content": "hi", "timings": {"prompt_n": 50, "prompt_ms": 100.0}}
+        ),
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == [
+        (
+            "llama_cpp.cache",
+            {
+                "prompt_n": 50,
+                "prompt_ms": 100.0,
+                "ms_per_token": 2.0,
+                "tokens_cached": None,
+            },
+        )
+    ]
+
+
+def test_llama_cpp_ms_per_token_none_when_prompt_ms_missing(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda *a, **kw: FakeResponse({"content": "hi", "tokens_evaluated": 100}),
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == [
+        (
+            "llama_cpp.cache",
+            {
+                "prompt_n": 100,
+                "prompt_ms": None,
+                "ms_per_token": None,
+                "tokens_cached": None,
+            },
+        )
+    ]
+
+
+def test_llama_cpp_no_cache_log_when_prompt_n_missing(monkeypatch):
+    monkeypatch.setattr(
+        requests, "post", lambda *a, **kw: FakeResponse({"content": "hi"})
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == []
+
+
 # ---------------------------------------------------------------------
 # ollama
 # ---------------------------------------------------------------------

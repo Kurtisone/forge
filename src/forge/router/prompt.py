@@ -15,6 +15,14 @@ that already gates it for the Graph engine.
 
 _SENTINEL_INPUT = "\x00USER_INPUT\x00"
 _SENTINEL_HISTORY = "\x00HISTORY_BLOCK\x00"
+# Separate from history on purpose: history must stay an exact mirror
+# of what's persisted to memory.json across turns (see orchestrator.py
+# _finish()), so that llama-server can reuse the KV cache for that
+# whole prefix turn to turn. step_context holds this run's own
+# in-progress tool results instead, placed after history, and is never
+# persisted -- it exists only for the remaining steps of the current
+# run.
+_SENTINEL_STEP_CONTEXT = "\x00STEP_CONTEXT_BLOCK\x00"
 
 # One line each, describing exactly what "content" must contain for
 # that tool. Keep these in sync with each tool's own docstring --
@@ -181,9 +189,10 @@ def _build_template(tools: list[str]) -> str:
         "Examples:\n\n"
         f"{_examples(tools)}\n"
         + _SENTINEL_HISTORY
-        + "\nUser: "
-        + _SENTINEL_INPUT
-        + "\n"
+        + _SENTINEL_STEP_CONTEXT
+        + "\nDo not continue the conversation above as plain text. Respond to "
+        "the new message below with a single JSON object, exactly like the "
+        "examples earlier.\n" + "\nUser: " + _SENTINEL_INPUT + "\n"
     )
 
 
@@ -202,22 +211,41 @@ def _format_history(history: list[dict] | None) -> str:
     #
     # Entries are also truncated: a code paste saved before this fix
     # landed would otherwise blow up the prompt with hundreds of lines.
+    #
+    # This must stay an exact function of memory.json's persisted
+    # history and nothing else -- no per-run tool-result content mixed
+    # in (see step_context / _format_step_context below) -- so that
+    # this whole block is byte-identical between the last call of one
+    # turn and the first call of the next, letting llama-server reuse
+    # the KV cache for it instead of invalidating it every turn.
     lines = ["\nContext from earlier in this conversation (for reference only):"]
-    last_was_memory_result = False
     for turn in history:
         speaker = "they said" if turn.get("role") == "user" else "you answered"
         content = turn.get("content", "")
-        last_was_memory_result = turn.get("role") == "assistant" and content.startswith(
-            "[memory]"
-        )
         if len(content) > _MAX_HISTORY_ENTRY:
             content = content[:_MAX_HISTORY_ENTRY] + "…"
         lines.append(f"- {speaker}: {content}")
-    lines.append(
-        "Do not continue the conversation above as plain text. Respond to "
-        "the new message below with a single JSON object, exactly like the "
-        "examples earlier."
-    )
+
+    return "\n".join(lines) + "\n"
+
+
+def _format_step_context(step_context: list[dict] | None) -> str:
+    if not step_context:
+        return ""
+
+    # Tool results from earlier steps of THIS run only -- never
+    # persisted, never part of `history`. Kept separate specifically
+    # so `history` (above) stays a stable, cacheable prefix; this
+    # block is the "new" tail that's expected to change every step and
+    # isn't meant to be cache-reused across turns.
+    lines = ["\nResult from a tool you already called earlier in this turn:"]
+    last_was_memory_result = False
+    for turn in step_context:
+        content = turn.get("content", "")
+        last_was_memory_result = content.startswith("[memory]")
+        if len(content) > _MAX_HISTORY_ENTRY:
+            content = content[:_MAX_HISTORY_ENTRY] + "…"
+        lines.append(f"- {content}")
 
     # Steering hint, added only right after a memory-tool result: in
     # practice a small local model asked to route again after seeing
@@ -251,6 +279,7 @@ def _format_history(history: list[dict] | None) -> str:
 def build_router_prompt(
     user_input: str,
     history: list[dict] | None = None,
+    step_context: list[dict] | None = None,
     available_tools: list[str] | None = None,
 ) -> str:
     """
@@ -265,6 +294,8 @@ def build_router_prompt(
         available_tools = registry.available_tools() or list(_FALLBACK_TOOLS)
 
     template = _build_template(available_tools)
-    return template.replace(_SENTINEL_HISTORY, _format_history(history)).replace(
-        _SENTINEL_INPUT, user_input
+    return (
+        template.replace(_SENTINEL_HISTORY, _format_history(history))
+        .replace(_SENTINEL_STEP_CONTEXT, _format_step_context(step_context))
+        .replace(_SENTINEL_INPUT, user_input)
     )
