@@ -113,6 +113,23 @@ _TOOL_EXAMPLES = {
                 '\\"path\\":\\"hello.py\\",\\"content\\":\\"print(\'Hello, World!\')\\"}"}'
             ),
         ),
+        # Third example: editing an EXISTING named file needs its
+        # current content first, or the model just regenerates
+        # something from memory/guesswork instead of the real file
+        # (observed live: several "remplace X par Y dans hello.go"
+        # requests in a row all answered with the ORIGINAL unmodified
+        # content, never touching the actual file). "done": false
+        # chains into a write on the next step -- see
+        # _format_step_context's steering hint right after this,
+        # which is what pushes that second step toward "action":
+        # "write" instead of just answering in chat.
+        (
+            "Dans hello.go, remplace Hello World par Bienvenue",
+            (
+                '{"tool":"files","content":"{\\"action\\":\\"read\\",'
+                '\\"path\\":\\"hello.go\\"}","done":false}'
+            ),
+        ),
     ],
     "shell": [
         ("List the files here", '{"tool":"shell","content":"ls -la"}'),
@@ -212,6 +229,14 @@ def _build_template(tools: list[str]) -> str:
 
 
 _MAX_HISTORY_ENTRY = 120  # chars per entry displayed in the prompt
+# A files:read result in step_context is about to be reproduced in
+# full (with one part changed) on the very next step -- 120 chars
+# would guarantee a truncated/hallucinated rewrite for anything past a
+# trivial file. Bounded higher instead of left unbounded, since the
+# files tool's own read cap (_MAX_READ_BYTES, 64KB) would still be far
+# too much for an 8k-token local model's prompt budget alongside
+# everything else in it.
+_MAX_STEP_CONTEXT_FILE_ENTRY = 4000
 
 
 def _format_history(history: list[dict] | None) -> str:
@@ -255,11 +280,26 @@ def _format_step_context(step_context: list[dict] | None) -> str:
     # isn't meant to be cache-reused across turns.
     lines = ["\nResult from a tool you already called earlier in this turn:"]
     last_was_memory_result = False
+    last_was_files_read = False
     for turn in step_context:
         content = turn.get("content", "")
         last_was_memory_result = content.startswith("[memory]")
-        if len(content) > _MAX_HISTORY_ENTRY:
-            content = content[:_MAX_HISTORY_ENTRY] + "…"
+        # A files read: the "[files] " prefix, but not a write
+        # confirmation/error, which both start with "[ok]"/"[error]"
+        # right after that prefix.
+        inner = content[len("[files] ") :] if content.startswith("[files] ") else ""
+        last_was_files_read = bool(inner) and not inner.startswith(("[ok]", "[error]"))
+        # A files read specifically needs a much higher cap than other
+        # tool results: it's about to be asked to reproduce this
+        # content in full with one part changed, on the very next
+        # step, and _MAX_HISTORY_ENTRY (120 chars) is sized for
+        # compact history summaries, not for something the model must
+        # accurately rewrite. Still bounded, just far less aggressively.
+        cap = (
+            _MAX_STEP_CONTEXT_FILE_ENTRY if last_was_files_read else _MAX_HISTORY_ENTRY
+        )
+        if len(content) > cap:
+            content = content[:cap] + "…"
         lines.append(f"- {content}")
 
     # Steering hint, added only right after a memory-tool result: in
@@ -286,6 +326,23 @@ def _format_step_context(step_context: list[dict] | None) -> str:
             'answer. Example: if that line says "- [fact] Possède un Steam '
             'Deck", a good answer is "Tu as un Steam Deck !", not the '
             "bullet line itself."
+        )
+    elif last_was_files_read:
+        # Same reasoning as the memory hint above: a small local model
+        # asked to route again right after reading a file tends to
+        # either answer with the content as plain chat (never actually
+        # modifying the real file) or just call "read" again. This
+        # pushes explicitly toward the write step instead, and
+        # reminds it to reuse the file it just read as the base for
+        # the edit rather than something recalled from memory/guessed.
+        lines.append(
+            "The file content above is the CURRENT, real content of that "
+            'file. Respond now with "tool":"files" and content = '
+            '{"action":"write","path":"<same path as above>","content":'
+            '"<the FULL file content above, with the requested change '
+            'applied>"}. Do NOT call "action":"read" again, and do NOT '
+            "just answer in chat -- the user expects the actual file to "
+            "be updated, not a description of what to change."
         )
 
     return "\n".join(lines) + "\n"
