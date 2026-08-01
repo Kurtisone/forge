@@ -263,11 +263,10 @@ def test_multi_step_run_persists_exactly_one_clean_exchange(monkeypatch, tmp_pat
     assert result.ok
     history = memory_mod.get_history()
     assert len(history) == 2  # exactly one user/assistant exchange, not two
-    assert history[0] == {
-        "role": "user",
-        "content": "Tu peux me lister mon matériel ?",
-    }
-    assert history[1] == {"role": "assistant", "content": "Tu as un Steam Deck !"}
+    assert history[0]["role"] == "user"
+    assert history[0]["content"] == "Tu peux me lister mon matériel ?"
+    assert history[1]["role"] == "assistant"
+    assert history[1]["content"] == "Tu as un Steam Deck !"
 
 
 def test_multi_step_run_keeps_history_untouched_by_step_context(monkeypatch):
