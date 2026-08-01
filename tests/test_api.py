@@ -44,8 +44,37 @@ def _mock_llm(monkeypatch, tool="chat", content="hi there"):
 
 def test_health_is_always_open(monkeypatch):
     monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    monkeypatch.setattr(api_mod, "FORGE_PROVIDER", "ollama")  # skip the llama_cpp probe
     r = _client().get("/health")
     assert r.status_code == 200
+
+
+def test_health_reports_live_llama_cpp_model(monkeypatch):
+    from forge.providers import llama_cpp
+
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    monkeypatch.setattr(api_mod, "FORGE_PROVIDER", "llama_cpp")
+    monkeypatch.setattr(api_mod, "LLM_MODEL", "configured-but-stale.gguf")
+    monkeypatch.setattr(
+        llama_cpp, "get_loaded_model", lambda url: "actually-loaded.gguf"
+    )
+
+    r = _client().get("/health")
+
+    assert r.json()["model"] == "actually-loaded.gguf"
+
+
+def test_health_falls_back_to_configured_model_when_probe_fails(monkeypatch):
+    from forge.providers import llama_cpp
+
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    monkeypatch.setattr(api_mod, "FORGE_PROVIDER", "llama_cpp")
+    monkeypatch.setattr(api_mod, "LLM_MODEL", "configured.gguf")
+    monkeypatch.setattr(llama_cpp, "get_loaded_model", lambda url: None)
+
+    r = _client().get("/health")
+
+    assert r.json()["model"] == "configured.gguf"
 
 
 def test_chat_open_when_no_token_configured(monkeypatch):
@@ -97,6 +126,7 @@ def test_chat_accepts_correct_token(monkeypatch):
 
 def test_health_stays_open_even_when_token_is_configured(monkeypatch):
     monkeypatch.setattr(api_mod, "API_TOKEN", "s3cret")
+    monkeypatch.setattr(api_mod, "FORGE_PROVIDER", "ollama")
     r = _client().get("/health")
     assert r.status_code == 200
 
@@ -154,6 +184,7 @@ def test_health_is_never_rate_limited(monkeypatch):
     monkeypatch.setattr(api_mod.ratelimit, "RATE_LIMIT_ENABLED", True)
     monkeypatch.setattr(api_mod.ratelimit, "RATE_LIMIT_REQUESTS", 1)
     monkeypatch.setattr(api_mod.ratelimit, "RATE_LIMIT_WINDOW_SECONDS", 60)
+    monkeypatch.setattr(api_mod, "FORGE_PROVIDER", "ollama")
     client = _client()
     for _ in range(5):
         assert client.get("/health").status_code == 200

@@ -41,7 +41,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from forge import rag, ratelimit, trace
-from forge.config import API_TOKEN, FORGE_PROVIDER, LLM_MODEL
+from forge.config import API_TOKEN, FORGE_PROVIDER, LLAMA_CPP_URL, LLM_MODEL
 from forge.orchestrator import Orchestrator
 
 app = FastAPI(title="Forge", version="3.3.0", docs_url="/docs")
@@ -187,10 +187,18 @@ def _graph_registry() -> dict:
 
 @app.get("/health")
 async def health():
+    model = LLM_MODEL
+    if FORGE_PROVIDER == "llama_cpp":
+        from forge.providers.llama_cpp import get_loaded_model
+
+        loaded = await _run_in_thread(get_loaded_model, LLAMA_CPP_URL)
+        if loaded:
+            model = loaded
+
     return {
         "status": "ok",
         "provider": FORGE_PROVIDER,
-        "model": LLM_MODEL,
+        "model": model,
     }
 
 

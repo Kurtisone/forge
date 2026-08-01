@@ -277,6 +277,46 @@ def test_llama_cpp_no_cache_log_when_prompt_n_missing(monkeypatch):
     assert events == []
 
 
+def test_get_loaded_model_reads_model_path(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse({"model_path": "/models/qwen3-4b.gguf"}),
+    )
+    assert llama_cpp.get_loaded_model("http://fake") == "qwen3-4b.gguf"
+
+
+def test_get_loaded_model_falls_back_to_nested_field(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda *a, **kw: FakeResponse(
+            {"default_generation_settings": {"model": "/models/other.gguf"}}
+        ),
+    )
+    assert llama_cpp.get_loaded_model("http://fake") == "other.gguf"
+
+
+def test_get_loaded_model_returns_none_on_network_failure(monkeypatch):
+    def _raise(*a, **kw):
+        raise requests.RequestException("connection refused")
+
+    monkeypatch.setattr(requests, "get", _raise)
+    assert llama_cpp.get_loaded_model("http://fake") is None
+
+
+def test_get_loaded_model_returns_none_when_no_known_field(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse({"foo": "bar"}))
+    assert llama_cpp.get_loaded_model("http://fake") is None
+
+
+def test_get_loaded_model_returns_none_on_http_error(monkeypatch):
+    monkeypatch.setattr(
+        requests, "get", lambda *a, **kw: FakeResponse({}, status_ok=False)
+    )
+    assert llama_cpp.get_loaded_model("http://fake") is None
+
+
 # ---------------------------------------------------------------------
 # ollama
 # ---------------------------------------------------------------------
