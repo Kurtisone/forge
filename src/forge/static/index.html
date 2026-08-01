@@ -125,6 +125,44 @@
       margin-top: 6px;
       display: block;
     }
+    .msg.system {
+      align-self: center;
+      background: transparent;
+      border: 1px dashed var(--border);
+      color: var(--muted);
+      font-size: .8rem;
+      font-style: italic;
+      max-width: 90%;
+    }
+    .msg-actions {
+      display: flex; gap: 6px; align-items: center;
+      margin-top: 4px;
+    }
+    .pin-btn {
+      background: none; border: none; padding: 0;
+      font-size: .8rem; color: var(--muted);
+      cursor: pointer; align-self: auto;
+    }
+    .pin-btn:hover { color: var(--accent); opacity: 1; }
+    .pin-btn.pinned { color: #d29922; }
+    #compact-btn { align-self: center; margin: 0 0 8px; }
+
+    /* ── Drawer panel ── */
+    #drawer-panel { padding: 20px; overflow-y: auto; gap: 10px; }
+    .drawer-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-size: .88rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .drawer-card .role { color: var(--accent); font-size: .72rem; text-transform: uppercase; margin-bottom: 4px; }
+    .drawer-empty { color: var(--muted); font-size: .85rem; }
     .thinking {
       display: flex; align-items: center; gap: 6px;
       color: var(--muted); font-size: .85rem;
@@ -239,6 +277,7 @@
 
 <div class="tabs">
   <div class="tab active" data-tab="chat">Chat</div>
+  <div class="tab" data-tab="drawer">Tiroir</div>
   <div class="tab" data-tab="traces">Traces</div>
 </div>
 
@@ -249,6 +288,12 @@
     <textarea id="chat-input" placeholder="Posez votre question…" rows="1"></textarea>
     <button id="send-btn" onclick="sendChat()">Envoyer</button>
   </div>
+</div>
+
+<!-- Drawer -->
+<div class="panel" id="drawer-panel">
+  <button class="btn-outline" id="compact-btn" onclick="compactNow()">🗜 Compacter maintenant</button>
+  <div id="drawer-list"></div>
 </div>
 
 <!-- Traces -->
@@ -286,11 +331,13 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active')
     document.getElementById(tab.dataset.tab + '-panel').classList.add('active')
     if (tab.dataset.tab === 'traces') loadTraces()
+    if (tab.dataset.tab === 'drawer') loadDrawer()
   })
 })
 
 // Load on startup
 checkHealth()
+loadHistory()
 
 // ── Health check ──────────────────────────────────────────────────
 async function checkHealth() {
@@ -310,16 +357,28 @@ async function checkHealth() {
 const messages = document.getElementById('chat-messages')
 let _busy = false
 
-function appendMsg(text, role, meta) {
+function appendMsg(id, text, role, meta, pinned) {
   const div = document.createElement('div')
   div.className = `msg ${role}`
   div.innerHTML = formatContent(text)
+
+  const actions = document.createElement('div')
+  actions.className = 'msg-actions'
   if (meta) {
-    const m = document.createElement('div')
+    const m = document.createElement('span')
     m.className = 'msg-meta'
     m.textContent = meta
-    div.appendChild(m)
+    actions.appendChild(m)
   }
+  if (id != null && role !== 'system') {
+    const pinBtn = document.createElement('button')
+    pinBtn.className = 'pin-btn' + (pinned ? ' pinned' : '')
+    pinBtn.textContent = pinned ? '📌 Épinglé' : '📌 Épingler'
+    pinBtn.onclick = () => togglePin(id, !pinned)
+    actions.appendChild(pinBtn)
+  }
+  if (actions.children.length) div.appendChild(actions)
+
   messages.appendChild(div)
   messages.scrollTop = messages.scrollHeight
   return div
@@ -349,6 +408,35 @@ function removeThinking() {
   document.getElementById('thinking-indicator')?.remove()
 }
 
+// Fil unique: le fil est reconstruit depuis /history à chaque
+// chargement de page et après chaque tour, au lieu d'être un état
+// purement côté client -- c'est ce qui permet de survivre à un
+// rechargement et donne à chaque bulle un id réel pour le tiroir.
+async function loadHistory() {
+  try {
+    const r = await apiFetch('/history')
+    const history = await r.json()
+    messages.innerHTML = ''
+    history.forEach(m => {
+      const role = m.role === 'user' ? 'user' : (m.role === 'system' ? 'system' : 'bot')
+      appendMsg(m.id, m.content, role, null, m.pinned)
+    })
+  } catch (e) {
+    // History is a convenience layer -- a failed load shouldn't block chat.
+  }
+}
+
+async function togglePin(messageId, pin) {
+  try {
+    await apiFetch(`/drawer/${pin ? 'pin' : 'unpin'}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message_id: messageId})
+    })
+    loadHistory()
+  } catch (e) { /* best-effort */ }
+}
+
 async function sendChat() {
   if (_busy) return
   const input = document.getElementById('chat-input')
@@ -360,7 +448,7 @@ async function sendChat() {
   input.value = ''
   input.style.height = 'auto'
 
-  appendMsg(text, 'user')
+  appendMsg(null, text, 'user')
   showThinking()
 
   try {
@@ -371,13 +459,18 @@ async function sendChat() {
     })
     const data = await r.json()
     removeThinking()
-    const meta = `${data.tool} · ${data.steps} step${data.steps > 1 ? 's' : ''}`
-    const div = appendMsg(data.output || '[empty response]', 'bot' + (data.ok ? '' : ' error'), meta)
-    if (!data.ok) div.title = data.error || ''
+    if (!data.ok) {
+      appendMsg(null, data.output || '[empty response]', 'bot error', data.error || '')
+    }
   } catch (e) {
     removeThinking()
-    appendMsg(`Erreur réseau : ${e.message}`, 'bot error')
+    appendMsg(null, `Erreur réseau : ${e.message}`, 'bot error')
   }
+
+  // Reload from the server so the just-sent exchange gets its real
+  // ids (needed for pin buttons) and any compaction that ran on this
+  // turn is reflected immediately.
+  await loadHistory()
 
   _busy = false
   document.getElementById('send-btn').disabled = false
@@ -394,6 +487,55 @@ document.getElementById('chat-input').addEventListener('input', function() {
 document.getElementById('chat-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() }
 })
+
+// ── Drawer (v3.9) ────────────────────────────────────────────────
+async function loadDrawer() {
+  const list = document.getElementById('drawer-list')
+  list.innerHTML = '<div class="drawer-empty">Chargement…</div>'
+  try {
+    const r = await apiFetch('/drawer')
+    const pinned = await r.json()
+    if (!pinned.length) {
+      list.innerHTML = '<div class="drawer-empty">Aucun message épinglé pour l\'instant. Épinglez un message depuis l\'onglet Chat pour le garder au-delà de la compaction.</div>'
+      return
+    }
+    list.innerHTML = ''
+    pinned.forEach(m => {
+      const card = document.createElement('div')
+      card.className = 'drawer-card'
+      card.innerHTML = `
+        <div>
+          <div class="role">${m.role}</div>
+          <div>${escapeHtml(m.content)}</div>
+        </div>
+      `
+      const unpinBtn = document.createElement('button')
+      unpinBtn.className = 'btn-outline'
+      unpinBtn.textContent = 'Retirer'
+      unpinBtn.onclick = async () => { await togglePin(m.id, false); loadDrawer() }
+      card.appendChild(unpinBtn)
+      list.appendChild(card)
+    })
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--red);font-size:.85rem">Erreur : ${e.message}</div>`
+  }
+}
+
+async function compactNow() {
+  const btn = document.getElementById('compact-btn')
+  btn.disabled = true
+  const original = btn.textContent
+  btn.textContent = '…'
+  try {
+    const r = await apiFetch('/compact', { method: 'POST' })
+    const data = await r.json()
+    btn.textContent = data.removed > 0 ? `✓ ${data.removed} messages compactés` : '✓ rien à compacter'
+    await loadHistory()
+  } catch (e) {
+    btn.textContent = '✗ échec'
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false }, 2000)
+}
 
 // ── Traces ────────────────────────────────────────────────────────
 async function loadTraces() {
