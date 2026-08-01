@@ -101,6 +101,41 @@ def test_prompt_includes_files_description_when_enabled():
     assert '"read"' in prompt or "read" in prompt
 
 
+def test_prompt_includes_files_write_example():
+    """
+    Regression test: the files tool used to have only a 'read' worked
+    example, never 'write' -- a small local model asked to create a
+    file would answer with a code block as plain chat text instead of
+    actually persisting it, since it had never seen the write shape,
+    only read about it in the description. Both actions must be
+    demonstrated, not just described.
+    """
+    prompt = build_router_prompt(
+        "crée un fichier", available_tools=["chat", "code", "files"]
+    )
+    assert '"action\\":\\"write\\"' in prompt
+
+
+def test_prompt_files_write_example_json_is_well_formed():
+    import json
+    import re
+
+    prompt = build_router_prompt(
+        "crée un fichier", available_tools=["chat", "code", "files"]
+    )
+    match = re.search(
+        r'\{"tool":"files","content":"\{\\"action\\":\\"write\\".*?\}"\}',
+        prompt,
+    )
+    assert match, "files write example not found in prompt"
+    outer = json.loads(match.group(0))
+    assert outer["tool"] == "files"
+    inner = json.loads(outer["content"])
+    assert inner["action"] == "write"
+    assert inner["path"]
+    assert inner["content"]
+
+
 def test_prompt_includes_git_description_when_enabled():
     prompt = build_router_prompt("git log", available_tools=["chat", "code", "git"])
     assert "git subcommand" in prompt

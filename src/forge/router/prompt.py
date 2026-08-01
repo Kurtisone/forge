@@ -98,6 +98,21 @@ _TOOL_EXAMPLES = {
             "Read src/forge/main.py",
             '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"src/forge/main.py\\"}"}',
         ),
+        # Deliberate second example: without one, the model only ever
+        # sees "read" and defaults to answering with code as plain
+        # chat text instead of actually persisting it -- observed in
+        # real usage ("create a hello world file" produced a code
+        # block, never a file, and a later request to edit "the file
+        # you created" failed with file-not-found because nothing had
+        # ever been written). A small local model needs to see the
+        # write shape, not just read about it in the description.
+        (
+            "Crée un fichier hello.py qui affiche Hello World",
+            (
+                '{"tool":"files","content":"{\\"action\\":\\"write\\",'
+                '\\"path\\":\\"hello.py\\",\\"content\\":\\"print(\'Hello, World!\')\\"}"}'
+            ),
+        ),
     ],
     "shell": [
         ("List the files here", '{"tool":"shell","content":"ls -la"}'),
