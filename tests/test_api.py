@@ -323,3 +323,89 @@ def test_old_hits_expire_out_of_the_sliding_window(monkeypatch):
     assert allowed_first is True
     assert allowed_immediately_after is False
     assert allowed_after_expiry is True
+
+
+# ── Drawer / compaction (v3.9) ──────────────────────────────────────
+
+
+def _use_tmp_memory(tmp_path, monkeypatch):
+    from forge import memory
+
+    monkeypatch.setattr(memory, "MEMORY_FILE", str(tmp_path / "memory.json"))
+
+
+def test_history_reflects_persisted_messages(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_memory(tmp_path, monkeypatch)
+    _mock_llm(monkeypatch, content="hi there")
+
+    client = _client()
+    client.post("/chat", json={"message": "hello"})
+
+    r = client.get("/history")
+    assert r.status_code == 200
+    body = r.json()
+    assert [m["role"] for m in body] == ["user", "assistant"]
+    assert all(m["pinned"] is False for m in body)
+
+
+def test_pin_then_appears_in_drawer(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_memory(tmp_path, monkeypatch)
+    _mock_llm(monkeypatch, content="hi there")
+
+    client = _client()
+    client.post("/chat", json={"message": "hello"})
+    message_id = client.get("/history").json()[0]["id"]
+
+    r = client.post("/drawer/pin", json={"message_id": message_id})
+    assert r.status_code == 200
+
+    drawer = client.get("/drawer").json()
+    assert [m["id"] for m in drawer] == [message_id]
+
+    r = client.post("/drawer/unpin", json={"message_id": message_id})
+    assert r.status_code == 200
+    assert client.get("/drawer").json() == []
+
+
+def test_pin_unknown_id_returns_404(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_memory(tmp_path, monkeypatch)
+
+    r = _client().post("/drawer/pin", json={"message_id": 9999})
+    assert r.status_code == 404
+
+
+def test_drawer_requires_token_when_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(api_mod, "API_TOKEN", "s3cret")
+    _use_tmp_memory(tmp_path, monkeypatch)
+
+    r = _client().get("/drawer")
+    assert r.status_code == 401
+
+
+def test_manual_compact_reports_removed_count(monkeypatch, tmp_path):
+    from forge import compaction
+
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    _use_tmp_memory(tmp_path, monkeypatch)
+    monkeypatch.setattr(compaction, "COMPACTION_KEEP_RECENT", 1)
+
+    class _FakeConn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(compaction.rag, "get_connection", lambda: _FakeConn())
+    monkeypatch.setattr(
+        compaction.rag, "remember", lambda conn, kind, content, project: 1
+    )
+
+    client = _client()
+    _mock_llm(monkeypatch, content="hi there")
+    for i in range(3):
+        client.post("/chat", json={"message": f"msg{i}"})
+
+    r = client.post("/compact")
+    assert r.status_code == 200
+    assert r.json()["removed"] > 0
