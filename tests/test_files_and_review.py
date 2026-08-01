@@ -28,6 +28,68 @@ def test_files_write_and_read(tmp_path, monkeypatch):
     assert r == "Bonjour !"
 
 
+def test_files_write_over_existing_returns_diff(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    files_mod.run(
+        json.dumps({"action": "write", "path": "f.txt", "content": "line1\nline2\n"})
+    )
+    r = files_mod.run(
+        json.dumps({"action": "write", "path": "f.txt", "content": "line1\nline3\n"})
+    )
+
+    assert "```diff" in r
+    assert "-line2" in r
+    assert "+line3" in r
+    # the file on disk must actually be updated, not just diffed
+    assert (tmp_path / "f.txt").read_text() == "line1\nline3\n"
+
+
+def test_files_write_identical_content_reports_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    files_mod.run(json.dumps({"action": "write", "path": "f.txt", "content": "same"}))
+    r = files_mod.run(
+        json.dumps({"action": "write", "path": "f.txt", "content": "same"})
+    )
+
+    assert "inchangé" in r
+    assert "```diff" not in r
+
+
+def test_files_write_new_path_has_no_diff(tmp_path, monkeypatch):
+    """A brand-new file has nothing to diff against -- plain confirmation."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    r = files_mod.run(
+        json.dumps({"action": "write", "path": "new.txt", "content": "content"})
+    )
+
+    assert "[ok] written" in r
+    assert "```diff" not in r
+
+
+def test_files_write_over_oversized_existing_file_skips_diff(tmp_path, monkeypatch):
+    """Diffing is skipped (not attempted) against a huge existing file,
+    consistent with the read tool's own size guard -- the write itself
+    must still succeed."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "_MAX_READ_BYTES", 10)
+
+    (tmp_path / "big.txt").write_text("x" * 100)
+    r = files_mod.run(
+        json.dumps({"action": "write", "path": "big.txt", "content": "short"})
+    )
+
+    assert "[ok] written" in r
+    assert "```diff" not in r
+    assert (tmp_path / "big.txt").read_text() == "short"
+
+
 def test_files_list(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
