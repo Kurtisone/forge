@@ -145,7 +145,7 @@
        at a glance without a text label on every message. */
     .pin-icon {
       flex-shrink: 0;
-      width: 22px; height: 22px;
+      width: 20px; height: 20px;
       display: flex; align-items: center; justify-content: center;
       background: none; border: none; padding: 0;
       border-radius: 50%;
@@ -372,6 +372,11 @@ async function checkHealth() {
 const messages = document.getElementById('chat-messages')
 let _busy = false
 
+// Minimal thumbtack outline, sized to sit quietly next to a bubble --
+// deliberately monochrome (currentColor) so .pin-icon's color rules
+// (muted/hover/pinned) apply without touching this markup.
+const PIN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg>'
+
 function appendMsg(id, text, role, meta, pinned) {
   const bubbleRole = role.split(' ')[0]  // strip ' error' suffix for the row class
   const row = document.createElement('div')
@@ -391,7 +396,7 @@ function appendMsg(id, text, role, meta, pinned) {
   if (id != null && bubbleRole !== 'system') {
     const pinBtn = document.createElement('button')
     pinBtn.className = 'pin-icon' + (pinned ? ' pinned' : '')
-    pinBtn.textContent = '📌'
+    pinBtn.innerHTML = PIN_SVG
     pinBtn.title = pinned ? 'Retirer du tiroir' : 'Épingler dans le tiroir'
     pinBtn.onclick = () => togglePin(id, !pinned)
     row.appendChild(pinBtn)
