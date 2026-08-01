@@ -88,8 +88,17 @@
       gap: 12px;
       scroll-behavior: smooth;
     }
-    .msg {
+    .msg-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
       max-width: 78%;
+    }
+    .msg-row.user { align-self: flex-end; flex-direction: row-reverse; }
+    .msg-row.bot, .msg-row.system { align-self: flex-start; }
+    .msg {
+      flex: 1;
+      min-width: 0;
       padding: 10px 14px;
       border-radius: var(--radius);
       line-height: 1.55;
@@ -99,12 +108,10 @@
     }
     .msg.user {
       background: var(--user-bg);
-      align-self: flex-end;
       border-bottom-right-radius: 3px;
     }
     .msg.bot {
       background: var(--bot-bg);
-      align-self: flex-start;
       border-bottom-left-radius: 3px;
       border: 1px solid var(--border);
     }
@@ -126,25 +133,33 @@
       display: block;
     }
     .msg.system {
-      align-self: center;
       background: transparent;
       border: 1px dashed var(--border);
       color: var(--muted);
       font-size: .8rem;
       font-style: italic;
-      max-width: 90%;
     }
-    .msg-actions {
-      display: flex; gap: 6px; align-items: center;
-      margin-top: 4px;
-    }
-    .pin-btn {
+    /* Pin: a small dot, invisible until the message is hovered, so it
+       doesn't clutter every bubble in the thread. Pinned messages keep
+       a faint permanent marker so the drawer's contents stay legible
+       at a glance without a text label on every message. */
+    .pin-icon {
+      flex-shrink: 0;
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
       background: none; border: none; padding: 0;
-      font-size: .8rem; color: var(--muted);
-      cursor: pointer; align-self: auto;
+      border-radius: 50%;
+      font-size: .85rem;
+      color: var(--muted);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity .15s, color .15s;
+      align-self: auto;
     }
-    .pin-btn:hover { color: var(--accent); opacity: 1; }
-    .pin-btn.pinned { color: #d29922; }
+    .msg-row:hover .pin-icon { opacity: .55; }
+    .pin-icon:hover { opacity: 1 !important; background: var(--surface); }
+    .pin-icon.pinned { opacity: .8; color: #d29922; }
+    .pin-icon.pinned:hover { opacity: 1; }
     #compact-btn { align-self: center; margin: 0 0 8px; }
 
     /* ── Drawer panel ── */
@@ -358,30 +373,33 @@ const messages = document.getElementById('chat-messages')
 let _busy = false
 
 function appendMsg(id, text, role, meta, pinned) {
-  const div = document.createElement('div')
-  div.className = `msg ${role}`
-  div.innerHTML = formatContent(text)
+  const bubbleRole = role.split(' ')[0]  // strip ' error' suffix for the row class
+  const row = document.createElement('div')
+  row.className = `msg-row ${bubbleRole}`
 
-  const actions = document.createElement('div')
-  actions.className = 'msg-actions'
+  const bubble = document.createElement('div')
+  bubble.className = `msg ${role}`
+  bubble.innerHTML = formatContent(text)
   if (meta) {
-    const m = document.createElement('span')
+    const m = document.createElement('div')
     m.className = 'msg-meta'
     m.textContent = meta
-    actions.appendChild(m)
+    bubble.appendChild(m)
   }
-  if (id != null && role !== 'system') {
-    const pinBtn = document.createElement('button')
-    pinBtn.className = 'pin-btn' + (pinned ? ' pinned' : '')
-    pinBtn.textContent = pinned ? '📌 Épinglé' : '📌 Épingler'
-    pinBtn.onclick = () => togglePin(id, !pinned)
-    actions.appendChild(pinBtn)
-  }
-  if (actions.children.length) div.appendChild(actions)
+  row.appendChild(bubble)
 
-  messages.appendChild(div)
+  if (id != null && bubbleRole !== 'system') {
+    const pinBtn = document.createElement('button')
+    pinBtn.className = 'pin-icon' + (pinned ? ' pinned' : '')
+    pinBtn.textContent = '📌'
+    pinBtn.title = pinned ? 'Retirer du tiroir' : 'Épingler dans le tiroir'
+    pinBtn.onclick = () => togglePin(id, !pinned)
+    row.appendChild(pinBtn)
+  }
+
+  messages.appendChild(row)
   messages.scrollTop = messages.scrollHeight
-  return div
+  return row
 }
 
 function formatContent(text) {
@@ -396,11 +414,11 @@ function escapeHtml(s) {
 }
 
 function showThinking() {
-  const div = document.createElement('div')
-  div.className = 'msg bot thinking'
-  div.id = 'thinking-indicator'
-  div.innerHTML = '<div class="dots"><span>·</span><span>·</span><span>·</span></div>'
-  messages.appendChild(div)
+  const row = document.createElement('div')
+  row.className = 'msg-row bot'
+  row.id = 'thinking-indicator'
+  row.innerHTML = '<div class="msg bot thinking"><div class="dots"><span>·</span><span>·</span><span>·</span></div></div>'
+  messages.appendChild(row)
   messages.scrollTop = messages.scrollHeight
 }
 
