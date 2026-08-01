@@ -218,6 +218,36 @@ def test_real_chat_answer_is_still_remembered(monkeypatch, tmp_path):
     assert any(h["content"] == "hi there" for h in history)
 
 
+def test_long_tool_output_is_persisted_in_full(monkeypatch, tmp_path):
+    """
+    Regression test: _remember() used to hard-truncate both sides of
+    an exchange to 300 chars before persisting. That was originally
+    meant to keep the router's own prompt from ballooning on large
+    pastes, but the v3.9 web UI renders GET /history directly, so a
+    long tool result (e.g. reading a real file via the `files` tool)
+    showed up cut off mid-word on screen instead of just producing a
+    shorter prompt on the next turn. Full content must round-trip.
+    """
+    import forge.config as cfg
+    import forge.memory as memory_mod
+
+    monkeypatch.setattr(cfg, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
+
+    long_answer = "line\n" * 200  # 1000 chars, well past the old 300-char cap
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": long_answer}),
+    )
+
+    Orchestrator().run("read this file")
+
+    history = memory_mod.get_history()
+    assert any(h["content"] == long_answer for h in history)
+
+
 def test_multi_step_run_persists_exactly_one_clean_exchange(monkeypatch, tmp_path):
     """
     Regression test for the v3.8 cache-invalidation bug: before this
