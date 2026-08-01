@@ -46,6 +46,37 @@ def test_files_write_over_existing_returns_diff(tmp_path, monkeypatch):
     assert (tmp_path / "f.txt").read_text() == "line1\nline3\n"
 
 
+def test_files_write_diff_keeps_lines_separate_without_trailing_newline(
+    tmp_path, monkeypatch
+):
+    """
+    Regression test: a file with no trailing newline (e.g. a
+    single-line script -- the real case this was caught on) made
+    unified_diff's last line come out with no line ending either,
+    which then joined directly onto the next line with no separator
+    ("-old+new" glued together in the rendered diff). Each diff line
+    must end up on its own line regardless of the source file's
+    trailing-newline situation.
+    """
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    files_mod.run(
+        json.dumps(
+            {"action": "write", "path": "hello.py", "content": "print('Hello World')"}
+        )
+    )
+    r = files_mod.run(
+        json.dumps(
+            {"action": "write", "path": "hello.py", "content": "print('Bienvenue')"}
+        )
+    )
+
+    assert "-print('Hello World')\n" in r
+    assert "+print('Bienvenue')" in r
+    assert "World')+print" not in r  # the exact glued-together bug
+
+
 def test_files_write_identical_content_reports_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))

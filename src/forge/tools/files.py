@@ -103,9 +103,16 @@ def _action_write(path_str: str, content: str) -> str:
     if not diff_lines:
         return f"[ok] {path_str} inchangé ({len(content)} octets, contenu identique)"
 
-    diff_text = "".join(diff_lines)
-    if not diff_text.endswith("\n"):
-        diff_text += "\n"
+    # unified_diff() preserves each line's own line ending from the
+    # source content -- a file with no trailing newline (e.g. a
+    # single-line script) produces a final diff line with none either,
+    # which then joins directly onto the next line with no separator
+    # at all ("-old+new" glued together). This diff is display-only,
+    # not meant to be fed to `patch`, so normalizing every line to end
+    # in \n here is purely for readability and always safe.
+    diff_text = "".join(
+        line if line.endswith("\n") else line + "\n" for line in diff_lines
+    )
     return (
         f"[ok] {path_str} mis à jour ({len(content)} octets)\n\n```diff\n{diff_text}```"
     )
