@@ -67,8 +67,7 @@ def maybe_compact(history: list[dict], force: bool = False) -> list[dict]:
 
     # Pinned messages are the "tiroir": kept as a distinct block ahead
     # of the summary rather than re-threaded back into strict
-    # chronological order, which the id field still lets you recover
-    # if needed.
+    # chronological order.
     return [*pinned, summary_message, *to_keep]
 
 
@@ -101,6 +100,7 @@ def _strategy_rag_pointer(messages: list[dict]) -> dict:
         raise CompactionError(str(e)) from e
 
     return {
+        "id": messages[0]["id"],
         "role": "system",
         "content": (
             f"[{len(messages)} messages précédents compactés -- "
@@ -135,6 +135,7 @@ def _strategy_llm_summary(messages: list[dict]) -> dict:
         raise CompactionError(str(e)) from e
 
     return {
+        "id": messages[0]["id"],
         "role": "system",
         "content": f"[Résumé de {len(messages)} messages précédents] {summary}",
         "pinned": False,

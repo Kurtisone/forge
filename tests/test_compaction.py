@@ -76,6 +76,29 @@ def test_pinned_messages_are_never_compacted(monkeypatch):
     assert result[1]["id"] == 1
 
 
+def test_summary_gets_id_of_oldest_compacted_message(monkeypatch):
+    """
+    Regression test: the summary message used to have no 'id' at all
+    when created, which meant memory._migrate_history() -- meant for
+    old pre-v3.9 entries -- ended up assigning it one lazily on the
+    NEXT load, using whatever next_id had advanced to by then. That
+    put the summary's id far ahead of the still-uncompacted messages
+    chronologically right after it, so sorting/reading history by id
+    put the summary in the wrong place. The summary must carry the id
+    of the oldest message it replaces, so id order stays meaningful.
+    """
+    monkeypatch.setattr(compaction, "COMPACTION_THRESHOLD", 10)
+    monkeypatch.setattr(compaction, "COMPACTION_KEEP_RECENT", 4)
+    history = _messages(12)
+
+    result = compaction.maybe_compact(history)
+
+    assert result[0]["role"] == "system"
+    assert result[0]["id"] == 0  # id of the oldest message in to_compact
+    # every id after the summary must be >= the summary's id
+    assert all(m["id"] >= result[0]["id"] for m in result)
+
+
 def test_nothing_eligible_when_all_pinned(monkeypatch):
     monkeypatch.setattr(compaction, "COMPACTION_THRESHOLD", 5)
     monkeypatch.setattr(compaction, "COMPACTION_KEEP_RECENT", 4)
