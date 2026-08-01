@@ -176,12 +176,17 @@ def test_llama_cpp_cache_prompt_disabled_via_config(monkeypatch):
     assert captured["payload"]["cache_prompt"] is False
 
 
-def test_llama_cpp_logs_cache_ratio_from_top_level_fields(monkeypatch):
+def test_llama_cpp_logs_ms_per_token(monkeypatch):
     monkeypatch.setattr(
         requests,
         "post",
         lambda *a, **kw: FakeResponse(
-            {"content": "hi", "prompt_n": 100, "cache_n": 80}
+            {
+                "content": "hi",
+                "tokens_evaluated": 100,
+                "tokens_cached": 12,
+                "timings": {"prompt_ms": 250.0},
+            }
         ),
     )
     events = []
@@ -192,16 +197,24 @@ def test_llama_cpp_logs_cache_ratio_from_top_level_fields(monkeypatch):
     llama_cpp.call("http://fake", "model", "prompt")
 
     assert events == [
-        ("llama_cpp.cache", {"cache_n": 80, "prompt_n": 100, "ratio": 0.8})
+        (
+            "llama_cpp.cache",
+            {
+                "prompt_n": 100,
+                "prompt_ms": 250.0,
+                "ms_per_token": 2.5,
+                "tokens_cached": 12,
+            },
+        )
     ]
 
 
-def test_llama_cpp_logs_cache_ratio_from_timings_fields(monkeypatch):
+def test_llama_cpp_falls_back_to_timings_prompt_n(monkeypatch):
     monkeypatch.setattr(
         requests,
         "post",
         lambda *a, **kw: FakeResponse(
-            {"content": "hi", "timings": {"prompt_n": 50, "cache_n": 0}}
+            {"content": "hi", "timings": {"prompt_n": 50, "prompt_ms": 100.0}}
         ),
     )
     events = []
@@ -211,7 +224,43 @@ def test_llama_cpp_logs_cache_ratio_from_timings_fields(monkeypatch):
 
     llama_cpp.call("http://fake", "model", "prompt")
 
-    assert events == [("llama_cpp.cache", {"cache_n": 0, "prompt_n": 50, "ratio": 0.0})]
+    assert events == [
+        (
+            "llama_cpp.cache",
+            {
+                "prompt_n": 50,
+                "prompt_ms": 100.0,
+                "ms_per_token": 2.0,
+                "tokens_cached": None,
+            },
+        )
+    ]
+
+
+def test_llama_cpp_ms_per_token_none_when_prompt_ms_missing(monkeypatch):
+    monkeypatch.setattr(
+        requests,
+        "post",
+        lambda *a, **kw: FakeResponse({"content": "hi", "tokens_evaluated": 100}),
+    )
+    events = []
+    monkeypatch.setattr(
+        llama_cpp.log, "event", lambda name, **fields: events.append((name, fields))
+    )
+
+    llama_cpp.call("http://fake", "model", "prompt")
+
+    assert events == [
+        (
+            "llama_cpp.cache",
+            {
+                "prompt_n": 100,
+                "prompt_ms": None,
+                "ms_per_token": None,
+                "tokens_cached": None,
+            },
+        )
+    ]
 
 
 def test_llama_cpp_no_cache_log_when_prompt_n_missing(monkeypatch):

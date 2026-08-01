@@ -55,20 +55,28 @@ def call(url: str, model: str, prompt: str) -> str:
 
     data = r.json()
 
-    # timings.prompt_n is the number of prompt tokens actually
-    # evaluated this call; cache_n (or timings.cache_n depending on
-    # server version) is how many of the prompt tokens were served
-    # from the reused KV cache instead. Logged as a ratio so cache
-    # effectiveness can be tracked over time without parsing raw logs.
+    # tokens_cached ("n_past" in llama.cpp's own terms) does not
+    # reliably mean "tokens reused from this prompt" across server
+    # versions/forks -- real-world testing here showed it exceeding
+    # tokens_evaluated, and it's documented differently across
+    # llama.cpp mirrors. Token counts alone aren't a trustworthy cache
+    # signal, so this logs a timing-based one instead: prompt
+    # processing time per prompt token. A shared prefix that's
+    # actually being reused shows up as a sharp drop in ms/token on
+    # the second+ call in a conversation versus the first (a "flat"
+    # ms/token across calls means the cache isn't helping, regardless
+    # of what tokens_cached claims).
     timings = data.get("timings", {})
-    prompt_n = data.get("prompt_n", timings.get("prompt_n"))
-    cache_n = data.get("cache_n", timings.get("cache_n"))
+    prompt_n = data.get("tokens_evaluated", timings.get("prompt_n"))
+    prompt_ms = timings.get("prompt_ms")
+    tokens_cached = data.get("tokens_cached")  # informational only
     if prompt_n:
         log.event(
             "llama_cpp.cache",
-            cache_n=cache_n,
             prompt_n=prompt_n,
-            ratio=round((cache_n or 0) / prompt_n, 3),
+            prompt_ms=prompt_ms,
+            ms_per_token=round(prompt_ms / prompt_n, 2) if prompt_ms else None,
+            tokens_cached=tokens_cached,
         )
 
     content = data.get("content") or data.get("completion")
