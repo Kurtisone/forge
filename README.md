@@ -239,7 +239,7 @@ python -m forge.cli replay <run_id>
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/` | open | Web UI |
-| `GET` | `/health` | open | Provider + model info |
+| `GET` | `/health` | open | Provider + model info (for `llama_cpp`, the actually-loaded model, queried live from llama-server — see below) |
 | `POST` | `/chat` | optional | Single conversation turn |
 | `POST` | `/review` | optional | File content analysis |
 | `POST` | `/run` | optional | Run any graph by name |
@@ -247,6 +247,11 @@ python -m forge.cli replay <run_id>
 | `GET` | `/traces?n=10` | optional | Recent execution traces |
 | `POST` | `/remember` | optional | Store a decision/todo in vector memory (v3.7) |
 | `GET` | `/search?q=...` | optional | Semantic search over remembered decisions/todos |
+| `GET` | `/history` | optional | Full rolling history with stable ids (v3.9) |
+| `GET` | `/drawer` | optional | Currently pinned messages, the "tiroir" (v3.9) |
+| `POST` | `/drawer/pin` | optional | Pin a message by id — pins its exchange partner too (v3.9) |
+| `POST` | `/drawer/unpin` | optional | Unpin a message by id, independently of its partner (v3.9) |
+| `POST` | `/compact` | optional | Force a context compaction pass now (v3.9) |
 | `GET` | `/docs` | open | Interactive API docs (Swagger) |
 
 **Auth:** set `API_TOKEN` in the environment to require
@@ -276,12 +281,14 @@ e.g. behind a proxy that already rate-limits.
 | Variable | Description | Default |
 |---|---|---|
 | `FORGE_PROVIDER` | LLM backend: `llama_cpp`, `ollama`, `openrouter` | `llama_cpp` |
-| `LLM_MODEL` | Model name | `default` |
+| `LLM_MODEL` | Model name. For `ollama`/`openrouter` this is sent with every request and must match a real model. For `llama_cpp` it's **never sent** — llama-server always serves whatever GGUF it was launched with — so this value is only a fallback label for `/health`; `/health` queries llama-server's own `/props` for the live model name first and only falls back to this if that probe fails | `default` |
 | `OLLAMA_URL` | Ollama endpoint | `http://127.0.0.1:11434/api/generate` |
 | `LLAMA_CPP_URL` | llama.cpp endpoint | `http://127.0.0.1:8080` |
 | `LLAMA_CPP_N_PREDICT` | Max tokens per llama.cpp response | `512` |
 | `LLAMA_CPP_TIMEOUT` | HTTP timeout for llama.cpp requests (seconds) | `120` |
 | `LLAMA_CPP_USE_GRAMMAR` | GBNF grammar-constrained decoding for llama.cpp — forces output to match the router's JSON schema at the sampling level | `true` |
+| `LLAMA_CPP_ID_SLOT` | llama-server slot to pin every request to, so its KV cache can be reused across turns (v3.8) | `0` |
+| `LLAMA_CPP_CACHE_PROMPT` | Ask llama-server to reuse its KV cache from the previous call's matching prefix (v3.8) | `true` |
 | `OPENROUTER_URL` | OpenRouter endpoint | `https://openrouter.ai/api/v1/chat/completions` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | *(empty)* |
 | `MAX_STEPS` | Hard ceiling on router→tool steps per run (multi-step only happens if the router sends `"done": false`) | `1` |
@@ -291,7 +298,11 @@ e.g. behind a proxy that already rate-limits.
 | `SHELL_ALLOWED_COMMANDS` | Comma-separated command allowlist for the shell tool | `ls,cat,head,tail,wc,grep,find,python3,pip,pytest` |
 | `MEMORY_ENABLED` | Persist and recall conversation history | `true` |
 | `MEMORY_FILE` | Path to the JSON memory file | `data/memory.json` |
-| `MEMORY_MAX_HISTORY` | Number of past messages kept in the prompt | `20` |
+| `MEMORY_MAX_HISTORY` | Hard-cap safety net on message count, behind compaction (v3.9) — pinned messages are exempt | `100` |
+| `COMPACTION_ENABLED` | Replace old non-pinned messages with a summary once `COMPACTION_THRESHOLD` is crossed, instead of just dropping them (v3.9) | `true` |
+| `COMPACTION_THRESHOLD` | Message count that triggers a compaction pass | `80` |
+| `COMPACTION_KEEP_RECENT` | Most recent non-pinned messages always left untouched by compaction | `20` |
+| `COMPACTION_STRATEGY` | `rag_pointer` (no LLM call, pushes the block into vector memory and leaves a pointer) or `llm_summary` (one LLM call, condenses inline) | `rag_pointer` |
 | `TRACE_ENABLED` | Write JSONL execution trace per run | `true` |
 | `TRACE_FILE` | Path to the JSONL trace file | `data/traces.jsonl` |
 | `SHOW_DEBUG` | Emit full structured trace to stderr (prompt, raw output, timings) | `false` |
@@ -361,8 +372,9 @@ the user's own decisions/projects mattered more than response latency.
 
 ### Conversation Memory
 
-Forge keeps a rolling window of the last `MEMORY_MAX_HISTORY` messages in `MEMORY_FILE`
-and injects it as context into the router prompt on every turn.
+Forge keeps a rolling history in `MEMORY_FILE`, capped by `MEMORY_MAX_HISTORY`, and injects
+it as context into the router prompt on every turn. Every message carries a stable `id` and
+a `pinned` flag.
 
 Storage is plain JSON — no schema, no migrations, `cat data/memory.json` to inspect it.
 Only genuine answers are persisted: a dispatch failure (`result.ok=False`) is never written,
@@ -371,7 +383,27 @@ loop, or leaked prompt instructions) — those succeed at dispatch (`chat` trivi
 whatever content it's given) but aren't real answers, and saving one as if it were would feed
 it back into the next prompt as context, which can make a model that got confused once more
 likely to get confused again on the very next turn.
-Large pastes are truncated to 300 chars before saving to avoid bloating future prompts.
+Content is persisted in full — nothing is truncated on the way in, so a large tool result
+(reading a whole file, for instance) shows up complete both in the router's own context and
+in the web UI's `GET /history`, not cut short.
+
+#### Context compaction & drawer (v3.9)
+
+`MEMORY_MAX_HISTORY` alone is a blunt instrument — a sliding window that drops the oldest
+message every time a new one arrives once it's full, which also fights llama-server's prompt
+cache reuse (v3.8) by shifting the whole history block on every eviction. `compaction.py` adds
+a better mechanism ahead of that hard cap: once `COMPACTION_THRESHOLD` messages are reached,
+the oldest non-pinned messages beyond `COMPACTION_KEEP_RECENT` are replaced by a single summary
+message instead of being dropped outright. Two interchangeable strategies (`COMPACTION_STRATEGY`):
+`rag_pointer` (default — no LLM call, pushes the block into vector memory verbatim and leaves a
+short pointer, searchable via `!recall`/`/search`) or `llm_summary` (one LLM call, condenses the
+block into prose kept inline). Both share the same signature, so switching is a config change,
+not a rewrite. `POST /compact` (or `!compact` in the REPL) forces a pass on demand.
+
+Any message can be pinned — the "tiroir" (`GET /drawer`, `POST /drawer/pin`/`unpin`) — which
+exempts it from both compaction and the `MEMORY_MAX_HISTORY` hard cap. The web UI pins a
+question and its answer together by default (an answer read back without its question, or vice
+versa, tends to lose its point), but either half can be unpinned independently afterward.
 
 ---
 

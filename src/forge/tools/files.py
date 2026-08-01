@@ -14,10 +14,18 @@ content is a JSON instruction:
     {"action": "write", "path": "relative/out.txt", "content": "..."}
     {"action": "list",  "path": "optional/subdir"}   # default: root
 
+Writing to a path that already exists returns a real diff (computed
+with difflib, not asked of the model) instead of a bare confirmation
+-- "improve this file" then shows what actually changed, not the
+whole file again. Writing a brand-new path still returns a plain
+"[ok] written N bytes" confirmation, since there's nothing to diff
+against.
+
 To activate this tool add it to ENABLED_TOOLS in .env.local:
     ENABLED_TOOLS=chat,code,files
 """
 
+import difflib
 import json
 from pathlib import Path
 
@@ -59,10 +67,55 @@ def _action_read(path_str: str) -> str:
 
 def _action_write(path_str: str, content: str) -> str:
     target = _safe_path(path_str)
+    existed = target.exists()
+    # Read the old content up front, before it's overwritten -- if
+    # this fails or the old file is too large to diff safely, fall
+    # back to the plain confirmation rather than losing the write.
+    old_content = None
+    if existed:
+        try:
+            if target.stat().st_size <= _MAX_READ_BYTES:
+                old_content = target.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            old_content = None
+
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     log.event("files.write", path=path_str, bytes=len(content))
-    return f"[ok] written {len(content)} bytes to {path_str}"
+
+    if old_content is None:
+        return f"[ok] written {len(content)} bytes to {path_str}"
+
+    # A real diff, computed here rather than asked of the model: a
+    # small local model asked to "improve this file" tends to just
+    # regenerate the whole thing as its answer even when only a few
+    # lines actually changed, and asking it to hand-format diff syntax
+    # itself is failure-prone. difflib is deterministic and always
+    # correct, independent of what the model actually produced.
+    diff_lines = list(
+        difflib.unified_diff(
+            old_content.splitlines(keepends=True),
+            content.splitlines(keepends=True),
+            fromfile=f"{path_str} (avant)",
+            tofile=f"{path_str} (après)",
+        )
+    )
+    if not diff_lines:
+        return f"[ok] {path_str} inchangé ({len(content)} octets, contenu identique)"
+
+    # unified_diff() preserves each line's own line ending from the
+    # source content -- a file with no trailing newline (e.g. a
+    # single-line script) produces a final diff line with none either,
+    # which then joins directly onto the next line with no separator
+    # at all ("-old+new" glued together). This diff is display-only,
+    # not meant to be fed to `patch`, so normalizing every line to end
+    # in \n here is purely for readability and always safe.
+    diff_text = "".join(
+        line if line.endswith("\n") else line + "\n" for line in diff_lines
+    )
+    return (
+        f"[ok] {path_str} mis à jour ({len(content)} octets)\n\n```diff\n{diff_text}```"
+    )
 
 
 def _action_list(path_str: str = ".") -> str:

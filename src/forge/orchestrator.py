@@ -30,8 +30,6 @@ from forge.types import AgentResult, AgentState, ToolResult
 
 load_tools()
 
-_MAX_MEMORY_CONTENT = 300
-
 
 class Orchestrator:
     def __init__(self, max_steps: int = MAX_STEPS):
@@ -207,11 +205,19 @@ class Orchestrator:
             return []
 
     def _remember(self, user_input: str, output: str) -> None:
+        # Content used to be hard-truncated to _MAX_MEMORY_CONTENT chars
+        # here (pre-v3.9), to keep the router's own prompt from
+        # ballooning on large pastes/tool output. That's now the job of
+        # compaction.py (message-count threshold + a real summary,
+        # instead of a blind per-message cut) and MEMORY_MAX_HISTORY
+        # (message-count cap) -- both introduced in v3.9. Truncating
+        # here as well silently corrupted what's persisted, which the
+        # v3.9 web UI now renders directly (GET /history) instead of
+        # only feeding it back into the router's own prompt: a 300-char
+        # cap on a tool result like a file read showed up as a broken
+        # answer on screen, not just a shorter prompt.
         try:
-            memory.add_exchange(
-                user_input[:_MAX_MEMORY_CONTENT],
-                output[:_MAX_MEMORY_CONTENT],
-            )
+            memory.add_exchange(user_input, output)
         except Exception as e:  # noqa: BLE001
             log.warning("failed to persist memory: %s", e)
 

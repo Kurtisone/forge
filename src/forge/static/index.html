@@ -46,6 +46,13 @@
     .status {
       display: flex; align-items: center; gap: 6px;
       font-size: .8rem; color: var(--muted);
+      min-width: 0;
+    }
+    #status-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 220px;
     }
     .dot {
       width: 8px; height: 8px; border-radius: 50%;
@@ -89,6 +96,7 @@
       scroll-behavior: smooth;
     }
     .msg {
+      position: relative;
       max-width: 78%;
       padding: 10px 14px;
       border-radius: var(--radius);
@@ -114,7 +122,7 @@
       color: var(--muted);
       margin-top: 4px;
     }
-    .msg.bot pre, .msg.bot code {
+    .msg.bot pre {
       font-family: var(--mono);
       font-size: .85rem;
       background: var(--bg);
@@ -122,9 +130,100 @@
       border-radius: 6px;
       padding: 10px 12px;
       overflow-x: auto;
-      margin-top: 6px;
-      display: block;
+      margin: 6px 0;
     }
+    .msg code {
+      font-family: var(--mono);
+      font-size: .85em;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    .msg pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 1em;
+    }
+    .msg h3, .msg h4, .msg h5 {
+      margin: 10px 0 4px;
+      line-height: 1.3;
+    }
+    .msg h3 { font-size: 1.05rem; }
+    .msg h4 { font-size: .98rem; }
+    .msg h5 { font-size: .92rem; }
+    .msg ul, .msg ol {
+      margin: 6px 0;
+      padding-left: 22px;
+    }
+    .msg li { margin: 2px 0; }
+    .msg a { color: var(--accent); }
+    /* ```diff blocks -- colored like `git diff` output */
+    .msg pre.diff span { display: block; }
+    .msg pre.diff .diff-add { color: var(--green); }
+    .msg pre.diff .diff-del { color: var(--red); }
+    .msg pre.diff .diff-hunk { color: var(--accent); }
+    .msg pre.diff .diff-ctx { color: var(--muted); }
+    .msg.system {
+      align-self: center;
+      background: transparent;
+      border: 1px dashed var(--border);
+      color: var(--muted);
+      font-size: .8rem;
+      font-style: italic;
+      max-width: 90%;
+    }
+    /* Pin: a small floating badge sitting on the bubble's outer
+       corner (opposite the tail, so it never sits over the text),
+       hidden until the bubble is hovered so it doesn't clutter the
+       thread. Pinned messages keep a soft permanent glow instead of a
+       label -- state is legible at a glance without extra text. */
+    .pin-icon {
+      position: absolute;
+      top: -7px;
+      width: 22px; height: 22px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      padding: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,.35);
+      color: var(--muted);
+      cursor: pointer;
+      opacity: 0;
+      transform: scale(.8);
+      transform-origin: center;
+      transition: opacity .15s ease, transform .15s ease, color .15s, border-color .15s;
+    }
+    .msg.bot .pin-icon { right: -9px; }
+    .msg.user .pin-icon { left: -9px; }
+    .msg:hover .pin-icon { opacity: .75; transform: scale(1); }
+    .pin-icon:hover { opacity: 1 !important; color: var(--accent); border-color: var(--accent); }
+    .pin-icon.pinned {
+      opacity: 1; transform: scale(1);
+      color: #d29922; border-color: #d29922;
+      box-shadow: 0 0 0 3px rgba(210,153,34,.15), 0 2px 6px rgba(0,0,0,.35);
+    }
+    .pin-icon.pinned:hover { color: #e3a83a; border-color: #e3a83a; }
+    #compact-btn { align-self: center; margin: 0 0 8px; }
+
+    /* ── Drawer panel ── */
+    #drawer-panel { padding: 20px; overflow-y: auto; gap: 10px; }
+    .drawer-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-size: .88rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .drawer-card .role { color: var(--accent); font-size: .72rem; text-transform: uppercase; margin-bottom: 4px; }
+    .drawer-empty { color: var(--muted); font-size: .85rem; }
     .thinking {
       display: flex; align-items: center; gap: 6px;
       color: var(--muted); font-size: .85rem;
@@ -227,9 +326,9 @@
 <body>
 
 <header>
-  <div class="logo">⚙ <span>Forge</span></div>
+  <div class="logo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:4px"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Forge</span></div>
   <div style="display:flex;align-items:center;gap:14px;">
-    <button class="btn-outline" id="token-btn" onclick="promptForToken()" title="Définir le token API (si API_TOKEN est configuré côté serveur)">🔑 Token</button>
+    <button class="btn-outline" id="token-btn" onclick="promptForToken()" title="Définir le token API (si API_TOKEN est configuré côté serveur)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>Token</button>
     <div class="status">
       <div class="dot" id="status-dot"></div>
       <span id="status-text">connecting…</span>
@@ -239,6 +338,7 @@
 
 <div class="tabs">
   <div class="tab active" data-tab="chat">Chat</div>
+  <div class="tab" data-tab="drawer">Tiroir</div>
   <div class="tab" data-tab="traces">Traces</div>
 </div>
 
@@ -251,9 +351,15 @@
   </div>
 </div>
 
+<!-- Drawer -->
+<div class="panel" id="drawer-panel">
+  <button class="btn-outline" id="compact-btn" onclick="compactNow()"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><polyline points="7 13 12 18 17 13"></polyline><polyline points="7 6 12 11 17 6"></polyline></svg>Compacter maintenant</button>
+  <div id="drawer-list"></div>
+</div>
+
 <!-- Traces -->
 <div class="panel" id="traces-panel">
-  <button class="btn-outline" id="traces-refresh" onclick="loadTraces()">↺ Rafraîchir</button>
+  <button class="btn-outline" id="traces-refresh" onclick="loadTraces()"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Rafraîchir</button>
   <div id="traces-list"></div>
 </div>
 
@@ -286,11 +392,13 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active')
     document.getElementById(tab.dataset.tab + '-panel').classList.add('active')
     if (tab.dataset.tab === 'traces') loadTraces()
+    if (tab.dataset.tab === 'drawer') loadDrawer()
   })
 })
 
 // Load on startup
 checkHealth()
+loadHistory()
 
 // ── Health check ──────────────────────────────────────────────────
 async function checkHealth() {
@@ -298,8 +406,10 @@ async function checkHealth() {
     const r = await fetch('/health')
     const data = await r.json()
     document.getElementById('status-dot').className = 'dot ok'
-    document.getElementById('status-text').textContent =
-      `${data.provider} · ${data.model.slice(0, 30)}`
+    const text = `${data.provider} · ${data.model}`
+    const el = document.getElementById('status-text')
+    el.textContent = text
+    el.title = text
   } catch {
     document.getElementById('status-dot').className = 'dot err'
     document.getElementById('status-text').textContent = 'offline'
@@ -310,26 +420,119 @@ async function checkHealth() {
 const messages = document.getElementById('chat-messages')
 let _busy = false
 
-function appendMsg(text, role, meta) {
-  const div = document.createElement('div')
-  div.className = `msg ${role}`
-  div.innerHTML = formatContent(text)
+// Minimal thumbtack outline, sized to sit quietly next to a bubble --
+// deliberately monochrome (currentColor) so .pin-icon's color rules
+// (muted/hover/pinned) apply without touching this markup.
+const PIN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg>'
+
+function appendMsg(id, text, role, meta, pinned, pairRole, scroll = true) {
+  const bubble = document.createElement('div')
+  bubble.className = `msg ${role}`
+  bubble.innerHTML = formatContent(text)
   if (meta) {
     const m = document.createElement('div')
     m.className = 'msg-meta'
     m.textContent = meta
-    div.appendChild(m)
+    bubble.appendChild(m)
   }
-  messages.appendChild(div)
-  messages.scrollTop = messages.scrollHeight
-  return div
+
+  const bubbleRole = role.split(' ')[0]  // strip ' error' suffix
+  if (id != null && bubbleRole !== 'system') {
+    const pinBtn = document.createElement('button')
+    pinBtn.className = 'pin-icon' + (pinned ? ' pinned' : '')
+    pinBtn.innerHTML = PIN_SVG
+    pinBtn.title = pinned ? 'Retirer du tiroir' : 'Épingler dans le tiroir'
+    pinBtn.onclick = () => togglePin(id, pairRole, !pinned)
+    bubble.appendChild(pinBtn)
+  }
+
+  messages.appendChild(bubble)
+  if (scroll) messages.scrollTop = messages.scrollHeight
+  return bubble
 }
 
+// Lightweight markdown renderer -- deliberately not a CDN library
+// (marked.js, etc.): Forge is meant to run fully local/offline, and
+// pulling a script from a CDN on every page load would quietly break
+// that the day the NiPoGi has no internet. Covers the common subset
+// LLM answers actually use: code fences (with special handling for
+// ```diff), inline code, bold/italic, links, headers, and lists.
+// Not full CommonMark (no tables/blockquotes yet).
 function formatContent(text) {
-  // Wrap code blocks in <pre>
-  return text.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) =>
-    `<pre>${escapeHtml(code.trim())}</pre>`
-  ).replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`)
+  // 1. Pull out fenced code blocks first so nothing inside them is
+  //    touched by the rules below, then restore them at the end.
+  const blocks = []
+  let working = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const body = code.replace(/\n$/, '')
+    const html = lang === 'diff' ? renderDiff(body) : `<pre><code>${escapeHtml(body)}</code></pre>`
+    blocks.push(html)
+    return `\x00BLOCK${blocks.length - 1}\x00`
+  })
+
+  // 2. Escape everything else BEFORE applying inline markdown, so any
+  //    literal '<'/'&' in the model's own answer can't inject markup
+  //    (the old version only escaped inside code fences).
+  working = escapeHtml(working)
+  working = working.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+
+  // 3. Block-level: headers and lists, line by line.
+  const lines = working.split('\n')
+  const out = []
+  let list = null  // { type: 'ul'|'ol', items: [] }
+  const flushList = () => {
+    if (list) {
+      out.push(`<${list.type}>${list.items.map(i => `<li>${i}</li>`).join('')}</${list.type}>`)
+      list = null
+    }
+  }
+  for (const line of lines) {
+    const h = line.match(/^(#{1,3})\s+(.*)/)
+    if (h) {
+      flushList()
+      const level = h[1].length + 2  // h3..h5 -- h1/h2 read too large in a chat bubble
+      out.push(`<h${level}>${inlineMarkdown(h[2])}</h${level}>`)
+      continue
+    }
+    const ul = line.match(/^[-*]\s+(.*)/)
+    if (ul) {
+      if (!list || list.type !== 'ul') { flushList(); list = { type: 'ul', items: [] } }
+      list.items.push(inlineMarkdown(ul[1]))
+      continue
+    }
+    const ol = line.match(/^\d+\.\s+(.*)/)
+    if (ol) {
+      if (!list || list.type !== 'ol') { flushList(); list = { type: 'ol', items: [] } }
+      list.items.push(inlineMarkdown(ol[1]))
+      continue
+    }
+    flushList()
+    out.push(inlineMarkdown(line))
+  }
+  flushList()
+  working = out.join('\n')
+
+  // 4. Restore code blocks.
+  return working.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => blocks[Number(i)])
+}
+
+function inlineMarkdown(s) {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+}
+
+// ```diff blocks: colored like `git diff` instead of plain text, so a
+// "here's what changed" answer doesn't read as a wall of code.
+function renderDiff(code) {
+  const lines = code.split('\n').map(l => {
+    const esc = escapeHtml(l)
+    if (l.startsWith('+')) return `<span class="diff-add">${esc}</span>`
+    if (l.startsWith('-')) return `<span class="diff-del">${esc}</span>`
+    if (l.startsWith('@@')) return `<span class="diff-hunk">${esc}</span>`
+    return `<span class="diff-ctx">${esc}</span>`
+  })
+  return `<pre class="diff">${lines.join('\n')}</pre>`
 }
 
 function escapeHtml(s) {
@@ -349,6 +552,47 @@ function removeThinking() {
   document.getElementById('thinking-indicator')?.remove()
 }
 
+// Fil unique: le fil est reconstruit depuis /history à chaque
+// chargement de page et après chaque tour, au lieu d'être un état
+// purement côté client -- c'est ce qui permet de survivre à un
+// rechargement et donne à chaque bulle un id réel pour le tiroir.
+async function loadHistory() {
+  try {
+    const r = await apiFetch('/history')
+    const history = await r.json()
+    messages.innerHTML = ''
+    history.forEach(m => {
+      const role = m.role === 'user' ? 'user' : (m.role === 'system' ? 'system' : 'bot')
+      appendMsg(m.id, m.content, role, null, m.pinned, m.role, false)
+    })
+    messages.scrollTop = messages.scrollHeight
+  } catch (e) {
+    // History is a convenience layer -- a failed load shouldn't block chat.
+  }
+}
+
+// Épingler une bulle épingle par défaut l'échange entier (question +
+// réponse) -- une réponse relue hors contexte perd tout son sens, et
+// vice versa. add_exchange() côté serveur assigne toujours l'id de
+// l'assistant juste après celui de l'utilisateur, donc le partenaire
+// se déduit sans info supplémentaire. Désépingler reste individuel :
+// on peut retirer l'un des deux après coup sans toucher à l'autre.
+async function togglePin(messageId, role, pin) {
+  const ids = [messageId]
+  if (pin) {
+    const partnerId = role === 'user' ? messageId + 1 : messageId - 1
+    if (partnerId > 0) ids.push(partnerId)
+  }
+  try {
+    await Promise.allSettled(ids.map(id => apiFetch(`/drawer/${pin ? 'pin' : 'unpin'}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message_id: id})
+    })))
+    loadHistory()
+  } catch (e) { /* best-effort */ }
+}
+
 async function sendChat() {
   if (_busy) return
   const input = document.getElementById('chat-input')
@@ -360,7 +604,7 @@ async function sendChat() {
   input.value = ''
   input.style.height = 'auto'
 
-  appendMsg(text, 'user')
+  appendMsg(null, text, 'user')
   showThinking()
 
   try {
@@ -371,13 +615,18 @@ async function sendChat() {
     })
     const data = await r.json()
     removeThinking()
-    const meta = `${data.tool} · ${data.steps} step${data.steps > 1 ? 's' : ''}`
-    const div = appendMsg(data.output || '[empty response]', 'bot' + (data.ok ? '' : ' error'), meta)
-    if (!data.ok) div.title = data.error || ''
+    if (!data.ok) {
+      appendMsg(null, data.output || '[empty response]', 'bot error', data.error || '')
+    }
   } catch (e) {
     removeThinking()
-    appendMsg(`Erreur réseau : ${e.message}`, 'bot error')
+    appendMsg(null, `Erreur réseau : ${e.message}`, 'bot error')
   }
+
+  // Reload from the server so the just-sent exchange gets its real
+  // ids (needed for pin buttons) and any compaction that ran on this
+  // turn is reflected immediately.
+  await loadHistory()
 
   _busy = false
   document.getElementById('send-btn').disabled = false
@@ -394,6 +643,55 @@ document.getElementById('chat-input').addEventListener('input', function() {
 document.getElementById('chat-input').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() }
 })
+
+// ── Drawer (v3.9) ────────────────────────────────────────────────
+async function loadDrawer() {
+  const list = document.getElementById('drawer-list')
+  list.innerHTML = '<div class="drawer-empty">Chargement…</div>'
+  try {
+    const r = await apiFetch('/drawer')
+    const pinned = await r.json()
+    if (!pinned.length) {
+      list.innerHTML = '<div class="drawer-empty">Aucun message épinglé pour l\'instant. Épinglez un message depuis l\'onglet Chat pour le garder au-delà de la compaction.</div>'
+      return
+    }
+    list.innerHTML = ''
+    pinned.forEach(m => {
+      const card = document.createElement('div')
+      card.className = 'drawer-card'
+      card.innerHTML = `
+        <div>
+          <div class="role">${m.role}</div>
+          <div>${escapeHtml(m.content)}</div>
+        </div>
+      `
+      const unpinBtn = document.createElement('button')
+      unpinBtn.className = 'btn-outline'
+      unpinBtn.textContent = 'Retirer'
+      unpinBtn.onclick = async () => { await togglePin(m.id, false); loadDrawer() }
+      card.appendChild(unpinBtn)
+      list.appendChild(card)
+    })
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--red);font-size:.85rem">Erreur : ${e.message}</div>`
+  }
+}
+
+async function compactNow() {
+  const btn = document.getElementById('compact-btn')
+  btn.disabled = true
+  const original = btn.textContent
+  btn.textContent = '…'
+  try {
+    const r = await apiFetch('/compact', { method: 'POST' })
+    const data = await r.json()
+    btn.textContent = data.removed > 0 ? `✓ ${data.removed} messages compactés` : '✓ rien à compacter'
+    await loadHistory()
+  } catch (e) {
+    btn.textContent = '✗ échec'
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false }, 2000)
+}
 
 // ── Traces ────────────────────────────────────────────────────────
 async function loadTraces() {

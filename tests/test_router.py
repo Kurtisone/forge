@@ -101,6 +101,100 @@ def test_prompt_includes_files_description_when_enabled():
     assert '"read"' in prompt or "read" in prompt
 
 
+def test_prompt_includes_files_write_example():
+    """
+    Regression test: the files tool used to have only a 'read' worked
+    example, never 'write' -- a small local model asked to create a
+    file would answer with a code block as plain chat text instead of
+    actually persisting it, since it had never seen the write shape,
+    only read about it in the description. Both actions must be
+    demonstrated, not just described.
+    """
+    prompt = build_router_prompt(
+        "crée un fichier", available_tools=["chat", "code", "files"]
+    )
+    assert '"action\\":\\"write\\"' in prompt
+
+
+def test_prompt_files_write_example_json_is_well_formed():
+    import json
+    import re
+
+    prompt = build_router_prompt(
+        "crée un fichier", available_tools=["chat", "code", "files"]
+    )
+    match = re.search(
+        r'\{"tool":"files","content":"\{\\"action\\":\\"write\\".*?\}"\}',
+        prompt,
+    )
+    assert match, "files write example not found in prompt"
+    outer = json.loads(match.group(0))
+    assert outer["tool"] == "files"
+    inner = json.loads(outer["content"])
+    assert inner["action"] == "write"
+    assert inner["path"]
+    assert inner["content"]
+
+
+def test_prompt_includes_files_read_for_edit_example():
+    """
+    Regression test: editing an existing file ("remplace X par Y dans
+    hello.go") used to have no worked example at all -- the model
+    would answer from memory/guesswork (observed live: several such
+    requests in a row all returned the ORIGINAL unmodified content,
+    never touching the real file). The read-with-done:false example
+    teaches it to fetch the real content first.
+    """
+    prompt = build_router_prompt(
+        "modifie ce fichier", available_tools=["chat", "code", "files"]
+    )
+    assert '"action\\":\\"read\\"' in prompt
+    assert '"done":false' in prompt
+
+
+def test_prompt_steers_toward_files_write_after_a_files_read():
+    """The other half of the read-then-write pattern: after seeing its
+    own [files] read result, the model must be pushed to write the
+    modified file back, not answer in chat or read again."""
+    prompt = build_router_prompt(
+        "remplace Hello par Bienvenue",
+        history=[{"role": "user", "content": "remplace Hello par Bienvenue"}],
+        step_context=[
+            {"role": "assistant", "content": "[files] package main\n\nfunc main() {}"}
+        ],
+        available_tools=["chat", "code", "files"],
+    )
+    assert 'Do NOT call "action":"read" again' in prompt
+    assert '"tool":"files"' in prompt.split("CURRENT, real content")[-1]
+
+
+def test_prompt_files_read_hint_gives_full_content_more_room():
+    """A files:read result must not be squashed to the same 120-char
+    cap as ordinary history/tool-result summaries -- the model is
+    about to be asked to reproduce it in full with one change applied,
+    and a 120-char excerpt would guarantee a truncated rewrite."""
+    long_content = "line\n" * 100  # 500 chars, well past the 120-char cap
+    prompt = build_router_prompt(
+        "remplace X par Y",
+        step_context=[{"role": "assistant", "content": f"[files] {long_content}"}],
+        available_tools=["chat", "code", "files"],
+    )
+    assert long_content.strip() in prompt
+
+
+def test_prompt_omits_files_read_hint_after_a_write_result():
+    """A write confirmation/diff must not trigger the read-then-write
+    hint -- only an actual read result should."""
+    prompt = build_router_prompt(
+        "ok",
+        step_context=[
+            {"role": "assistant", "content": "[files] [ok] written 12 bytes to f.txt"}
+        ],
+        available_tools=["chat", "code", "files"],
+    )
+    assert 'Do NOT call "action":"read" again' not in prompt
+
+
 def test_prompt_includes_git_description_when_enabled():
     prompt = build_router_prompt("git log", available_tools=["chat", "code", "git"])
     assert "git subcommand" in prompt

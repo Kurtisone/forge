@@ -7,6 +7,11 @@ Endpoints:
   POST /chat        → single conversation turn
   POST /review      → file content review
   GET  /traces      → recent execution traces
+  GET  /history     → full rolling history (single-thread UI, v3.9)
+  GET  /drawer      → pinned messages ("tiroir", v3.9)
+  POST /drawer/pin  → pin a message by id
+  POST /drawer/unpin → unpin a message by id
+  POST /compact     → force a compaction pass now (v3.9)
 
 Auth: set API_TOKEN in the environment to require
 `Authorization: Bearer <token>` on every endpoint except / and
@@ -36,7 +41,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from forge import rag, ratelimit, trace
-from forge.config import API_TOKEN, FORGE_PROVIDER, LLM_MODEL
+from forge.config import API_TOKEN, FORGE_PROVIDER, LLAMA_CPP_URL, LLM_MODEL
 from forge.orchestrator import Orchestrator
 
 app = FastAPI(title="Forge", version="3.3.0", docs_url="/docs")
@@ -130,6 +135,21 @@ class RememberResponse(BaseModel):
     id: int
 
 
+class PinRequest(BaseModel):
+    message_id: int
+
+
+class PinnedMessage(BaseModel):
+    id: int
+    role: str
+    content: str
+    pinned: bool
+
+
+class CompactResponse(BaseModel):
+    removed: int
+
+
 class SearchResult(BaseModel):
     id: int
     kind: str
@@ -167,10 +187,18 @@ def _graph_registry() -> dict:
 
 @app.get("/health")
 async def health():
+    model = LLM_MODEL
+    if FORGE_PROVIDER == "llama_cpp":
+        from forge.providers.llama_cpp import get_loaded_model
+
+        loaded = await _run_in_thread(get_loaded_model, LLAMA_CPP_URL)
+        if loaded:
+            model = loaded
+
     return {
         "status": "ok",
         "provider": FORGE_PROVIDER,
-        "model": LLM_MODEL,
+        "model": model,
     }
 
 
@@ -327,6 +355,73 @@ async def search(
             status_code=502, detail=f"embedding server unreachable: {e}"
         ) from e
     return results
+
+
+# ─── Drawer / compaction (v3.9) ────────────────────────────────────
+
+
+@app.get(
+    "/history",
+    response_model=list[PinnedMessage],
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def get_history():
+    """
+    Full rolling history with stable ids -- what the single-thread web
+    UI renders on load/after each turn, and what pin/unpin target.
+    """
+    from forge import memory
+
+    return memory.get_history()
+
+
+@app.get(
+    "/drawer",
+    response_model=list[PinnedMessage],
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def get_drawer():
+    """List currently pinned messages -- the 'tiroir'."""
+    from forge import memory
+
+    return memory.get_pinned()
+
+
+@app.post(
+    "/drawer/pin",
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def pin(req: PinRequest):
+    from forge import memory
+
+    if not memory.pin_message(req.message_id):
+        raise HTTPException(status_code=404, detail="message not found")
+    return {"ok": True}
+
+
+@app.post(
+    "/drawer/unpin",
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def unpin(req: PinRequest):
+    from forge import memory
+
+    if not memory.unpin_message(req.message_id):
+        raise HTTPException(status_code=404, detail="message not found")
+    return {"ok": True}
+
+
+@app.post(
+    "/compact",
+    response_model=CompactResponse,
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def compact():
+    """Force a compaction pass now, regardless of COMPACTION_THRESHOLD."""
+    from forge import memory
+
+    removed = await _run_in_thread(memory.compact_now)
+    return CompactResponse(removed=removed)
 
 
 # ─── UI ────────────────────────────────────────────────────────────

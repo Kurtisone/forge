@@ -218,6 +218,93 @@ def test_real_chat_answer_is_still_remembered(monkeypatch, tmp_path):
     assert any(h["content"] == "hi there" for h in history)
 
 
+def test_long_tool_output_is_persisted_in_full(monkeypatch, tmp_path):
+    """
+    Regression test: _remember() used to hard-truncate both sides of
+    an exchange to 300 chars before persisting. That was originally
+    meant to keep the router's own prompt from ballooning on large
+    pastes, but the v3.9 web UI renders GET /history directly, so a
+    long tool result (e.g. reading a real file via the `files` tool)
+    showed up cut off mid-word on screen instead of just producing a
+    shorter prompt on the next turn. Full content must round-trip.
+    """
+    import forge.config as cfg
+    import forge.memory as memory_mod
+
+    monkeypatch.setattr(cfg, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
+    monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
+
+    long_answer = "line\n" * 200  # 1000 chars, well past the old 300-char cap
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": long_answer}),
+    )
+
+    Orchestrator().run("read this file")
+
+    history = memory_mod.get_history()
+    assert any(h["content"] == long_answer for h in history)
+
+
+def test_read_then_write_flow_actually_updates_the_file(monkeypatch, tmp_path):
+    """
+    End-to-end version of the router-prompt tests: a 2-step run where
+    step 1 reads an existing file (done:false) and step 2 writes the
+    modified version back must actually update the file on disk, not
+    just produce a plausible-looking chat answer. This is the real
+    failure this whole feature targets -- observed live, several
+    "remplace X par Y dans hello.go" requests in a row all answered
+    with the original unmodified content, having never called the
+    files tool at all.
+    """
+    import forge.config as cfg
+    from forge.tools import files as files_tool
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_tool, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setitem(TOOLS, "files", files_tool.run)
+
+    (tmp_path / "hello.go").write_text(
+        'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Hello, World!")\n}\n'
+    )
+
+    calls = {"n": 0}
+
+    def fake_llm(prompt):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return json.dumps(
+                {
+                    "tool": "files",
+                    "content": json.dumps({"action": "read", "path": "hello.go"}),
+                    "done": False,
+                }
+            )
+        new_content = 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("Bienvenue")\n}\n'
+        return json.dumps(
+            {
+                "tool": "files",
+                "content": json.dumps(
+                    {"action": "write", "path": "hello.go", "content": new_content}
+                ),
+            }
+        )
+
+    monkeypatch.setattr(orch_mod, "call_llm", fake_llm)
+
+    result = Orchestrator(max_steps=2).run("remplace Hello World par Bienvenue")
+
+    assert result.ok
+    assert calls["n"] == 2
+    on_disk = (tmp_path / "hello.go").read_text()
+    assert "Bienvenue" in on_disk
+    assert "Hello, World!" not in on_disk
+    assert "```diff" in result.output  # a real diff, not a bare confirmation
+
+
 def test_multi_step_run_persists_exactly_one_clean_exchange(monkeypatch, tmp_path):
     """
     Regression test for the v3.8 cache-invalidation bug: before this
@@ -263,11 +350,10 @@ def test_multi_step_run_persists_exactly_one_clean_exchange(monkeypatch, tmp_pat
     assert result.ok
     history = memory_mod.get_history()
     assert len(history) == 2  # exactly one user/assistant exchange, not two
-    assert history[0] == {
-        "role": "user",
-        "content": "Tu peux me lister mon matériel ?",
-    }
-    assert history[1] == {"role": "assistant", "content": "Tu as un Steam Deck !"}
+    assert history[0]["role"] == "user"
+    assert history[0]["content"] == "Tu peux me lister mon matériel ?"
+    assert history[1]["role"] == "assistant"
+    assert history[1]["content"] == "Tu as un Steam Deck !"
 
 
 def test_multi_step_run_keeps_history_untouched_by_step_context(monkeypatch):

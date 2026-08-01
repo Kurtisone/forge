@@ -11,6 +11,37 @@ from forge.errors import ProviderError
 from forge.logger import log
 
 
+def get_loaded_model(url: str) -> str | None:
+    """
+    Ask llama-server what it actually has loaded, via its own /props
+    endpoint -- LLM_MODEL is never sent in the /completion payload
+    (see call() above), so it's just a label Forge is trusting the
+    person to keep in sync by hand. This queries the source of truth
+    instead, for /health to display. Best-effort: returns None on any
+    failure (server down, unexpected response shape, older llama.cpp
+    build without /props) so callers can fall back to the configured
+    LLM_MODEL rather than breaking /health over a label.
+    """
+    try:
+        r = requests.get(f"{url}/props", timeout=2)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+    # Field name/shape has drifted across llama.cpp server versions --
+    # check the candidates in order rather than pinning to one.
+    path = (
+        data.get("model_path")
+        or data.get("default_generation_settings", {}).get("model")
+        or data.get("model")
+    )
+    if not path or not isinstance(path, str):
+        return None
+
+    return path.rsplit("/", 1)[-1]
+
+
 def call(url: str, model: str, prompt: str) -> str:
     payload = {
         "prompt": prompt,

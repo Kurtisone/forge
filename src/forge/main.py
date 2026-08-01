@@ -22,6 +22,7 @@ Multi-line code paste — two ways:
 
 Special commands (prefix with !):
   !clear                              wipe conversation history so the next turn starts fresh
+  !compact                            force a compaction pass now (pinned messages excluded, v3.9)
   !trace                              show the last 5 execution traces
   !remember <decision|todo|fact> <project|-> <content>
                                        store a decision/todo/fact in vector memory (v3.7)
@@ -37,7 +38,7 @@ from forge import rag, trace
 from forge.config import SHOW_DEBUG
 from forge.errors import ForgeError
 from forge.logger import log
-from forge.memory import clear_history
+from forge.memory import clear_history, compact_now
 from forge.orchestrator import Orchestrator
 
 _FENCE = "```"
@@ -200,6 +201,12 @@ def _handle_command(raw: str) -> None:
     if cmd == "!clear":
         clear_history()
         print("[context cleared]\n")
+    elif cmd == "!compact":
+        removed = compact_now()
+        if removed:
+            print(f"[compacted: {removed} messages summarized]\n")
+        else:
+            print("[nothing to compact]\n")
     elif cmd == "!trace":
         print(trace.format_for_display(trace.read_last(5)) + "\n")
     elif cmd == "!remember":
