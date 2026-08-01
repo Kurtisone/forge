@@ -61,7 +61,18 @@ MAX_STEPS = int(os.getenv("MAX_STEPS", "1"))
 # --- Memory --------------------------------------------------------------
 MEMORY_ENABLED = _bool("MEMORY_ENABLED", "true")
 MEMORY_FILE = os.getenv("MEMORY_FILE", "data/memory.json")
-MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "20"))
+# Was 20 (10 exchanges). Raised because the sliding-window eviction
+# here fights KV-cache reuse in llama_cpp.py (v3.8): once the window
+# is full, every new turn drops the oldest entry, shifting the whole
+# history block's text and invalidating the cached prefix for that
+# entire block on the server side -- confirmed in real testing
+# (identical repeated messages still showed near-zero cache reuse
+# once the window was full, on a server otherwise confirmed to be
+# caching correctly on a non-hybrid-attention model). A higher cap
+# doesn't remove the problem, it just makes eviction rare instead of
+# constant; long-term recall is RAG's job (rag.py / v3.7), this is
+# only the short-term conversational window shown to the router.
+MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "100"))
 
 # --- Files tool workspace ---------------------------------------------------
 # The files tool (forge.tools.files) confines all read/write/list
