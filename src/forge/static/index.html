@@ -122,7 +122,7 @@
       color: var(--muted);
       margin-top: 4px;
     }
-    .msg.bot pre, .msg.bot code {
+    .msg.bot pre {
       font-family: var(--mono);
       font-size: .85rem;
       background: var(--bg);
@@ -130,9 +130,41 @@
       border-radius: 6px;
       padding: 10px 12px;
       overflow-x: auto;
-      margin-top: 6px;
-      display: block;
+      margin: 6px 0;
     }
+    .msg code {
+      font-family: var(--mono);
+      font-size: .85em;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    .msg pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 1em;
+    }
+    .msg h3, .msg h4, .msg h5 {
+      margin: 10px 0 4px;
+      line-height: 1.3;
+    }
+    .msg h3 { font-size: 1.05rem; }
+    .msg h4 { font-size: .98rem; }
+    .msg h5 { font-size: .92rem; }
+    .msg ul, .msg ol {
+      margin: 6px 0;
+      padding-left: 22px;
+    }
+    .msg li { margin: 2px 0; }
+    .msg a { color: var(--accent); }
+    /* ```diff blocks -- colored like `git diff` output */
+    .msg pre.diff span { display: block; }
+    .msg pre.diff .diff-add { color: var(--green); }
+    .msg pre.diff .diff-del { color: var(--red); }
+    .msg pre.diff .diff-hunk { color: var(--accent); }
+    .msg pre.diff .diff-ctx { color: var(--muted); }
     .msg.system {
       align-self: center;
       background: transparent;
@@ -419,11 +451,88 @@ function appendMsg(id, text, role, meta, pinned, pairRole, scroll = true) {
   return bubble
 }
 
+// Lightweight markdown renderer -- deliberately not a CDN library
+// (marked.js, etc.): Forge is meant to run fully local/offline, and
+// pulling a script from a CDN on every page load would quietly break
+// that the day the NiPoGi has no internet. Covers the common subset
+// LLM answers actually use: code fences (with special handling for
+// ```diff), inline code, bold/italic, links, headers, and lists.
+// Not full CommonMark (no tables/blockquotes yet).
 function formatContent(text) {
-  // Wrap code blocks in <pre>
-  return text.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) =>
-    `<pre>${escapeHtml(code.trim())}</pre>`
-  ).replace(/`([^`]+)`/g, (_, c) => `<code>${escapeHtml(c)}</code>`)
+  // 1. Pull out fenced code blocks first so nothing inside them is
+  //    touched by the rules below, then restore them at the end.
+  const blocks = []
+  let working = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const body = code.replace(/\n$/, '')
+    const html = lang === 'diff' ? renderDiff(body) : `<pre><code>${escapeHtml(body)}</code></pre>`
+    blocks.push(html)
+    return `\x00BLOCK${blocks.length - 1}\x00`
+  })
+
+  // 2. Escape everything else BEFORE applying inline markdown, so any
+  //    literal '<'/'&' in the model's own answer can't inject markup
+  //    (the old version only escaped inside code fences).
+  working = escapeHtml(working)
+  working = working.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`)
+
+  // 3. Block-level: headers and lists, line by line.
+  const lines = working.split('\n')
+  const out = []
+  let list = null  // { type: 'ul'|'ol', items: [] }
+  const flushList = () => {
+    if (list) {
+      out.push(`<${list.type}>${list.items.map(i => `<li>${i}</li>`).join('')}</${list.type}>`)
+      list = null
+    }
+  }
+  for (const line of lines) {
+    const h = line.match(/^(#{1,3})\s+(.*)/)
+    if (h) {
+      flushList()
+      const level = h[1].length + 2  // h3..h5 -- h1/h2 read too large in a chat bubble
+      out.push(`<h${level}>${inlineMarkdown(h[2])}</h${level}>`)
+      continue
+    }
+    const ul = line.match(/^[-*]\s+(.*)/)
+    if (ul) {
+      if (!list || list.type !== 'ul') { flushList(); list = { type: 'ul', items: [] } }
+      list.items.push(inlineMarkdown(ul[1]))
+      continue
+    }
+    const ol = line.match(/^\d+\.\s+(.*)/)
+    if (ol) {
+      if (!list || list.type !== 'ol') { flushList(); list = { type: 'ol', items: [] } }
+      list.items.push(inlineMarkdown(ol[1]))
+      continue
+    }
+    flushList()
+    out.push(inlineMarkdown(line))
+  }
+  flushList()
+  working = out.join('\n')
+
+  // 4. Restore code blocks.
+  return working.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => blocks[Number(i)])
+}
+
+function inlineMarkdown(s) {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+}
+
+// ```diff blocks: colored like `git diff` instead of plain text, so a
+// "here's what changed" answer doesn't read as a wall of code.
+function renderDiff(code) {
+  const lines = code.split('\n').map(l => {
+    const esc = escapeHtml(l)
+    if (l.startsWith('+')) return `<span class="diff-add">${esc}</span>`
+    if (l.startsWith('-')) return `<span class="diff-del">${esc}</span>`
+    if (l.startsWith('@@')) return `<span class="diff-hunk">${esc}</span>`
+    return `<span class="diff-ctx">${esc}</span>`
+  })
+  return `<pre class="diff">${lines.join('\n')}</pre>`
 }
 
 function escapeHtml(s) {
