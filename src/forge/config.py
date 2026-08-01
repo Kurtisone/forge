@@ -74,6 +74,32 @@ MEMORY_FILE = os.getenv("MEMORY_FILE", "data/memory.json")
 # only the short-term conversational window shown to the router.
 MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "100"))
 
+# --- Context compaction / drawer (v3.9) ------------------------------------
+# v3.8 raised MEMORY_MAX_HISTORY so FIFO eviction became rare instead
+# of constant, but rare isn't never -- something still has to give
+# once history keeps growing. Compaction replaces the oldest
+# non-pinned messages with a single summary once COMPACTION_THRESHOLD
+# is crossed, instead of just dropping them. MEMORY_MAX_HISTORY stays
+# in place below as a hard-cap safety net in case compaction is
+# disabled or its strategy fails outright (e.g. embedding server
+# down) -- history must never grow unbounded either way.
+COMPACTION_ENABLED = _bool("COMPACTION_ENABLED", "true")
+# Trigger compaction once history reaches this many messages. Kept
+# below MEMORY_MAX_HISTORY on purpose, to leave headroom instead of
+# racing the hard cap.
+COMPACTION_THRESHOLD = int(os.getenv("COMPACTION_THRESHOLD", "80"))
+# How many of the most recent (non-pinned) messages are always left
+# untouched by compaction.
+COMPACTION_KEEP_RECENT = int(os.getenv("COMPACTION_KEEP_RECENT", "20"))
+# "rag_pointer" (default): no LLM call -- push the compacted block into
+# vector memory verbatim (rag.py) and replace it inline with a short
+# pointer, searchable via !recall. "llm_summary": one LLM call per
+# compaction, condenses the block into prose kept inline -- more
+# faithful, costs tokens/latency. Both strategies share the same
+# signature in forge/compaction.py, so switching is a one-line config
+# change, not a rewrite.
+COMPACTION_STRATEGY = os.getenv("COMPACTION_STRATEGY", "rag_pointer")
+
 # --- Files tool workspace ---------------------------------------------------
 # The files tool (forge.tools.files) confines all read/write/list
 # operations to this directory. Paths outside it are rejected before
