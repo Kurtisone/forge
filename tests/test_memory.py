@@ -4,6 +4,8 @@ module-level MEMORY_FILE constant) so nothing touches the real
 data/memory.json.
 """
 
+import json
+
 from forge import memory
 
 
@@ -83,6 +85,39 @@ def test_pin_unknown_id_returns_false(tmp_path, monkeypatch):
     memory.add_message("user", "hello")
 
     assert memory.pin_message(999) is False
+
+
+def test_pre_v39_history_without_id_or_pinned_is_migrated(tmp_path, monkeypatch):
+    """
+    Regression test: a memory.json written before v3.9 has history
+    entries with only {"role", "content"} -- no "id", no "pinned".
+    GET /history's response model requires both, so loading this file
+    unmigrated broke chat entirely for anyone with existing history
+    (500 on every /history call, silently swallowed by the UI).
+    """
+    path = tmp_path / "memory.json"
+    path.write_text(
+        json.dumps(
+            {
+                "history": [
+                    {"role": "user", "content": "old message"},
+                    {"role": "assistant", "content": "old reply"},
+                ],
+                "facts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(memory, "MEMORY_FILE", str(path))
+
+    history = memory.get_history()
+
+    assert [m["id"] for m in history] == [1, 2]
+    assert all(m["pinned"] is False for m in history)
+
+    # New messages after migration must not collide with backfilled ids.
+    memory.add_message("user", "new message")
+    assert memory.get_history()[-1]["id"] == 3
 
 
 def test_hard_cap_exempts_pinned_messages(tmp_path, monkeypatch):

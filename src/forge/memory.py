@@ -45,7 +45,30 @@ def load_memory() -> dict:
     data.setdefault("history", [])
     data.setdefault("facts", [])
     data.setdefault("next_id", 1)
+    if _migrate_history(data):
+        save_memory(data)
     return data
+
+
+def _migrate_history(data: dict) -> bool:
+    """
+    Backfill 'id' and 'pinned' on history entries written before v3.9
+    (which didn't have them). Runs on every load, but only writes back
+    to disk the first time it actually finds something to migrate.
+    Without this, GET /history's response model rejects any entry
+    missing 'id', which fails the whole request for anyone with
+    pre-v3.9 conversation history already on disk.
+    """
+    changed = False
+    for m in data["history"]:
+        if "id" not in m:
+            m["id"] = data["next_id"]
+            data["next_id"] += 1
+            changed = True
+        if "pinned" not in m:
+            m["pinned"] = False
+            changed = True
+    return changed
 
 
 def save_memory(memory: dict) -> None:
