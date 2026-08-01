@@ -88,17 +88,9 @@
       gap: 12px;
       scroll-behavior: smooth;
     }
-    .msg-row {
-      display: flex;
-      align-items: flex-end;
-      gap: 6px;
-      max-width: 78%;
-    }
-    .msg-row.user { align-self: flex-end; flex-direction: row-reverse; }
-    .msg-row.bot, .msg-row.system { align-self: flex-start; }
     .msg {
-      flex: 1;
-      min-width: 0;
+      position: relative;
+      max-width: 78%;
       padding: 10px 14px;
       border-radius: var(--radius);
       line-height: 1.55;
@@ -108,10 +100,12 @@
     }
     .msg.user {
       background: var(--user-bg);
+      align-self: flex-end;
       border-bottom-right-radius: 3px;
     }
     .msg.bot {
       background: var(--bot-bg);
+      align-self: flex-start;
       border-bottom-left-radius: 3px;
       border: 1px solid var(--border);
     }
@@ -133,33 +127,46 @@
       display: block;
     }
     .msg.system {
+      align-self: center;
       background: transparent;
       border: 1px dashed var(--border);
       color: var(--muted);
       font-size: .8rem;
       font-style: italic;
+      max-width: 90%;
     }
-    /* Pin: a small dot, invisible until the message is hovered, so it
-       doesn't clutter every bubble in the thread. Pinned messages keep
-       a faint permanent marker so the drawer's contents stay legible
-       at a glance without a text label on every message. */
+    /* Pin: a small floating badge sitting on the bubble's outer
+       corner (opposite the tail, so it never sits over the text),
+       hidden until the bubble is hovered so it doesn't clutter the
+       thread. Pinned messages keep a soft permanent glow instead of a
+       label -- state is legible at a glance without extra text. */
     .pin-icon {
-      flex-shrink: 0;
-      width: 20px; height: 20px;
+      position: absolute;
+      top: -7px;
+      width: 22px; height: 22px;
       display: flex; align-items: center; justify-content: center;
-      background: none; border: none; padding: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 50%;
-      font-size: .85rem;
+      padding: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,.35);
       color: var(--muted);
       cursor: pointer;
       opacity: 0;
-      transition: opacity .15s, color .15s;
-      align-self: auto;
+      transform: scale(.8);
+      transform-origin: center;
+      transition: opacity .15s ease, transform .15s ease, color .15s, border-color .15s;
     }
-    .msg-row:hover .pin-icon { opacity: .55; }
-    .pin-icon:hover { opacity: 1 !important; background: var(--surface); }
-    .pin-icon.pinned { opacity: .8; color: #d29922; }
-    .pin-icon.pinned:hover { opacity: 1; }
+    .msg.bot .pin-icon { right: -9px; }
+    .msg.user .pin-icon { left: -9px; }
+    .msg:hover .pin-icon { opacity: .75; transform: scale(1); }
+    .pin-icon:hover { opacity: 1 !important; color: var(--accent); border-color: var(--accent); }
+    .pin-icon.pinned {
+      opacity: 1; transform: scale(1);
+      color: #d29922; border-color: #d29922;
+      box-shadow: 0 0 0 3px rgba(210,153,34,.15), 0 2px 6px rgba(0,0,0,.35);
+    }
+    .pin-icon.pinned:hover { color: #e3a83a; border-color: #e3a83a; }
     #compact-btn { align-self: center; margin: 0 0 8px; }
 
     /* ── Drawer panel ── */
@@ -377,11 +384,7 @@ let _busy = false
 // (muted/hover/pinned) apply without touching this markup.
 const PIN_SVG = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"></line><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path></svg>'
 
-function appendMsg(id, text, role, meta, pinned) {
-  const bubbleRole = role.split(' ')[0]  // strip ' error' suffix for the row class
-  const row = document.createElement('div')
-  row.className = `msg-row ${bubbleRole}`
-
+function appendMsg(id, text, role, meta, pinned, pairRole) {
   const bubble = document.createElement('div')
   bubble.className = `msg ${role}`
   bubble.innerHTML = formatContent(text)
@@ -391,20 +394,20 @@ function appendMsg(id, text, role, meta, pinned) {
     m.textContent = meta
     bubble.appendChild(m)
   }
-  row.appendChild(bubble)
 
+  const bubbleRole = role.split(' ')[0]  // strip ' error' suffix
   if (id != null && bubbleRole !== 'system') {
     const pinBtn = document.createElement('button')
     pinBtn.className = 'pin-icon' + (pinned ? ' pinned' : '')
     pinBtn.innerHTML = PIN_SVG
     pinBtn.title = pinned ? 'Retirer du tiroir' : 'Épingler dans le tiroir'
-    pinBtn.onclick = () => togglePin(id, !pinned)
-    row.appendChild(pinBtn)
+    pinBtn.onclick = () => togglePin(id, pairRole, !pinned)
+    bubble.appendChild(pinBtn)
   }
 
-  messages.appendChild(row)
+  messages.appendChild(bubble)
   messages.scrollTop = messages.scrollHeight
-  return row
+  return bubble
 }
 
 function formatContent(text) {
@@ -419,11 +422,11 @@ function escapeHtml(s) {
 }
 
 function showThinking() {
-  const row = document.createElement('div')
-  row.className = 'msg-row bot'
-  row.id = 'thinking-indicator'
-  row.innerHTML = '<div class="msg bot thinking"><div class="dots"><span>·</span><span>·</span><span>·</span></div></div>'
-  messages.appendChild(row)
+  const div = document.createElement('div')
+  div.className = 'msg bot thinking'
+  div.id = 'thinking-indicator'
+  div.innerHTML = '<div class="dots"><span>·</span><span>·</span><span>·</span></div>'
+  messages.appendChild(div)
   messages.scrollTop = messages.scrollHeight
 }
 
@@ -442,20 +445,31 @@ async function loadHistory() {
     messages.innerHTML = ''
     history.forEach(m => {
       const role = m.role === 'user' ? 'user' : (m.role === 'system' ? 'system' : 'bot')
-      appendMsg(m.id, m.content, role, null, m.pinned)
+      appendMsg(m.id, m.content, role, null, m.pinned, m.role)
     })
   } catch (e) {
     // History is a convenience layer -- a failed load shouldn't block chat.
   }
 }
 
-async function togglePin(messageId, pin) {
+// Épingler une bulle épingle par défaut l'échange entier (question +
+// réponse) -- une réponse relue hors contexte perd tout son sens, et
+// vice versa. add_exchange() côté serveur assigne toujours l'id de
+// l'assistant juste après celui de l'utilisateur, donc le partenaire
+// se déduit sans info supplémentaire. Désépingler reste individuel :
+// on peut retirer l'un des deux après coup sans toucher à l'autre.
+async function togglePin(messageId, role, pin) {
+  const ids = [messageId]
+  if (pin) {
+    const partnerId = role === 'user' ? messageId + 1 : messageId - 1
+    if (partnerId > 0) ids.push(partnerId)
+  }
   try {
-    await apiFetch(`/drawer/${pin ? 'pin' : 'unpin'}`, {
+    await Promise.allSettled(ids.map(id => apiFetch(`/drawer/${pin ? 'pin' : 'unpin'}`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message_id: messageId})
-    })
+      body: JSON.stringify({message_id: id})
+    })))
     loadHistory()
   } catch (e) { /* best-effort */ }
 }
