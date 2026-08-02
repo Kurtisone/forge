@@ -91,16 +91,30 @@ TOOL_DESCRIPTIONS = {
     ),
     "web_fetch": (
         'content is a single URL, e.g. "https://example.com/page". This '
-        "tool fetches a URL you already know -- it has NO search "
-        "capability, it cannot look anything up or discover a URL for "
-        "you. Only use it when the user gives an explicit URL, or names "
-        "a specific well-known page whose exact URL you are confident "
-        'about. NEVER use it to guess a URL for "latest news", '
-        '"actualités", current events, stock prices, or anything else '
-        "you don't have a real, specific URL for -- a guessed URL will "
-        "very likely 404 or fetch the wrong page. If you don't have a "
-        "real URL, answer in chat instead and say you cannot browse or "
-        "search the web."
+        "tool fetches a URL you already know -- it does NOT search, it "
+        "cannot look anything up or discover a URL for you. Only use it "
+        "when the user gives an explicit URL, or names a specific "
+        "well-known page whose exact URL you are confident about. NEVER "
+        'guess a URL for "latest news", "actualités", current events, '
+        "stock prices, or anything else you don't have a real, specific "
+        "URL for -- a guessed URL will very likely 404 or fetch the "
+        'wrong page. If "web_search" is enabled and you don\'t have a '
+        "real URL, use that first to find one, then fetch it. If "
+        '"web_search" is not enabled, answer in chat instead and say you '
+        "cannot browse or search the web."
+    ),
+    "web_search": (
+        "content is a search query (plain text, not a URL), e.g. "
+        '"actualités bourse aujourd\'hui". Returns a ranked list of '
+        "results (title, URL, snippet) -- not full page content. Use "
+        "this when the user asks something needing current/live "
+        "information and you do NOT already have a specific URL for it "
+        '("latest news", "actualités", current events, prices, what\'s '
+        "happening with X). Do NOT use it for questions you can already "
+        "answer from general knowledge, and do NOT use it just to find "
+        "a URL for something the user already named exactly -- if they "
+        'gave you a URL or an exact well-known page, use "web_fetch" '
+        "directly instead."
     ),
 }
 
@@ -244,20 +258,19 @@ _TOOL_EXAMPLES = {
             "Fetch https://example.com/status and tell me what it says",
             '{"tool":"web_fetch","content":"https://example.com/status"}',
         ),
-        # Second, contrastive example: this tool has no search
-        # capability, and a vague request with no real URL must NOT
-        # produce a guessed one -- observed live, a guessed URL for
-        # "actualités en bourse" 404'd. Answering in chat and being
-        # honest about the lack of browsing/search is the correct
-        # response here, not a fabricated fetch.
+    ],
+    "web_search": [
+        (
+            "Cherche des informations sur le langage de programmation Zig",
+            '{"tool":"web_search","content":"langage de programmation Zig"}',
+        ),
+        # Second example: this is the case that used to be taught as a
+        # chat refusal under web_fetch (before web_search existed) --
+        # a vague request with no real URL is exactly what web_search
+        # is for, not a guessed web_fetch URL and not a chat apology.
         (
             "Quelles sont les dernières actualités en bourse ?",
-            (
-                '{"tool":"chat","content":"Je n\'ai pas de capacité de '
-                "recherche web pour trouver des actualités en direct -- "
-                "je ne peux récupérer qu'une URL précise que tu me "
-                'donnes."}'
-            ),
+            '{"tool":"web_search","content":"actualités bourse aujourd\'hui"}',
         ),
     ],
 }
@@ -329,6 +342,11 @@ _MAX_HISTORY_ENTRY = 120  # chars per entry displayed in the prompt
 # too much for an 8k-token local model's prompt budget alongside
 # everything else in it.
 _MAX_STEP_CONTEXT_FILE_ENTRY = 4000
+# A web_search result needs room for several ranked results (title +
+# URL + snippet each) to actually be useful for the model to pick
+# from -- much more than a compact history summary, though nowhere
+# near as much as a full file read.
+_MAX_STEP_CONTEXT_SEARCH_ENTRY = 1500
 
 
 def _format_history(history: list[dict] | None) -> str:
@@ -373,9 +391,11 @@ def _format_step_context(step_context: list[dict] | None) -> str:
     lines = ["\nResult from a tool you already called earlier in this turn:"]
     last_was_memory_result = False
     last_was_files_read = False
+    last_was_web_search = False
     for turn in step_context:
         content = turn.get("content", "")
         last_was_memory_result = content.startswith("[memory]")
+        last_was_web_search = content.startswith("[web_search]")
         # A files read: the "[files] " prefix, but not a write
         # confirmation/error, which both start with "[ok]"/"[error]"
         # right after that prefix.
@@ -387,9 +407,12 @@ def _format_step_context(step_context: list[dict] | None) -> str:
         # step, and _MAX_HISTORY_ENTRY (120 chars) is sized for
         # compact history summaries, not for something the model must
         # accurately rewrite. Still bounded, just far less aggressively.
-        cap = (
-            _MAX_STEP_CONTEXT_FILE_ENTRY if last_was_files_read else _MAX_HISTORY_ENTRY
-        )
+        if last_was_files_read:
+            cap = _MAX_STEP_CONTEXT_FILE_ENTRY
+        elif last_was_web_search:
+            cap = _MAX_STEP_CONTEXT_SEARCH_ENTRY
+        else:
+            cap = _MAX_HISTORY_ENTRY
         if len(content) > cap:
             content = content[:cap] + "…"
         lines.append(f"- {content}")
@@ -435,6 +458,25 @@ def _format_step_context(step_context: list[dict] | None) -> str:
             'applied>"}. Do NOT call "action":"read" again, and do NOT '
             "just answer in chat -- the user expects the actual file to "
             "be updated, not a description of what to change."
+        )
+    elif last_was_web_search:
+        # Same loop-guard reasoning as memory/files above. Unlike
+        # those two, there are genuinely two valid next steps here
+        # (answer from the snippets, or fetch one result for full
+        # detail) rather than one -- the hint states both rather than
+        # forcing a single path, since forcing "always fetch" would
+        # waste a step when the snippets already answer the question,
+        # and forcing "always answer from snippets" would give a
+        # shallow answer when the user actually needs a specific
+        # page's full content.
+        lines.append(
+            "The search results above already contain titles, URLs, and "
+            "snippets. If they already answer the question, respond now "
+            'with "tool":"chat" and answer naturally in your own words '
+            "-- do NOT call web_search again, and do NOT just list the "
+            "raw results back. If the user needs the full content of one "
+            'specific result, respond with "tool":"web_fetch" and that '
+            "result's URL instead."
         )
 
     return "\n".join(lines) + "\n"

@@ -204,3 +204,15 @@ WEB_FETCH_ALLOWED_DOMAINS: set[str] = {
     for d in os.getenv("WEB_FETCH_ALLOWED_DOMAINS", "").split(",")
     if d.strip()
 }
+
+# --- Web search tool (SearXNG) ------------------------------------------------
+# Requires a self-hosted SearXNG instance -- not a cloud search API, in
+# keeping with Forge's self-hosting posture. SearXNG must have "json" added
+# to search.formats in its own settings.yml (disabled by default upstream,
+# to discourage scraping public instances -- safe to enable on a private,
+# self-hosted one that only Forge talks to). Distinct from web_fetch: this
+# queries a search index for ranked results, it does not fetch a page whose
+# URL is already known.
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://127.0.0.1:8888")
+SEARXNG_TIMEOUT = int(os.getenv("SEARXNG_TIMEOUT", "10"))
+SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", "5"))

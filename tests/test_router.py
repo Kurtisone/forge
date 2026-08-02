@@ -478,20 +478,76 @@ def test_prompt_includes_web_fetch_description_and_examples():
     had no entry at all in TOOL_DESCRIPTIONS/_TOOL_EXAMPLES, so the
     router fell back to the generic "content is the input this tool
     expects" wording and produced malformed content (an empty/non-URL
-    string, observed as "[error] unsupported scheme: ''"). Also locks
-    in the contrastive no-search-capability example: a vague news
-    request must map to chat, not a guessed (and likely 404) URL.
+    string, observed as "[error] unsupported scheme: ''").
     """
     prompt = build_router_prompt(
         "fetch a url", available_tools=["chat", "code", "web_fetch"]
     )
     assert '"web_fetch"' in prompt
-    assert "NO search capability" in prompt
+    assert "does NOT search" in prompt
     assert "https://example.com/status" in prompt
-    assert "actualités en bourse" in prompt
-    assert '"tool":"chat"' in prompt
+
+
+def test_prompt_web_fetch_defers_to_web_search_when_both_enabled():
+    """
+    web_fetch's description must point to web_search for vague/no-URL
+    requests once web_search exists -- the old behavior (teaching a
+    chat refusal for "actualités en bourse") became actively wrong
+    once Forge gained real search capability, since it would steer
+    the router away from the tool that can now actually help.
+    """
+    prompt = build_router_prompt(
+        "actualités", available_tools=["chat", "code", "web_fetch", "web_search"]
+    )
+    assert "web_search" in prompt
+    # the vague-news example now lives under web_search, not web_fetch
+    assert "actualités bourse" in prompt
 
 
 def test_prompt_omits_web_fetch_when_not_enabled():
     prompt = build_router_prompt("fetch a url", available_tools=["chat", "code"])
     assert '"web_fetch"' not in prompt
+
+
+def test_prompt_includes_web_search_description_and_examples():
+    prompt = build_router_prompt(
+        "cherche quelque chose",
+        available_tools=["chat", "code", "web_search"],
+    )
+    assert '"web_search"' in prompt
+    assert "not a URL" in prompt
+    assert "langage de programmation Zig" in prompt
+    assert "actualités bourse" in prompt
+
+
+def test_prompt_omits_web_search_when_not_enabled():
+    prompt = build_router_prompt(
+        "cherche quelque chose", available_tools=["chat", "code"]
+    )
+    assert '"web_search"' not in prompt
+
+
+def test_prompt_steers_toward_chat_or_fetch_after_a_web_search_result():
+    step_context = [
+        {
+            "role": "assistant",
+            "content": (
+                "[web_search] Search results for 'Zig': "
+                "1. Zig homepage\n   https://ziglang.org\n   A general-purpose language."
+            ),
+        }
+    ]
+    prompt = build_router_prompt(
+        "cherche Zig",
+        available_tools=["chat", "code", "web_search", "web_fetch"],
+        step_context=step_context,
+    )
+    assert "do NOT call web_search again" in prompt
+    assert '"tool":"web_fetch"' in prompt.split("Result from a tool")[-1]
+
+
+def test_prompt_omits_web_search_steering_hint_with_no_step_context():
+    prompt = build_router_prompt(
+        "cherche Zig", available_tools=["chat", "code", "web_search"]
+    )
+    assert "do NOT call web_search again" not in prompt
