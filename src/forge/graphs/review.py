@@ -45,18 +45,37 @@ Usage (Python):
   print(run("src/forge/graph.py", test_path="tests/test_graph.py"))
 """
 
+import re
 from pathlib import Path
 
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
 from forge.logger import log
-from forge.router.parser import parse_router_output
 from forge.tools import test as test_tool
 from forge.types import AgentState
 
 _MAX_FILE_CHARS = 8_000
 _MAX_TEST_OUTPUT_CHARS = 3_000
+
+# A ceiling on how much of a degenerate/garbage response to show,
+# mirroring router/parser.py's _MAX_FALLBACK_CHARS -- kept as a
+# separate constant since review responses are naturally longer than
+# a router tool decision and shouldn't share the same cap.
+_MAX_REVIEW_OUTPUT_CHARS = 4_000
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+# Deliberately duplicated from router/parser.py's _PROMPT_LEAK_MARKERS
+# rather than imported -- same reasoning as TOOL_DESCRIPTIONS in
+# router/prompt.py: these are underscore-private symbols in a
+# different module, and this list only needs to stay in sync with
+# what THIS prompt (_REVIEW_PROMPT below) could plausibly leak, not
+# with the router's own prompt template.
+_PROMPT_LEAK_MARKERS = [
+    "Respond in plain text (no JSON)",
+    "Be concise and specific",
+]
 
 _REVIEW_PROMPT = """/no_think
 You are a code reviewer. Analyse the file below and provide clear,
@@ -80,6 +99,47 @@ _TEST_SECTION_TEMPLATE = """
 {test_output}
 --- end of test output ---
 """
+
+
+def _clean_review_response(raw: str) -> str:
+    """
+    Clean the review LLM's plain-text answer.
+
+    Deliberately NOT run through router.parser's JSON-extraction
+    cascade: that parser exists to pull a {"tool":...,"content":...}
+    decision out of router output, and the review prompt explicitly
+    asks for plain text, no JSON. Reusing it here misfired in
+    practice -- a small model heavily fine-tuned on the router's JSON
+    habit sometimes answers a review prompt with a degenerate JSON
+    echo instead of real analysis (e.g.
+    {"tool":"chat","content":"hello.go"}), and the router parser
+    dutifully "succeeds" at extracting that content as if it were the
+    real answer -- silently discarding everything else and producing
+    a tiny, plausible-looking but meaningless result. Observed live:
+    an 8-character output that was just the reviewed file's name.
+
+    Only <think> blocks and a leaked-prompt echo are stripped here.
+    A stray JSON blob, if the model still produces one, is shown
+    as-is rather than parsed and unwrapped -- a visibly wrong
+    response is more useful than one that's silently and confidently
+    truncated to something that happens to look like a valid short
+    answer.
+    """
+    cleaned = _THINK_BLOCK.sub("", raw).strip()
+
+    if any(marker in cleaned for marker in _PROMPT_LEAK_MARKERS):
+        log.warning("review: model echoed prompt instructions instead of answering")
+        return "[error] Le modèle n'a pas généré de réponse exploitable. Réessayez."
+
+    if not cleaned:
+        log.warning("review: model returned an empty response")
+        return "[error] Le modèle n'a pas généré de réponse. Réessayez."
+
+    if len(cleaned) > _MAX_REVIEW_OUTPUT_CHARS:
+        cleaned = cleaned[:_MAX_REVIEW_OUTPUT_CHARS].rstrip() + "…"
+        log.warning("review response truncated to %d chars", _MAX_REVIEW_OUTPUT_CHARS)
+
+    return cleaned
 
 
 def _read_file_node(state: AgentState) -> AgentState:
@@ -165,10 +225,13 @@ def _llm_review_node(state: AgentState) -> AgentState:
         state.final_output = f"[error] LLM unavailable: {e}"
         return state
 
-    # The prompt asks for plain text, but if the model wraps in JSON,
-    # parse_router_output extracts the content cleanly.
-    decision = parse_router_output(raw)
-    state.final_output = decision.content
+    # Logged unconditionally (mirrors orchestrator.py's
+    # router.raw_output) -- this call previously had no raw-output
+    # visibility at all, which made the JSON-habit bug above
+    # impossible to confirm from logs alone the first time it happened.
+    log.event("review.raw_output", raw=raw)
+
+    state.final_output = _clean_review_response(raw)
     state.final_tool = "review"
     log.event("review.done", chars=len(state.final_output))
     return state

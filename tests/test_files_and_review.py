@@ -231,6 +231,86 @@ def test_review_provider_failure(tmp_path, monkeypatch):
     assert "LLM unavailable" in state.final_output
 
 
+def test_review_shows_degenerate_json_echo_instead_of_silently_truncating(
+    tmp_path, monkeypatch
+):
+    """
+    Regression test for the exact bug hit in production use: a small
+    model heavily fine-tuned on the router's JSON habit answered a
+    review prompt (explicitly asking for plain text) with a
+    degenerate JSON echo instead of real analysis. The old
+    implementation reused router.parser.parse_router_output on this
+    output, which dutifully "succeeded" at extracting {"content"} as
+    if it were the real answer -- silently producing an 8-character
+    result that was just the reviewed file's name, no visible sign
+    anything had gone wrong.
+
+    The fix shows the raw (cleaned) text as-is instead of unwrapping
+    it as JSON, so a degenerate response is visibly wrong rather than
+    silently truncated to something that happens to look valid.
+    """
+    src_file = tmp_path / "hello.go"
+    src_file.write_text("package main")
+
+    degenerate_raw = '{"tool":"chat","content":"hello.go"}'
+    monkeypatch.setattr(review_mod, "call_llm", lambda p: degenerate_raw)
+
+    state = build_review().run(
+        str(src_file),
+        initial_context={"file_path": str(src_file)},
+    )
+
+    assert state.ok
+    # The full degenerate JSON is visible, not silently unwrapped to
+    # just "hello.go" -- a human reading this immediately sees
+    # something went wrong, instead of mistaking it for a real answer.
+    assert state.final_output == degenerate_raw
+    assert state.final_output != "hello.go"
+
+
+def test_review_strips_think_blocks_from_response(tmp_path, monkeypatch):
+    src_file = tmp_path / "f.py"
+    src_file.write_text("x = 1")
+
+    monkeypatch.setattr(
+        review_mod,
+        "call_llm",
+        lambda p: "<think>reasoning about the code...</think>Looks fine overall.",
+    )
+
+    state = build_review().run(
+        str(src_file),
+        initial_context={"file_path": str(src_file)},
+    )
+
+    assert state.final_output == "Looks fine overall."
+
+
+def test_review_long_response_is_not_capped_at_400_chars(tmp_path, monkeypatch):
+    """
+    Regression test: routing plain-text review answers through
+    router.parser.parse_router_output meant every review response
+    over 400 chars (_MAX_FALLBACK_CHARS, sized for router tool
+    decisions, not analysis prose) was silently truncated -- a
+    perfectly legitimate multi-paragraph review would get cut off
+    mid-sentence. The dedicated review cleaner has its own, much
+    higher ceiling (_MAX_REVIEW_OUTPUT_CHARS = 4000).
+    """
+    src_file = tmp_path / "f.py"
+    src_file.write_text("x = 1")
+
+    long_answer = "This is a detailed review point. " * 20  # ~700 chars
+    assert len(long_answer) > 400
+    monkeypatch.setattr(review_mod, "call_llm", lambda p: long_answer)
+
+    state = build_review().run(
+        str(src_file),
+        initial_context={"file_path": str(src_file)},
+    )
+
+    assert state.final_output == long_answer.strip()
+
+
 def test_review_with_test_path_runs_tests_first(tmp_path, monkeypatch):
     import forge.tools.test as test_tool_mod
 
