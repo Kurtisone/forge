@@ -89,6 +89,19 @@ TOOL_DESCRIPTIONS = {
         "alone does not mean review, only when paired with a request for "
         "feedback."
     ),
+    "web_fetch": (
+        'content is a single URL, e.g. "https://example.com/page". This '
+        "tool fetches a URL you already know -- it has NO search "
+        "capability, it cannot look anything up or discover a URL for "
+        "you. Only use it when the user gives an explicit URL, or names "
+        "a specific well-known page whose exact URL you are confident "
+        'about. NEVER use it to guess a URL for "latest news", '
+        '"actualités", current events, stock prices, or anything else '
+        "you don't have a real, specific URL for -- a guessed URL will "
+        "very likely 404 or fetch the wrong page. If you don't have a "
+        "real URL, answer in chat instead and say you cannot browse or "
+        "search the web."
+    ),
 }
 
 # One worked example per tool, shown only if that tool is enabled.
@@ -223,6 +236,27 @@ _TOOL_EXAMPLES = {
                 '{"tool":"review","content":"{\\"file_path\\":'
                 '\\"src/forge/graph.py\\",\\"test_path\\":'
                 '\\"tests/test_graph.py\\"}"}'
+            ),
+        ),
+    ],
+    "web_fetch": [
+        (
+            "Fetch https://example.com/status and tell me what it says",
+            '{"tool":"web_fetch","content":"https://example.com/status"}',
+        ),
+        # Second, contrastive example: this tool has no search
+        # capability, and a vague request with no real URL must NOT
+        # produce a guessed one -- observed live, a guessed URL for
+        # "actualités en bourse" 404'd. Answering in chat and being
+        # honest about the lack of browsing/search is the correct
+        # response here, not a fabricated fetch.
+        (
+            "Quelles sont les dernières actualités en bourse ?",
+            (
+                '{"tool":"chat","content":"Je n\'ai pas de capacité de '
+                "recherche web pour trouver des actualités en direct -- "
+                "je ne peux récupérer qu'une URL précise que tu me "
+                'donnes."}'
             ),
         ),
     ],

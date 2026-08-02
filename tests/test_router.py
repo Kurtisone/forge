@@ -470,3 +470,28 @@ def test_prompt_disambiguates_bare_relis_from_review_with_opinion():
     # review's example must pair the same verb with an explicit
     # request for feedback, not stand alone
     assert "et me donner ton avis" in prompt or "donne ton avis" in prompt
+
+
+def test_prompt_includes_web_fetch_description_and_examples():
+    """
+    Regression test for a real gap hit in production use: web_fetch
+    had no entry at all in TOOL_DESCRIPTIONS/_TOOL_EXAMPLES, so the
+    router fell back to the generic "content is the input this tool
+    expects" wording and produced malformed content (an empty/non-URL
+    string, observed as "[error] unsupported scheme: ''"). Also locks
+    in the contrastive no-search-capability example: a vague news
+    request must map to chat, not a guessed (and likely 404) URL.
+    """
+    prompt = build_router_prompt(
+        "fetch a url", available_tools=["chat", "code", "web_fetch"]
+    )
+    assert '"web_fetch"' in prompt
+    assert "NO search capability" in prompt
+    assert "https://example.com/status" in prompt
+    assert "actualités en bourse" in prompt
+    assert '"tool":"chat"' in prompt
+
+
+def test_prompt_omits_web_fetch_when_not_enabled():
+    prompt = build_router_prompt("fetch a url", available_tools=["chat", "code"])
+    assert '"web_fetch"' not in prompt
