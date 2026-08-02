@@ -446,3 +446,27 @@ def test_prompt_review_examples_json_is_well_formed():
             outer = json.loads(line.strip().rstrip(","))
             inner = json.loads(outer["content"])
             assert "file_path" in inner
+
+
+def test_prompt_disambiguates_bare_relis_from_review_with_opinion():
+    """
+    Regression test for the exact ambiguity hit in production use:
+    review's own first worked example used to be a bare "relire X"
+    with no request for feedback, which taught the model that the
+    verb alone means review -- directly conflicting with files' own
+    "relis X" -> read example. Both tools' examples must now anchor
+    the same verb to different tools based on whether an opinion is
+    requested, not just to the presence of "relis"/"relire".
+    """
+    prompt = build_router_prompt(
+        "relis quelque chose",
+        available_tools=["chat", "code", "files", "review"],
+    )
+    # files' bare-read example must be present, unqualified by any
+    # opinion request
+    assert '"tool":"files"' in prompt
+    assert "Relis hello.go" in prompt
+
+    # review's example must pair the same verb with an explicit
+    # request for feedback, not stand alone
+    assert "et me donner ton avis" in prompt or "donne ton avis" in prompt

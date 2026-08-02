@@ -41,8 +41,11 @@ TOOL_DESCRIPTIONS = {
         "content is a JSON string describing ONE file operation: "
         '{"action":"read","path":"..."} or '
         '{"action":"write","path":"...","content":"..."} or '
-        '{"action":"list","path":"..."}. Only use this when the user '
-        "explicitly asks to read, write, or list a file."
+        '{"action":"list","path":"..."}. Use "read" when the user just '
+        'wants to see/read a file\'s raw content -- "lis X", "relis X", '
+        '"montre-moi X" with no request for an opinion or analysis. Only '
+        "use this when the user explicitly asks to read, write, or list a "
+        "file."
     ),
     "shell": (
         'content is a single shell command, e.g. "ls -la" or '
@@ -78,9 +81,13 @@ TOOL_DESCRIPTIONS = {
         '"question" and "test_path" are optional. Set "test_path" when the '
         "user also wants that file's tests run first, so the review can "
         "use the test output as evidence. Only use this when the user "
-        "explicitly asks you to review, critique, check, or look over a "
-        "file -- not for casual questions about code in general, and not "
-        'for "files":"read" requests that just want the raw content shown.'
+        "explicitly asks for an OPINION or ANALYSIS of a file -- "
+        '"relis X et donne ton avis", "qu\'en penses-tu", "vérifie que X '
+        'est correct", "critique ce fichier". If the user just says "lis '
+        'X" / "relis X" / "montre-moi X" with no request for an opinion, '
+        'that is "files":"read", NOT review -- the verb "lire"/"relire" '
+        "alone does not mean review, only when paired with a request for "
+        "feedback."
     ),
 }
 
@@ -140,6 +147,18 @@ _TOOL_EXAMPLES = {
                 '\\"path\\":\\"hello.go\\"}","done":false}'
             ),
         ),
+        # Fourth example: disambiguates from "review" below. A bare
+        # "relis X" with no request for an opinion is just a read --
+        # observed live, this specific phrasing ("Relis <file>") was
+        # inconsistently routed to review or files depending on
+        # unrelated conversation history, because review's own first
+        # example (below) used to be this exact same bare phrasing.
+        # Both tools' examples now anchor the same verb to different
+        # tools based on whether feedback is requested.
+        (
+            "Relis hello.go",
+            '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"hello.go\\"}"}',
+        ),
     ],
     "shell": [
         ("List the files here", '{"tool":"shell","content":"ls -la"}'),
@@ -179,8 +198,16 @@ _TOOL_EXAMPLES = {
         ),
     ],
     "review": [
+        # First example deliberately pairs "relire" with an explicit
+        # request for feedback ("et donne-moi ton avis"), not the bare
+        # verb alone -- this used to be just "Peux-tu relire X ?" with
+        # no opinion request, which taught the model that "relire"
+        # alone means review. That directly conflicted with files'
+        # own "Relis X" -> read example (added above after this was
+        # observed live: the same bare phrasing routed inconsistently
+        # between the two tools depending on unrelated history).
         (
-            "Peux-tu relire src/forge/graph.py ?",
+            "Peux-tu relire src/forge/graph.py et me donner ton avis ?",
             (
                 '{"tool":"review","content":"{\\"file_path\\":'
                 '\\"src/forge/graph.py\\"}"}'
