@@ -520,6 +520,25 @@ def test_prompt_includes_web_search_description_and_examples():
     assert "actualités bourse" in prompt
 
 
+def test_prompt_web_search_examples_use_done_false():
+    """
+    Regression test for a real bug hit in production use: without
+    "done":false on the initial web_search call, the orchestrator
+    treated the search itself as the complete answer and returned the
+    raw results list verbatim to the user instead of ever reaching a
+    synthesis/fetch step. Both worked examples must demonstrate this,
+    same as memory's "recall" action already does.
+    """
+    prompt = build_router_prompt(
+        "cherche quelque chose",
+        available_tools=["chat", "code", "web_search"],
+    )
+    web_search_block = prompt[prompt.find("Examples:") :]
+    for line in web_search_block.splitlines():
+        if '"tool":"web_search"' in line:
+            assert '"done":false' in line, f"missing done:false in: {line}"
+
+
 def test_prompt_omits_web_search_when_not_enabled():
     prompt = build_router_prompt(
         "cherche quelque chose", available_tools=["chat", "code"]

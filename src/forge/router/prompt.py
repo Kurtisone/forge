@@ -260,9 +260,21 @@ _TOOL_EXAMPLES = {
         ),
     ],
     "web_search": [
+        # Both examples end with "done":false -- a real bug hit in
+        # production without this: the orchestrator treated the
+        # search itself as the complete answer and returned the raw
+        # results list to the user verbatim, since nothing told it
+        # another step was needed. Same fix as memory's "recall"
+        # action: search results are raw material for an answer, not
+        # the answer -- the step_context steering hint (below in this
+        # file) only ever gets a chance to fire on the SECOND step,
+        # which never happened without this.
         (
             "Cherche des informations sur le langage de programmation Zig",
-            '{"tool":"web_search","content":"langage de programmation Zig"}',
+            (
+                '{"tool":"web_search","content":"langage de programmation '
+                'Zig","done":false}'
+            ),
         ),
         # Second example: this is the case that used to be taught as a
         # chat refusal under web_fetch (before web_search existed) --
@@ -270,7 +282,10 @@ _TOOL_EXAMPLES = {
         # is for, not a guessed web_fetch URL and not a chat apology.
         (
             "Quelles sont les dernières actualités en bourse ?",
-            '{"tool":"web_search","content":"actualités bourse aujourd\'hui"}',
+            (
+                '{"tool":"web_search","content":"actualités bourse '
+                'aujourd\'hui","done":false}'
+            ),
         ),
     ],
 }
