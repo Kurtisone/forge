@@ -2,3 +2,4 @@ pytest
 ruff
 httpx
 requests-mock
+httpx2
