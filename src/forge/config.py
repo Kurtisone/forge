@@ -117,6 +117,19 @@ SHELL_ALLOWED_COMMANDS: set[str] = {
     if c.strip()
 }
 
+# --- Test/lint tool ----------------------------------------------------------
+# Separate from SHELL_ALLOWED_COMMANDS on purpose: the test tool has its own
+# narrower allowlist so "run the tests" / "lint this" stay first-class router
+# intents with a purpose-built safety boundary, independent of whatever the
+# general shell tool happens to allow.
+TEST_TIMEOUT = int(os.getenv("TEST_TIMEOUT", "60"))
+_default_test_cmds = "pytest,ruff"
+TEST_ALLOWED_COMMANDS: set[str] = {
+    c.strip()
+    for c in os.getenv("TEST_ALLOWED_COMMANDS", _default_test_cmds).split(",")
+    if c.strip()
+}
+
 # --- Tool allowlist ---------------------------------------------------------# A module exposing run() in src/forge/tools/ is NOT dispatchable just
 # because it exists. It must also be explicitly listed here. This is
 # the guard that matters once files.py / git.py / shell.py stop being
