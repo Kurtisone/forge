@@ -212,6 +212,55 @@ def test_review_provider_failure(tmp_path, monkeypatch):
     assert "LLM unavailable" in state.final_output
 
 
+def test_review_with_test_path_runs_tests_first(tmp_path, monkeypatch):
+    import forge.tools.test as test_tool_mod
+
+    src_file = tmp_path / "add.py"
+    src_file.write_text("def add(a, b):\n    return a + b\n")
+
+    monkeypatch.setattr(test_tool_mod, "run", lambda cmd: "2 passed")
+    captured_prompt = {}
+
+    def fake_call_llm(prompt):
+        captured_prompt["prompt"] = prompt
+        return "Looks correct, tests pass."
+
+    monkeypatch.setattr(review_mod, "call_llm", fake_call_llm)
+
+    state = build_review().run(
+        str(src_file),
+        initial_context={
+            "file_path": str(src_file),
+            "test_path": "tests/test_add.py",
+        },
+    )
+
+    assert state.ok
+    assert "Looks correct" in state.final_output
+    # 3 steps this time: read_file -> run_tests -> llm_review
+    assert state.steps_taken == 3
+    assert "2 passed" in captured_prompt["prompt"]
+
+
+def test_review_without_test_path_skips_run_tests_node(tmp_path, monkeypatch):
+    """No test_path -- behaves exactly like the pre-merge 2-step graph,
+    run_tests is never visited."""
+    src_file = tmp_path / "f.py"
+    src_file.write_text("x = 1")
+
+    monkeypatch.setattr(review_mod, "call_llm", lambda p: "ok")
+
+    state = build_review().run(
+        str(src_file),
+        initial_context={"file_path": str(src_file)},
+    )
+
+    assert state.ok
+    assert state.steps_taken == 2
+    node_names = [t.decision_tool for t in state.trace]
+    assert "run_tests" not in node_names
+
+
 # -------------------------------------------------------------------
 # initial_context flows through graph
 # -------------------------------------------------------------------

@@ -72,6 +72,16 @@ TOOL_DESCRIPTIONS = {
         'to phrase them as a natural reply to the user. For "remember", '
         '"done": false is optional; a short confirmation is usually enough.'
     ),
+    "review": (
+        "content is a JSON string describing a file review: "
+        '{"file_path":"...","question":"...","test_path":"..."}. '
+        '"question" and "test_path" are optional. Set "test_path" when the '
+        "user also wants that file's tests run first, so the review can "
+        "use the test output as evidence. Only use this when the user "
+        "explicitly asks you to review, critique, check, or look over a "
+        "file -- not for casual questions about code in general, and not "
+        'for "files":"read" requests that just want the raw content shown.'
+    ),
 }
 
 # One worked example per tool, shown only if that tool is enabled.
@@ -165,6 +175,27 @@ _TOOL_EXAMPLES = {
             (
                 '{"tool":"memory","content":"{\\"action\\":\\"recall\\",'
                 '\\"query\\":\\"matériel équipement\\"}","done":false}'
+            ),
+        ),
+    ],
+    "review": [
+        (
+            "Peux-tu relire src/forge/graph.py ?",
+            (
+                '{"tool":"review","content":"{\\"file_path\\":'
+                '\\"src/forge/graph.py\\"}"}'
+            ),
+        ),
+        # Second example: with test_path set, the review graph runs
+        # that file's tests first and uses the output as evidence --
+        # the model needs to see the field used, not just read about
+        # it in the description above.
+        (
+            "Relis src/forge/graph.py et lance ses tests dans tests/test_graph.py",
+            (
+                '{"tool":"review","content":"{\\"file_path\\":'
+                '\\"src/forge/graph.py\\",\\"test_path\\":'
+                '\\"tests/test_graph.py\\"}"}'
             ),
         ),
     ],

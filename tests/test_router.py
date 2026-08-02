@@ -409,3 +409,40 @@ def test_plain_text_answer_is_not_flagged_as_fallback():
     decision = parse_router_output("Bien sûr, voici la réponse à votre question.")
     assert decision.is_fallback is False
     assert "Bien sûr" in decision.content
+
+
+def test_prompt_includes_review_description_when_enabled():
+    prompt = build_router_prompt(
+        "relis ce fichier", available_tools=["chat", "code", "review"]
+    )
+    assert '"review"' in prompt
+    assert "file_path" in prompt
+
+
+def test_prompt_omits_review_when_not_enabled():
+    prompt = build_router_prompt("relis ce fichier", available_tools=["chat", "code"])
+    assert '"review"' not in prompt
+
+
+def test_prompt_includes_review_test_path_example():
+    """Regression-style: without a worked example showing test_path,
+    a small local model only ever sees file_path and never combines a
+    review with running that file's tests, even when explicitly asked
+    to."""
+    prompt = build_router_prompt(
+        "relis ce fichier et ses tests", available_tools=["chat", "code", "review"]
+    )
+    assert '\\"test_path\\"' in prompt
+
+
+def test_prompt_review_examples_json_is_well_formed():
+    import json
+
+    prompt = build_router_prompt(
+        "relis ce fichier", available_tools=["chat", "code", "review"]
+    )
+    for line in prompt.splitlines():
+        if '"tool":"review"' in line and line.strip().startswith("{"):
+            outer = json.loads(line.strip().rstrip(","))
+            inner = json.loads(outer["content"])
+            assert "file_path" in inner
