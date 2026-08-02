@@ -185,8 +185,20 @@ RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")
 # regardless of this allowlist. This matters specifically because Forge
 # itself sits on a home network (NiPoGi behind WireGuard) that a
 # router-hallucinated URL must never be able to reach.
+#
+# Known limitation, not fixed by raising this value alone: heavy
+# corporate portals (observed live: boursorama.com) often wrap large
+# navigation megamenus in generic <div>s instead of semantic
+# <nav>/<header>/<footer>/<aside>, which tools/web_fetch.py's
+# extractor skips by tag name only -- real content on such sites can
+# still be pushed far down past a lot of noise. A real "main content"
+# heuristic (à la Readability/trafilatura) would need a new
+# dependency, which this tool deliberately avoids -- see
+# tools/web_fetch.py's module docstring. web_fetch stays best-effort
+# on non-semantic sites; it's reliable on simpler/standards-compliant
+# pages (docs, articles, wikis).
 WEB_FETCH_TIMEOUT = int(os.getenv("WEB_FETCH_TIMEOUT", "15"))
-WEB_FETCH_MAX_BYTES = int(os.getenv("WEB_FETCH_MAX_BYTES", str(512 * 1024)))
+WEB_FETCH_MAX_BYTES = int(os.getenv("WEB_FETCH_MAX_BYTES", str(2 * 1024 * 1024)))
 WEB_FETCH_ALLOWED_DOMAINS: set[str] = {
     d.strip().lower()
     for d in os.getenv("WEB_FETCH_ALLOWED_DOMAINS", "").split(",")
