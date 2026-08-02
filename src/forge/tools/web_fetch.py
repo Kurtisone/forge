@@ -55,7 +55,22 @@ _REDIRECT_CODES = {301, 302, 303, 307, 308}
 class _TextExtractor(HTMLParser):
     """Minimal HTML-to-text extractor -- stdlib only, no new dependency."""
 
-    _SKIP_TAGS: ClassVar[set[str]] = {"script", "style", "noscript", "head"}
+    # nav/header/footer/aside are the semantic tags real sites use for
+    # menus, sidebars, and language pickers -- observed live on a
+    # Wikipedia fetch: without skipping these, the output was almost
+    # entirely navigation chrome (179-language list, sidebar menu)
+    # with the actual article content pushed past the output cap
+    # before it ever appeared.
+    _SKIP_TAGS: ClassVar[set[str]] = {
+        "script",
+        "style",
+        "noscript",
+        "head",
+        "nav",
+        "header",
+        "footer",
+        "aside",
+    }
 
     def __init__(self):
         super().__init__()

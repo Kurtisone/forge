@@ -100,6 +100,41 @@ def test_strips_html_tags(requests_mock):
     assert "<" not in r
 
 
+def test_strips_nav_header_footer_chrome(requests_mock):
+    """
+    Regression test for a real fetch (Wikipedia): without skipping
+    nav/header/footer/aside, a page's navigation chrome (menu,
+    language list, sidebar) dominated the output and pushed the
+    actual article content past the char cap before it ever
+    appeared. script/style/noscript/head alone weren't enough --
+    real sites put their non-content chrome in semantic nav/header/
+    footer/aside tags.
+    """
+    html = (
+        "<html><body>"
+        "<nav>Main page | Contents | Random article | 179 languages</nav>"
+        "<header>Site header stuff</header>"
+        "<article><h1>Real Title</h1><p>The actual useful content.</p></article>"
+        "<aside>Related links sidebar</aside>"
+        "<footer>Copyright footer text</footer>"
+        "</body></html>"
+    )
+    with patch("socket.getaddrinfo", return_value=_fake_addrinfo("93.184.216.34")):
+        requests_mock.get(
+            "https://example.com/article",
+            text=html,
+            headers={"Content-Type": "text/html"},
+        )
+        r = web_fetch_mod.run("https://example.com/article")
+
+    assert "Real Title" in r
+    assert "The actual useful content" in r
+    assert "179 languages" not in r
+    assert "Site header stuff" not in r
+    assert "Related links sidebar" not in r
+    assert "Copyright footer text" not in r
+
+
 def test_rejects_unsupported_content_type(requests_mock):
     with patch("socket.getaddrinfo", return_value=_fake_addrinfo("93.184.216.34")):
         requests_mock.get(
