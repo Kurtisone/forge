@@ -139,6 +139,25 @@ def test_files_traversal_blocked(tmp_path, monkeypatch):
     assert "permission" in r.lower()
 
 
+def test_files_leading_slash_means_workspace_root(tmp_path, monkeypatch):
+    """Regression test: a router-emitted '/hello.go' used to be
+    rejected as 'escaping the workspace' (a pathlib join with an
+    absolute right-hand side silently discards the workspace prefix,
+    so the traversal check correctly but unhelpfully rejected it) even
+    though 'hello.go' worked fine and both should mean the same file
+    at the workspace root -- observed live: the router chose 'files'
+    for the same request with and without a leading slash and only
+    one of the two worked."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    files_mod.run(
+        json.dumps({"action": "write", "path": "hello.go", "content": "package main"})
+    )
+    r = files_mod.run(json.dumps({"action": "read", "path": "/hello.go"}))
+    assert r == "package main"
+
+
 def test_files_read_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
