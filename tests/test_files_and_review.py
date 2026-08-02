@@ -268,6 +268,54 @@ def test_review_shows_degenerate_json_echo_instead_of_silently_truncating(
     assert state.final_output != "hello.go"
 
 
+def test_review_unwraps_substantive_json_wrapped_answer(tmp_path, monkeypatch):
+    """
+    Regression test for the second real occurrence: the model kept
+    wrapping its answer in router-style JSON even after the prompt
+    fix (previous commit), but this time the wrapped 'content' was a
+    genuine multi-sentence review, not a degenerate echo. Unlike the
+    degenerate case, this should be unwrapped to clean prose -- the
+    threshold (>= 8 words or >= 40 chars) is what tells the two
+    apart.
+    """
+    src_file = tmp_path / "hello.go"
+    src_file.write_text("package main")
+
+    substantive_wrapped = (
+        '{ "tool": "chat", "content": "The code is correct and follows Go '
+        "best practices. It is a minimal, idiomatic implementation of the "
+        "Hello World program. There are no performance, security, or "
+        'correctness issues to address." }'
+    )
+    monkeypatch.setattr(review_mod, "call_llm", lambda p: substantive_wrapped)
+
+    state = build_review().run(
+        str(src_file),
+        initial_context={"file_path": str(src_file)},
+    )
+
+    assert state.final_output.startswith("The code is correct")
+    assert '"tool"' not in state.final_output
+
+
+def test_review_does_not_unwrap_degenerate_short_json_content(tmp_path, monkeypatch):
+    """Companion to the unwrap test above: a short, word-poor 'content'
+    (the original bug's exact shape) must NOT be unwrapped -- it's not
+    trustworthy as a real answer, so the raw JSON stays visible."""
+    src_file = tmp_path / "hello.go"
+    src_file.write_text("package main")
+
+    degenerate_wrapped = '{"tool":"chat","content":"hello.go"}'
+    monkeypatch.setattr(review_mod, "call_llm", lambda p: degenerate_wrapped)
+
+    state = build_review().run(
+        str(src_file),
+        initial_context={"file_path": str(src_file)},
+    )
+
+    assert state.final_output == degenerate_wrapped
+
+
 def test_review_prompt_includes_json_warning_and_worked_example():
     """
     Locks in the fix for the degenerate-JSON-echo bug at the prompt

@@ -45,6 +45,7 @@ Usage (Python):
   print(run("src/forge/graph.py", test_path="tests/test_graph.py"))
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -136,13 +137,26 @@ def _clean_review_response(raw: str) -> str:
     an 8-character output that was just the reviewed file's name.
 
     Only <think> blocks and a leaked-prompt echo are stripped here.
-    A stray JSON blob, if the model still produces one, is shown
-    as-is rather than parsed and unwrapped -- a visibly wrong
-    response is more useful than one that's silently and confidently
-    truncated to something that happens to look like a valid short
-    answer.
+
+    One exception, added after a second real occurrence: if the ENTIRE
+    cleaned response is a JSON object shaped like the router's
+    {"tool":...,"content":"..."} decision, the "content" field is
+    unwrapped and used IF it looks like a substantive answer (>= 8
+    words or >= 40 chars) -- calibrated against two real cases: a
+    degenerate echo whose "content" was just the reviewed file's name
+    (1 word, 8 chars, clearly not a review) versus a case where the
+    model wrote a genuine multi-sentence review but still wrapped it
+    in the JSON shape despite the prompt's explicit example telling it
+    not to. A short/word-poor "content" is NOT trusted and the raw
+    JSON is shown as-is instead -- a visibly wrong response beats one
+    that's silently and confidently truncated to something that
+    happens to look like a valid short answer.
     """
     cleaned = _THINK_BLOCK.sub("", raw).strip()
+
+    unwrapped = _try_unwrap_router_json(cleaned)
+    if unwrapped is not None:
+        cleaned = unwrapped
 
     if any(marker in cleaned for marker in _PROMPT_LEAK_MARKERS):
         log.warning("review: model echoed prompt instructions instead of answering")
@@ -157,6 +171,48 @@ def _clean_review_response(raw: str) -> str:
         log.warning("review response truncated to %d chars", _MAX_REVIEW_OUTPUT_CHARS)
 
     return cleaned
+
+
+_MIN_UNWRAPPED_WORDS = 8
+_MIN_UNWRAPPED_CHARS = 40
+
+
+def _try_unwrap_router_json(cleaned: str) -> str | None:
+    """
+    If *cleaned* is exactly a {"tool":...,"content":"..."} object (the
+    router's decision shape) and "content" looks like a substantive
+    answer, return the unwrapped content. Otherwise return None,
+    leaving the caller to show the raw text as-is -- see
+    _clean_review_response's docstring for the calibration behind the
+    substantive/degenerate threshold.
+    """
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(data, dict) or "content" not in data:
+        return None
+
+    content = data.get("content")
+    if not isinstance(content, str):
+        return None
+
+    word_count = len(content.split())
+    if word_count >= _MIN_UNWRAPPED_WORDS or len(content) >= _MIN_UNWRAPPED_CHARS:
+        log.warning(
+            "review: model wrapped a substantive answer in router-style JSON "
+            "(%d words) despite instructions -- unwrapped it",
+            word_count,
+        )
+        return content.strip()
+
+    log.warning(
+        "review: model answered with degenerate JSON-wrapped content %r -- "
+        "not trusted as a real answer, showing raw",
+        content,
+    )
+    return None
 
 
 def _read_file_node(state: AgentState) -> AgentState:
