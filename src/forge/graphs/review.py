@@ -73,8 +73,10 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 # what THIS prompt (_REVIEW_PROMPT below) could plausibly leak, not
 # with the router's own prompt template.
 _PROMPT_LEAK_MARKERS = [
-    "Respond in plain text (no JSON)",
+    "Respond in plain text",
     "Be concise and specific",
+    "GOOD ANSWER:",
+    "NEVER DO THIS",
 ]
 
 _REVIEW_PROMPT = """/no_think
@@ -91,7 +93,22 @@ Question: {question}
 {content}
 --- end of file ---
 {test_section}
-Respond in plain text (no JSON). Be concise and specific.
+Respond in plain text ONLY. Do NOT wrap your answer in JSON, and do
+NOT return a {{"tool":...,"content":...}} object -- that format is
+for a different system (a routing decision) and never applies here.
+Just write your review directly, as a person would speak it.
+
+Example of the expected format, for a small unrelated function:
+GOOD ANSWER: The function works but has no input validation -- a
+negative value for n would produce an incorrect result. Consider
+adding a check at the top and raising ValueError. Naming and
+structure are otherwise clear.
+NEVER DO THIS: {{"tool":"chat","content":"..."}}
+NEVER DO THIS EITHER: {{"tool":"code","content":"..."}}
+
+Now write your own review of the file above, in the same plain
+format as GOOD ANSWER -- not the NEVER DO THIS shapes. Be concise
+and specific.
 """
 
 _TEST_SECTION_TEMPLATE = """

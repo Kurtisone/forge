@@ -268,6 +268,24 @@ def test_review_shows_degenerate_json_echo_instead_of_silently_truncating(
     assert state.final_output != "hello.go"
 
 
+def test_review_prompt_includes_json_warning_and_worked_example():
+    """
+    Locks in the fix for the degenerate-JSON-echo bug at the prompt
+    level, not just the response-cleaning level: the prompt must show
+    the model a concrete GOOD ANSWER and explicitly labeled
+    NEVER DO THIS shapes, not just an abstract 'no JSON' instruction
+    -- an instruction alone was already in the prompt before this bug
+    was hit in production and did not prevent it.
+    """
+    prompt = review_mod._REVIEW_PROMPT.format(
+        filename="f.py", question="Q?", content="x=1", test_section=""
+    )
+    assert "GOOD ANSWER" in prompt
+    assert "NEVER DO THIS" in prompt
+    assert '{"tool":"chat"' in prompt
+    assert '{"tool":"code"' in prompt
+
+
 def test_review_strips_think_blocks_from_response(tmp_path, monkeypatch):
     src_file = tmp_path / "f.py"
     src_file.write_text("x = 1")
