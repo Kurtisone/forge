@@ -177,3 +177,18 @@ EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://127.0.0.1:8082/embedding")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 EMBEDDING_TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT", "30"))
 RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")
+
+# --- Web fetch tool ----------------------------------------------------------
+# WEB_FETCH_ALLOWED_DOMAINS is empty by default (any public domain is
+# fetchable) -- the SSRF guard in tools/web_fetch.py (blocking private/
+# loopback/link-local resolved IPs) is NOT configurable and always applies,
+# regardless of this allowlist. This matters specifically because Forge
+# itself sits on a home network (NiPoGi behind WireGuard) that a
+# router-hallucinated URL must never be able to reach.
+WEB_FETCH_TIMEOUT = int(os.getenv("WEB_FETCH_TIMEOUT", "15"))
+WEB_FETCH_MAX_BYTES = int(os.getenv("WEB_FETCH_MAX_BYTES", str(512 * 1024)))
+WEB_FETCH_ALLOWED_DOMAINS: set[str] = {
+    d.strip().lower()
+    for d in os.getenv("WEB_FETCH_ALLOWED_DOMAINS", "").split(",")
+    if d.strip()
+}
