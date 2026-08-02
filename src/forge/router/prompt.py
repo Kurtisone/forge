@@ -475,23 +475,35 @@ def _format_step_context(step_context: list[dict] | None) -> str:
             "be updated, not a description of what to change."
         )
     elif last_was_web_search:
-        # Same loop-guard reasoning as memory/files above. Unlike
-        # those two, there are genuinely two valid next steps here
-        # (answer from the snippets, or fetch one result for full
-        # detail) rather than one -- the hint states both rather than
-        # forcing a single path, since forcing "always fetch" would
-        # waste a step when the snippets already answer the question,
-        # and forcing "always answer from snippets" would give a
-        # shallow answer when the user actually needs a specific
-        # page's full content.
+        # Same loop-guard reasoning as memory/files above -- and the
+        # same lesson learned twice already on this file (memory's
+        # recall hint, and web_search's own worked examples needing
+        # done:false): a prose instruction alone is not enough, this
+        # model needs the exact JSON shape to copy. The first version
+        # of this hint was prose-only ("respond with tool:chat...")
+        # and the model repeated web_search with the identical query
+        # instead, tripping the loop guard -- confirmed live, not
+        # hypothetical.
+        #
+        # Two genuinely valid next steps exist here (answer from the
+        # snippets, or fetch one result for full detail), so the hint
+        # states both with a concrete example each, rather than
+        # forcing a single path: forcing "always fetch" would waste a
+        # step when the snippets already answer the question, and
+        # forcing "always answer from snippets" would give a shallow
+        # answer when the user actually needs a specific page's full
+        # content.
         lines.append(
             "The search results above already contain titles, URLs, and "
-            "snippets. If they already answer the question, respond now "
-            'with "tool":"chat" and answer naturally in your own words '
-            "-- do NOT call web_search again, and do NOT just list the "
-            "raw results back. If the user needs the full content of one "
-            'specific result, respond with "tool":"web_fetch" and that '
-            "result's URL instead."
+            "snippets. Do NOT call web_search again with the same or a "
+            "similar query -- pick ONE of these two next steps:\n"
+            "1) If the snippets already answer the question, respond "
+            'with {"tool":"chat","content":"<natural answer written in '
+            'your own words from the snippets above>"}. Do NOT just '
+            "list the raw results back as your answer.\n"
+            "2) If the user needs the full content of one specific "
+            'result, respond with {"tool":"web_fetch","content":"<that '
+            "result's exact URL>\"}."
         )
 
     return "\n".join(lines) + "\n"

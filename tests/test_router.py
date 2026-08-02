@@ -561,12 +561,13 @@ def test_prompt_steers_toward_chat_or_fetch_after_a_web_search_result():
         available_tools=["chat", "code", "web_search", "web_fetch"],
         step_context=step_context,
     )
-    assert "do NOT call web_search again" in prompt
-    assert '"tool":"web_fetch"' in prompt.split("Result from a tool")[-1]
+    assert "Do NOT call web_search again" in prompt
+    assert '"tool":"chat","content":"<natural answer' in prompt
+    assert '"tool":"web_fetch","content":"<that result' in prompt
 
 
 def test_prompt_omits_web_search_steering_hint_with_no_step_context():
     prompt = build_router_prompt(
         "cherche Zig", available_tools=["chat", "code", "web_search"]
     )
-    assert "do NOT call web_search again" not in prompt
+    assert "Do NOT call web_search again" not in prompt
