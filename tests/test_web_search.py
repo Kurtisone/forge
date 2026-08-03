@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+import pytest
+
 import forge.config as cfg
 import forge.tools.web_search as web_search_mod
 
@@ -107,3 +109,30 @@ def test_web_search_timeout():
         r = web_search_mod.run("query")
     assert "[error]" in r
     assert "timed out" in r
+
+
+# ── structured search() -- used directly by graphs/research.py ────
+
+
+def test_search_returns_raw_dicts(requests_mock):
+    requests_mock.get(
+        "http://127.0.0.1:8888/search",
+        json={
+            "results": [
+                {"title": "R1", "url": "https://x.com/1", "content": "c1"},
+            ]
+        },
+    )
+    results = web_search_mod.search("query")
+    assert results == [{"title": "R1", "url": "https://x.com/1", "content": "c1"}]
+
+
+def test_search_raises_on_empty_query():
+    with pytest.raises(web_search_mod.SearchError):
+        web_search_mod.search("   ")
+
+
+def test_search_raises_on_http_error(requests_mock):
+    requests_mock.get("http://127.0.0.1:8888/search", status_code=500)
+    with pytest.raises(web_search_mod.SearchError, match="500"):
+        web_search_mod.search("query")

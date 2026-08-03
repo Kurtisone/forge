@@ -98,23 +98,36 @@ TOOL_DESCRIPTIONS = {
         'guess a URL for "latest news", "actualités", current events, '
         "stock prices, or anything else you don't have a real, specific "
         "URL for -- a guessed URL will very likely 404 or fetch the "
-        'wrong page. If "web_search" is enabled and you don\'t have a '
-        "real URL, use that first to find one, then fetch it. If "
-        '"web_search" is not enabled, answer in chat instead and say you '
-        "cannot browse or search the web."
+        'wrong page. If "research" is enabled and you don\'t have a real '
+        "URL, use that instead -- it searches, fetches, and answers in "
+        'one call. If "research" is not enabled, answer in chat instead '
+        "and say you cannot browse or search the web."
+    ),
+    "research": (
+        "content is a question or topic in plain text (not a URL, not "
+        'JSON), e.g. "actualités jeu vidéo" or "derniers résultats de '
+        "l'équipe de France\". Searches the web, fetches the most "
+        "relevant pages, and returns ONE synthesized answer -- this is "
+        "a single call that does everything internally, never respond "
+        'with "done":false after it and never call it twice in a row. '
+        "This is the DEFAULT choice whenever the user wants an actual "
+        'answer or summary about something current/live ("actualité", '
+        '"quoi de neuf sur X", "que se passe-t-il avec X", current '
+        "events, results, prices) and you don't have a specific URL. "
+        'Prefer this over "web_search" whenever the user wants an '
+        "answer, not just a list of links."
     ),
     "web_search": (
         "content is a search query (plain text, not a URL), e.g. "
-        '"actualités bourse aujourd\'hui". Returns a ranked list of '
-        "results (title, URL, snippet) -- not full page content. Use "
-        "this when the user asks something needing current/live "
-        "information and you do NOT already have a specific URL for it "
-        '("latest news", "actualités", current events, prices, what\'s '
-        "happening with X). Do NOT use it for questions you can already "
-        "answer from general knowledge, and do NOT use it just to find "
-        "a URL for something the user already named exactly -- if they "
-        'gave you a URL or an exact well-known page, use "web_fetch" '
-        "directly instead."
+        '"articles récents sur le langage Zig". Returns a ranked list '
+        "of results (title, URL, snippet) only -- no page content, no "
+        "synthesis. Only use this when the user specifically wants "
+        'links/sources themselves ("trouve-moi des articles sur X", '
+        '"donne-moi des liens sur Y") rather than an answer. If the '
+        'user wants an actual answer or summary, use "research" '
+        "instead -- it exists specifically because chaining "
+        '"web_search" into a second step reliably failed with this '
+        "model (repeated the same search instead of answering)."
     ),
 }
 
@@ -259,33 +272,31 @@ _TOOL_EXAMPLES = {
             '{"tool":"web_fetch","content":"https://example.com/status"}',
         ),
     ],
-    "web_search": [
-        # Both examples end with "done":false -- a real bug hit in
-        # production without this: the orchestrator treated the
-        # search itself as the complete answer and returned the raw
-        # results list to the user verbatim, since nothing told it
-        # another step was needed. Same fix as memory's "recall"
-        # action: search results are raw material for an answer, not
-        # the answer -- the step_context steering hint (below in this
-        # file) only ever gets a chance to fire on the SECOND step,
-        # which never happened without this.
+    "research": [
+        # No "done":false here -- research is a single, self-contained
+        # call (search -> fetch -> synthesize happen internally in one
+        # graph run). This exists specifically because chaining
+        # web_search into a router-decided second step reliably failed
+        # with this model (confirmed live, twice, with different hint
+        # designs, and with prompt caching disabled to rule out a
+        # cache bug) -- so the fix removes the decision from the
+        # router's hands entirely rather than asking it to try harder.
         (
-            "Cherche des informations sur le langage de programmation Zig",
-            (
-                '{"tool":"web_search","content":"langage de programmation '
-                'Zig","done":false}'
-            ),
+            "Tu peux me faire l'actualité du jeu vidéo s'il te plaît",
+            '{"tool":"research","content":"actualité jeu vidéo"}',
         ),
-        # Second example: this is the case that used to be taught as a
-        # chat refusal under web_fetch (before web_search existed) --
-        # a vague request with no real URL is exactly what web_search
-        # is for, not a guessed web_fetch URL and not a chat apology.
         (
             "Quelles sont les dernières actualités en bourse ?",
-            (
-                '{"tool":"web_search","content":"actualités bourse '
-                'aujourd\'hui","done":false}'
-            ),
+            '{"tool":"research","content":"actualités bourse aujourd\'hui"}',
+        ),
+    ],
+    "web_search": [
+        # Only for when the user wants links/sources themselves, not
+        # an answer -- contrast with "research" above, which is the
+        # default for an actual question about something current.
+        (
+            "Trouve-moi des articles récents sur le langage Zig",
+            '{"tool":"web_search","content":"articles récents langage Zig"}',
         ),
     ],
 }

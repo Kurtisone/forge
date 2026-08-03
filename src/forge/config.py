@@ -216,3 +216,14 @@ WEB_FETCH_ALLOWED_DOMAINS: set[str] = {
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://127.0.0.1:8888")
 SEARXNG_TIMEOUT = int(os.getenv("SEARXNG_TIMEOUT", "10"))
 SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", "5"))
+
+# --- Research graph (search -> fetch top N -> synthesize) --------------------
+# Deliberately a deterministic sequence, not a router-driven multi-step
+# chain: see graphs/research.py's module docstring for why -- the router
+# repeatedly failed to reliably follow a "search then decide what's next"
+# instruction with this model, even with explicit worked examples, so the
+# decision was removed from the router's hands entirely for this flow.
+RESEARCH_FETCH_TOP_N = int(os.getenv("RESEARCH_FETCH_TOP_N", "3"))
+RESEARCH_FETCH_CHARS_PER_RESULT = int(
+    os.getenv("RESEARCH_FETCH_CHARS_PER_RESULT", "1500")
+)

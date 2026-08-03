@@ -488,19 +488,20 @@ def test_prompt_includes_web_fetch_description_and_examples():
     assert "https://example.com/status" in prompt
 
 
-def test_prompt_web_fetch_defers_to_web_search_when_both_enabled():
+def test_prompt_web_fetch_defers_to_research_when_available():
     """
-    web_fetch's description must point to web_search for vague/no-URL
-    requests once web_search exists -- the old behavior (teaching a
-    chat refusal for "actualités en bourse") became actively wrong
-    once Forge gained real search capability, since it would steer
-    the router away from the tool that can now actually help.
+    web_fetch's description must point to "research" for vague/no-URL
+    requests once it exists -- the old behavior (teaching a chat
+    refusal, then later a web_search deferral) became stale once
+    Forge gained a reliable single-call research tool. web_search
+    chaining into a second router-decided step reliably failed with
+    this model, which is exactly why "research" exists.
     """
     prompt = build_router_prompt(
-        "actualités", available_tools=["chat", "code", "web_fetch", "web_search"]
+        "actualités", available_tools=["chat", "code", "web_fetch", "research"]
     )
-    assert "web_search" in prompt
-    # the vague-news example now lives under web_search, not web_fetch
+    assert "research" in prompt
+    # the vague-news example now lives under research, not web_fetch
     assert "actualités bourse" in prompt
 
 
@@ -516,27 +517,44 @@ def test_prompt_includes_web_search_description_and_examples():
     )
     assert '"web_search"' in prompt
     assert "not a URL" in prompt
-    assert "langage de programmation Zig" in prompt
+    assert "langage Zig" in prompt
+
+
+def test_prompt_includes_research_description_and_examples():
+    """
+    "research" (search -> fetch -> synthesize as one deterministic
+    graph run, see graphs/research.py) must have its own description
+    and examples distinct from web_search -- it's the default choice
+    for an actual answer/summary about something current, while
+    web_search stays for when the user wants links/sources themselves.
+    """
+    prompt = build_router_prompt(
+        "actualité du jeu vidéo",
+        available_tools=["chat", "code", "research"],
+    )
+    assert '"research"' in prompt
+    assert "one call" in prompt or "internally" in prompt
+    assert "actualité jeu vidéo" in prompt
     assert "actualités bourse" in prompt
 
 
-def test_prompt_web_search_examples_use_done_false():
+def test_prompt_research_examples_never_use_done_false():
     """
-    Regression test for a real bug hit in production use: without
-    "done":false on the initial web_search call, the orchestrator
-    treated the search itself as the complete answer and returned the
-    raw results list verbatim to the user instead of ever reaching a
-    synthesis/fetch step. Both worked examples must demonstrate this,
-    same as memory's "recall" action already does.
+    Regression guard for the opposite bug: research must NEVER be
+    taught with "done":false, since it's explicitly a single,
+    self-contained call (search+fetch+synthesize happen inside the
+    graph, not across router steps). Adding done:false here would
+    reintroduce the same multi-step chaining reliability problem
+    research exists specifically to avoid.
     """
     prompt = build_router_prompt(
-        "cherche quelque chose",
-        available_tools=["chat", "code", "web_search"],
+        "actualité du jeu vidéo",
+        available_tools=["chat", "code", "research"],
     )
-    web_search_block = prompt[prompt.find("Examples:") :]
-    for line in web_search_block.splitlines():
-        if '"tool":"web_search"' in line:
-            assert '"done":false' in line, f"missing done:false in: {line}"
+    examples_block = prompt[prompt.find("Examples:") :]
+    for line in examples_block.splitlines():
+        if '"tool":"research"' in line:
+            assert '"done"' not in line, f"research example must not use done: {line}"
 
 
 def test_prompt_omits_web_search_when_not_enabled():
