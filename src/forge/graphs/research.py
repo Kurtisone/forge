@@ -46,19 +46,16 @@ Usage (Python):
   print(run("actualités jeu vidéo"))
 """
 
-import re
-
 from forge.config import RESEARCH_FETCH_CHARS_PER_RESULT, RESEARCH_FETCH_TOP_N
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
 from forge.logger import log
+from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
 from forge.tools import web_fetch, web_search
 from forge.types import AgentState
 
 _MAX_SYNTHESIS_OUTPUT_CHARS = 4000
-
-_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 # Same reasoning as graphs/review.py: this model needs the exact JSON
 # shape it must NOT produce shown explicitly, a bare "no JSON"
@@ -145,11 +142,21 @@ def _fetch_node(state: AgentState) -> AgentState:
 
 
 def _clean_synthesis_response(raw: str) -> str:
-    """Same reasoning as graphs/review.py's _clean_review_response:
-    this prompt asks for plain text, and reusing the router's
-    JSON-first parser on it has already proven to misfire in
-    practice for this exact class of prompt."""
-    cleaned = _THINK_BLOCK.sub("", raw).strip()
+    """Same reasoning as graphs/review.py's _clean_review_response
+    (see forge/text_cleaning.py): this prompt asks for plain text, and
+    reusing the router's JSON-first parser on it has already proven
+    to misfire in practice for this exact class of prompt. This
+    cleaner was originally written WITHOUT the conditional-unwrap step
+    below -- an omission that let the exact same bug resurface live on
+    research's very first real run (a fully substantive, multi-
+    paragraph answer wrapped in {"tool":"chat","content":"..."} and
+    shown to the user as raw JSON). Both callers now share one
+    implementation specifically so this can't drift again."""
+    cleaned = strip_think_blocks(raw)
+
+    unwrapped = try_unwrap_router_json(cleaned, source="research")
+    if unwrapped is not None:
+        cleaned = unwrapped
 
     if any(marker in cleaned for marker in _PROMPT_LEAK_MARKERS):
         log.warning("research: model echoed prompt instructions instead of answering")

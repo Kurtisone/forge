@@ -142,6 +142,36 @@ def test_research_llm_unavailable(monkeypatch):
     assert "LLM unavailable" in state.final_output
 
 
+def test_research_unwraps_substantive_json_wrapped_answer(monkeypatch):
+    """
+    Regression test for the exact bug hit on research's first real
+    run in production: the synthesis model wrapped a genuine,
+    multi-sentence answer in {"tool":"chat","content":"..."} despite
+    the prompt's explicit instruction and example not to. Unlike a
+    degenerate echo (see test_research_cleans_json_wrapped_response_like_review),
+    substantive content must be unwrapped to clean prose, not shown as
+    raw JSON.
+    """
+    monkeypatch.setattr(
+        research_mod.web_search,
+        "search",
+        lambda q: [{"title": "T", "url": "https://x.com", "content": "s"}],
+    )
+    monkeypatch.setattr(research_mod.web_fetch, "run", lambda url: "content")
+
+    substantive_wrapped = (
+        '{"tool":"chat","content":"Plusieurs sorties majeures sont '
+        "attendues cette année, dont plusieurs titres AAA et des "
+        'suites tres attendues par la communaute des joueurs."}'
+    )
+    monkeypatch.setattr(research_mod, "call_llm", lambda p: substantive_wrapped)
+
+    state = build_research().run("query", initial_context={"query": "query"})
+
+    assert state.final_output.startswith("Plusieurs sorties majeures")
+    assert '"tool"' not in state.final_output
+
+
 def test_research_cleans_json_wrapped_response_like_review(monkeypatch):
     """The synthesis prompt shares the same anti-JSON-habit risk as
     review's prompt (same underlying model) -- a degenerate JSON echo

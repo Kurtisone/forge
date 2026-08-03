@@ -45,14 +45,13 @@ Usage (Python):
   print(run("src/forge/graph.py", test_path="tests/test_graph.py"))
 """
 
-import json
-import re
 from pathlib import Path
 
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
 from forge.logger import log
+from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
 from forge.tools import test as test_tool
 from forge.types import AgentState
 
@@ -64,8 +63,6 @@ _MAX_TEST_OUTPUT_CHARS = 3_000
 # separate constant since review responses are naturally longer than
 # a router tool decision and shouldn't share the same cap.
 _MAX_REVIEW_OUTPUT_CHARS = 4_000
-
-_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 # Deliberately duplicated from router/parser.py's _PROMPT_LEAK_MARKERS
 # rather than imported -- same reasoning as TOOL_DESCRIPTIONS in
@@ -152,9 +149,9 @@ def _clean_review_response(raw: str) -> str:
     that's silently and confidently truncated to something that
     happens to look like a valid short answer.
     """
-    cleaned = _THINK_BLOCK.sub("", raw).strip()
+    cleaned = strip_think_blocks(raw)
 
-    unwrapped = _try_unwrap_router_json(cleaned)
+    unwrapped = try_unwrap_router_json(cleaned, source="review")
     if unwrapped is not None:
         cleaned = unwrapped
 
@@ -171,48 +168,6 @@ def _clean_review_response(raw: str) -> str:
         log.warning("review response truncated to %d chars", _MAX_REVIEW_OUTPUT_CHARS)
 
     return cleaned
-
-
-_MIN_UNWRAPPED_WORDS = 8
-_MIN_UNWRAPPED_CHARS = 40
-
-
-def _try_unwrap_router_json(cleaned: str) -> str | None:
-    """
-    If *cleaned* is exactly a {"tool":...,"content":"..."} object (the
-    router's decision shape) and "content" looks like a substantive
-    answer, return the unwrapped content. Otherwise return None,
-    leaving the caller to show the raw text as-is -- see
-    _clean_review_response's docstring for the calibration behind the
-    substantive/degenerate threshold.
-    """
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError:
-        return None
-
-    if not isinstance(data, dict) or "content" not in data:
-        return None
-
-    content = data.get("content")
-    if not isinstance(content, str):
-        return None
-
-    word_count = len(content.split())
-    if word_count >= _MIN_UNWRAPPED_WORDS or len(content) >= _MIN_UNWRAPPED_CHARS:
-        log.warning(
-            "review: model wrapped a substantive answer in router-style JSON "
-            "(%d words) despite instructions -- unwrapped it",
-            word_count,
-        )
-        return content.strip()
-
-    log.warning(
-        "review: model answered with degenerate JSON-wrapped content %r -- "
-        "not trusted as a real answer, showing raw",
-        content,
-    )
-    return None
 
 
 def _read_file_node(state: AgentState) -> AgentState:
