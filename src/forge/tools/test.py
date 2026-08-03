@@ -15,6 +15,15 @@ Same three protection layers as shell.py:
 3. Working directory: runs with cwd=WORKSPACE_DIR so relative paths
    cannot escape to the host filesystem.
 
+The allowed runner's executable is resolved via shutil.which() against
+the real process PATH, not the minimal one the subprocess itself runs
+with -- a pip-installed console script like pytest/ruff can land
+anywhere depending on how Python was set up (a venv, --user, a CI
+runner's own hostedtoolcache, …), unlike coreutils which reliably
+live in /usr/bin. Confirmed live: this tool passed in one environment
+and failed with "executable not found" in GitHub Actions CI before
+this was fixed.
+
 To activate: ENABLED_TOOLS=chat,code,test in .env.local
 To customise: TEST_ALLOWED_COMMANDS=pytest,ruff
 
@@ -26,6 +35,7 @@ Interface: run(content: str) -> str
 """
 
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -60,7 +70,24 @@ def run(content: str) -> str:
             f"Add it to TEST_ALLOWED_COMMANDS in .env.local to enable it."
         )
 
+    resolved = shutil.which(runner)
+    if resolved is None:
+        return (
+            f"[error] executable not found: {runner!r} (not on PATH)\n"
+            f"Is {runner!r} installed in this environment?"
+        )
+
     cwd = _safe_cwd()
+    # Minimal env for the subprocess itself (no leaked host secrets/
+    # tokens) -- but the LOOKUP of where the runner actually lives
+    # uses the real process PATH via shutil.which() above, not this
+    # restricted one. A hardcoded PATH guess (e.g. "/usr/bin:/bin")
+    # works for coreutils but not for pip-installed console scripts
+    # like pytest/ruff, which can land anywhere depending on how
+    # Python was set up (a venv, --user, a CI runner's hostedtoolcache,
+    # …) -- confirmed live: this exact tool passed in one environment
+    # and failed with "executable not found" in GitHub Actions CI
+    # until resolved this way.
     env = {
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "HOME": str(Path.home()),
@@ -72,7 +99,7 @@ def run(content: str) -> str:
 
     try:
         result = subprocess.run(
-            parts,
+            [resolved, *parts[1:]],
             cwd=str(cwd),
             check=False,
             env=env,
