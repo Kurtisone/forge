@@ -131,6 +131,24 @@ TOOL_DESCRIPTIONS = {
         '"web_search" into a second step reliably failed with this '
         "model (repeated the same search instead of answering)."
     ),
+    "sysadmin": (
+        "content is a JSON string: "
+        '{"target_hint":"...","question":"..."}. Both fields are '
+        "optional. Discovers running systemd units and podman "
+        "containers, reads their logs (journalctl / podman logs), and "
+        "returns ONE diagnosis with a proposed fix -- this is a "
+        'single call that does everything internally, never respond '
+        'with "done":false after it. This tool NEVER restarts, stops, '
+        "or changes anything -- read-only always, a human applies any "
+        "fix by hand. Use this when the user reports a problem with a "
+        'service or the system itself ("X plante", "X ne répond '
+        'plus", "pourquoi X redémarre", "mon deck rame") or explicitly '
+        "asks for a service's logs. Do NOT use this to read a log "
+        'FILE by path ("lis /var/log/forge/debug.log") -- that is '
+        '"files", not sysadmin. Do NOT use this for an arbitrary shell '
+        'command ("lance ls -la /etc") -- that is "shell"; sysadmin is '
+        "a guided read-only diagnosis, not a general shell access."
+    ),
 }
 
 # One worked example per tool, shown only if that tool is enabled.
@@ -299,6 +317,36 @@ _TOOL_EXAMPLES = {
         (
             "Trouve-moi des articles récents sur le langage Zig",
             '{"tool":"web_search","content":"articles récents langage Zig"}',
+        ),
+    ],
+    "sysadmin": [
+        # No "done":false here -- same reasoning as "research": the
+        # whole discover -> collect -> synthesize sequence runs inside
+        # one graph call, the router only ever decides once.
+        (
+            "Le service searxng plante en boucle, tu peux regarder ?",
+            (
+                '{"tool":"sysadmin","content":"{\\"target_hint\\":'
+                '\\"searxng\\",\\"question\\":\\"pourquoi le service '
+                'redémarre en boucle ?\\"}"}'
+            ),
+        ),
+        # Contrast: vague problem, no named service -- still sysadmin,
+        # but with no target_hint (the graph falls back to kernel
+        # logs on its own, see graphs/sysadmin.py's collect_node).
+        (
+            "Mon Steam Deck rame depuis ce matin, tu peux regarder ?",
+            (
+                '{"tool":"sysadmin","content":"{\\"question\\":'
+                '\\"pourquoi le système est lent depuis ce matin ?\\"}"}'
+            ),
+        ),
+        # Contrast: reading a specific log FILE by path is "files",
+        # not sysadmin -- the verb "lire" alone doesn't imply
+        # sysadmin, same distinction already drawn for review vs files.
+        (
+            "Peux-tu lire le fichier /var/log/forge/debug.log ?",
+            '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"/var/log/forge/debug.log\\"}"}',
         ),
     ],
 }
