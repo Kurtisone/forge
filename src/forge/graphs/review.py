@@ -47,6 +47,7 @@ Usage (Python):
 
 from pathlib import Path
 
+from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
@@ -78,6 +79,7 @@ _PROMPT_LEAK_MARKERS = [
 ]
 
 _REVIEW_PROMPT = """/no_think
+{today_line}
 You are a code reviewer. Analyse the file below and provide clear,
 actionable feedback. Focus on: correctness, readability, performance,
 and security. If test output is provided, use it as primary evidence
@@ -238,6 +240,7 @@ def _llm_review_node(state: AgentState) -> AgentState:
         )
 
     prompt = _REVIEW_PROMPT.format(
+        today_line=today_line(),
         filename=filename,
         question=question,
         content=content,

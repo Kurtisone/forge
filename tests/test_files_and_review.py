@@ -187,6 +187,24 @@ def test_files_unknown_action(tmp_path, monkeypatch):
 # -------------------------------------------------------------------
 
 
+def test_review_prompt_includes_todays_date(tmp_path, monkeypatch):
+    from forge.context_info import today_line
+
+    src_file = tmp_path / "f.py"
+    src_file.write_text("x = 1")
+
+    captured = {}
+
+    def fake_call_llm(prompt):
+        captured["prompt"] = prompt
+        return "ok"
+
+    monkeypatch.setattr(review_mod, "call_llm", fake_call_llm)
+    build_review().run(str(src_file), initial_context={"file_path": str(src_file)})
+
+    assert today_line() in captured["prompt"]
+
+
 def test_review_reads_file_and_calls_llm(tmp_path, monkeypatch):
     test_file = tmp_path / "sample.py"
     test_file.write_text("def add(a, b):\n    return a + b\n")
@@ -326,7 +344,11 @@ def test_review_prompt_includes_json_warning_and_worked_example():
     was hit in production and did not prevent it.
     """
     prompt = review_mod._REVIEW_PROMPT.format(
-        filename="f.py", question="Q?", content="x=1", test_section=""
+        today_line="Today's date is 2026-01-01.",
+        filename="f.py",
+        question="Q?",
+        content="x=1",
+        test_section="",
     )
     assert "GOOD ANSWER" in prompt
     assert "NEVER DO THIS" in prompt

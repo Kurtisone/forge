@@ -589,3 +589,48 @@ def test_prompt_omits_web_search_steering_hint_with_no_step_context():
         "cherche Zig", available_tools=["chat", "code", "web_search"]
     )
     assert "Do NOT call web_search again" not in prompt
+
+
+def test_prompt_includes_todays_date():
+    """
+    Regression test for a real issue observed live: the model
+    confused 2025 and 2026 in a research synthesis with no date
+    grounding at all, only correcting itself once the user manually
+    stated the date in their own prompt. The router prompt must
+    always state today's date so this doesn't depend on the user
+    remembering to do that themselves.
+    """
+    from forge.context_info import today_line
+
+    prompt = build_router_prompt("hello", available_tools=["chat", "code"])
+    assert today_line() in prompt
+
+
+def test_prompt_includes_vague_file_reference_instruction_when_history_exists():
+    """
+    Closes a real unresolved case from v3.9: "analyse le contenu"
+    referring implicitly to a file mentioned earlier in the
+    conversation (not named again) could make the model answer from
+    imagined content instead of ever reading the real file. The
+    history block must always carry an instruction to resolve a vague
+    later reference against the most recent real file path already
+    visible in that same history, rather than fabricating one.
+    """
+    history = [
+        {"role": "user", "content": "Crée un fichier notes.py avec x = 1"},
+        {"role": "assistant", "content": "[ok] written 9 bytes to notes.py"},
+    ]
+    prompt = build_router_prompt(
+        "améliore le contenu",
+        available_tools=["chat", "code", "files"],
+        history=history,
+    )
+    assert "refers to a file vaguely" in prompt
+    assert "notes.py" in prompt  # the real path stayed visible in history
+
+
+def test_prompt_omits_vague_file_reference_instruction_with_no_history():
+    prompt = build_router_prompt(
+        "améliore le contenu", available_tools=["chat", "code", "files"]
+    )
+    assert "refers to a file vaguely" not in prompt

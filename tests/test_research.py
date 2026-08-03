@@ -13,6 +13,28 @@ import forge.graphs.research as research_mod
 from forge.graphs.research import build as build_research
 
 
+def test_research_prompt_includes_todays_date(monkeypatch):
+    from forge.context_info import today_line
+
+    monkeypatch.setattr(
+        research_mod.web_search,
+        "search",
+        lambda q: [{"title": "T", "url": "https://x.com", "content": "s"}],
+    )
+    monkeypatch.setattr(research_mod.web_fetch, "run", lambda url: "content")
+
+    captured = {}
+
+    def fake_call_llm(prompt):
+        captured["prompt"] = prompt
+        return "answer"
+
+    monkeypatch.setattr(research_mod, "call_llm", fake_call_llm)
+    build_research().run("query", initial_context={"query": "query"})
+
+    assert today_line() in captured["prompt"]
+
+
 def test_research_happy_path(monkeypatch):
     fake_results = [
         {

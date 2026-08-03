@@ -13,6 +13,8 @@ the only way a tool becomes routable is the same ENABLED_TOOLS opt-in
 that already gates it for the Graph engine.
 """
 
+from forge.context_info import today_line
+
 _SENTINEL_INPUT = "\x00USER_INPUT\x00"
 _SENTINEL_HISTORY = "\x00HISTORY_BLOCK\x00"
 # Separate from history on purpose: history must stay an exact mirror
@@ -329,7 +331,8 @@ def _examples(tools: list[str]) -> str:
 def _build_template(tools: list[str]) -> str:
     return (
         "/no_think\n"
-        "You are Forge, a JSON-routing assistant.\n\n"
+        "You are Forge, a JSON-routing assistant.\n"
+        f"{today_line()}\n\n"
         "Return ONLY valid JSON. NO EXPLANATION, NO TEXT OUTSIDE THE JSON.\n\n"
         "Format:\n"
         "{\n"
@@ -401,6 +404,27 @@ def _format_history(history: list[dict] | None) -> str:
         if len(content) > _MAX_HISTORY_ENTRY:
             content = content[:_MAX_HISTORY_ENTRY] + "…"
         lines.append(f"- {speaker}: {content}")
+
+    # Addresses a real unresolved case from v3.9: "analyse le contenu"
+    # referring implicitly to a file mentioned earlier (not named
+    # again) could make the model answer from imagined content
+    # instead of ever actually reading the real file. A files/review
+    # confirmation persisted above (e.g. "[ok] written N bytes to
+    # notes.py") already contains the real path -- this instruction
+    # is what tells the model to go find and reuse it, instead of
+    # guessing or fabricating file content. Cross-turn reference
+    # resolution, not a single missing worked example, so this is a
+    # standing instruction rather than a step_context-gated hint like
+    # the ones below (those only fire within a single multi-step run).
+    lines.append(
+        '\nIf the new message below refers to a file vaguely ("ce '
+        'fichier", "le contenu", "améliore-le", "analyse-le") without '
+        "naming a path, look through the context above for the most "
+        "recently mentioned real file path (from a files/review "
+        "action) and use that exact path. Do NOT invent file content "
+        "from memory -- read the file first if you don't already have "
+        "its current content in this context."
+    )
 
     return "\n".join(lines) + "\n"
 

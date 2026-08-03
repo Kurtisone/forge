@@ -47,6 +47,7 @@ Usage (Python):
 """
 
 from forge.config import RESEARCH_FETCH_CHARS_PER_RESULT, RESEARCH_FETCH_TOP_N
+from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
@@ -67,12 +68,15 @@ _PROMPT_LEAK_MARKERS = [
 ]
 
 _SYNTHESIS_PROMPT = """/no_think
+{today_line}
 You are answering a question using web search results and fetched
 page content gathered for you below. Write a clear, natural answer
 in plain text -- summarize and synthesize, don't just repeat the
 raw material. Write in the same language as the question. Cite which
 source a specific claim comes from only if it matters; otherwise just
-answer naturally.
+answer naturally. Use today's date above to judge what "recent" or
+"upcoming" means -- don't assume the search results are from your own
+training period.
 
 Question: {query}
 
@@ -189,7 +193,10 @@ def _synthesize_node(state: AgentState) -> AgentState:
     fetch_block = "\n\n".join(fetch_lines) or "(no pages fetched successfully)"
 
     prompt = _SYNTHESIS_PROMPT.format(
-        query=query, search_block=search_block, fetch_block=fetch_block
+        today_line=today_line(),
+        query=query,
+        search_block=search_block,
+        fetch_block=fetch_block,
     )
 
     log.event("research.llm_call", query=query[:120], prompt_chars=len(prompt))
