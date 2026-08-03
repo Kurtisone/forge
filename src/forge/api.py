@@ -95,6 +95,7 @@ class ReviewRequest(BaseModel):
     content: str  # file content (not a path)
     filename: str = "untitled"
     question: str = "Que peut-on améliorer ?"
+    test_path: str | None = None  # optional, run these tests before reviewing
 
 
 class ChatResponse(BaseModel):
@@ -235,7 +236,13 @@ async def review(req: ReviewRequest):
 
     from forge.graphs.review import run as review_run
 
-    # Write the content to a temp file so the review graph can read it
+    # Write the content to a temp file so the review graph can read it.
+    # Note: test_path (if given) is resolved relative to WORKSPACE_DIR
+    # by the test tool, NOT relative to this temp file -- running
+    # tests against submitted content only makes sense when that
+    # content already corresponds to a file inside the workspace
+    # (e.g. reviewing a workspace file's current content with its
+    # existing test suite), not for arbitrary pasted snippets.
     suffix = Path(req.filename).suffix or ".txt"
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=suffix, delete=False, encoding="utf-8"
@@ -244,7 +251,7 @@ async def review(req: ReviewRequest):
         tmp_path = f.name
 
     try:
-        output = await _run_in_thread(review_run, tmp_path, req.question)
+        output = await _run_in_thread(review_run, tmp_path, req.question, req.test_path)
     finally:
         os.unlink(tmp_path)
 

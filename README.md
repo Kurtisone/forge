@@ -16,11 +16,17 @@ User Input
 LLM Router  (structured JSON decision)
    ↓
 Tool Dispatcher
-   ├── chat     (conversational response)
-   ├── code     (code generation)
-   ├── files    (sandboxed read/write/list)
-   ├── shell    (sandboxed subprocess)
-   └── git      (read-only git operations)
+   ├── chat        (conversational response)
+   ├── code        (code generation)
+   ├── files       (sandboxed read/write/list)
+   ├── shell       (sandboxed subprocess)
+   ├── git         (read-only git operations)
+   ├── memory      (remember/recall, vector search)
+   ├── test        (sandboxed pytest/ruff runner)
+   ├── review      (read a file, optionally test it, analyze)
+   ├── web_fetch   (fetch a known URL)
+   ├── web_search  (SearXNG links/snippets, no synthesis)
+   └── research    (search → fetch → synthesize, one call)
 ```
 
 The model must output a strict JSON instruction (`{"tool": "...", "content": "..."}`)
@@ -108,7 +114,9 @@ src/forge/
 ├── graph.py             # Node / Edge / Graph execution engine
 ├── graphs/
 │   ├── default.py       # router → dispatch → fallback (drop-in for Orchestrator)
-│   └── review.py        # read_file → llm_review (chains filesystem + LLM)
+│   ├── review.py        # read_file → [run_tests] → llm_review (optional test_path adds the middle step)
+│   └── research.py      # search → fetch top N → synthesize, one deterministic call (v3.10)
+├── text_cleaning.py     # shared plain-text response cleaning (review.py + research.py)
 │
 ├── router/
 │   ├── prompt.py        # router prompt template — isolated; nothing else builds prompts
@@ -120,13 +128,18 @@ src/forge/
 │   ├── code.py
 │   ├── files.py         # sandboxed read/write/list within WORKSPACE_DIR
 │   ├── shell.py         # sandboxed subprocess within WORKSPACE_DIR + allowlist
-│   ├── git.py           # read-only git operations (status/diff/log/show/branch)
-│   └── memory.py        # router-dispatchable remember/recall (v3.7) — same rag.py backend
+│   ├── git.py           # read-only git operations (status/diff/log/show/branch) — no write counterpart, by design
+│   ├── memory.py        # router-dispatchable remember/recall (v3.7) — same rag.py backend
+│   ├── test.py          # sandboxed pytest/ruff runner, own allowlist (v3.10)
+│   ├── review.py        # dispatchable wrapper around graphs/review.py (v3.10)
+│   ├── web_fetch.py      # fetch a known URL, SSRF-guarded (v3.10)
+│   ├── web_search.py    # SearXNG-backed search, links/snippets only (v3.10)
+│   └── research.py      # dispatchable wrapper around graphs/research.py (v3.10)
 │
 ├── memory.py            # JSON-backed rolling conversation history + key/value facts
 ├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
 ├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search)
-├── cli.py               # forge review <file> / forge replay <run_id>
+├── cli.py               # forge review <file> [--tests <path>] / forge replay <run_id>
 ├── main.py              # REPL — !clear, !trace, !remember, !recall, !help
 │
 └── providers/
@@ -228,6 +241,10 @@ podman run --rm --env-file .env.local \
   -v $(pwd):/workspace forge-core \
   python -m forge.cli review src/forge/main.py "Que peut-on améliorer ?"
 
+# Review a file and run its tests first (v3.10) -- test output becomes
+# primary evidence for the review, not just the code itself
+python -m forge.cli review src/forge/graph.py --tests tests/test_graph.py
+
 # Replay a past execution trace
 python -m forge.cli replay <run_id>
 ```
@@ -241,7 +258,7 @@ python -m forge.cli replay <run_id>
 | `GET` | `/` | open | Web UI |
 | `GET` | `/health` | open | Provider + model info (for `llama_cpp`, the actually-loaded model, queried live from llama-server — see below) |
 | `POST` | `/chat` | optional | Single conversation turn |
-| `POST` | `/review` | optional | File content analysis |
+| `POST` | `/review` | optional | File content analysis, optionally running its tests first (`test_path` field, v3.10) |
 | `POST` | `/run` | optional | Run any graph by name |
 | `GET` | `/tools` | optional | Active tools + available graphs |
 | `GET` | `/traces?n=10` | optional | Recent execution traces |
@@ -314,6 +331,16 @@ e.g. behind a proxy that already rate-limits.
 | `EMBEDDING_DIM` | Embedding vector dimension, must match the served model | `1024` |
 | `EMBEDDING_TIMEOUT` | HTTP timeout for embedding requests (seconds) | `30` |
 | `RAG_DB_FILE` | Path to the SQLite-vec vector memory file | `data/forge_rag.db` |
+| `TEST_TIMEOUT` | Max seconds for a test/lint tool command | `60` |
+| `TEST_ALLOWED_COMMANDS` | Comma-separated command allowlist for the test tool — separate from `SHELL_ALLOWED_COMMANDS` on purpose | `pytest,ruff` |
+| `WEB_FETCH_TIMEOUT` | HTTP timeout for `web_fetch` requests (seconds) | `15` |
+| `WEB_FETCH_MAX_BYTES` | Raw response byte cap before truncation | `2097152` (2 MiB) |
+| `WEB_FETCH_ALLOWED_DOMAINS` | Optional domain allowlist — empty means any public domain, subject to the (non-configurable) SSRF guard | *(empty)* |
+| `SEARXNG_URL` | Self-hosted SearXNG instance for `web_search`/`research` — not a cloud API | `http://127.0.0.1:8888` |
+| `SEARXNG_TIMEOUT` | HTTP timeout for SearXNG requests (seconds) | `10` |
+| `SEARXNG_MAX_RESULTS` | Max results returned per search | `5` |
+| `RESEARCH_FETCH_TOP_N` | How many top search results `research` fetches in full before synthesizing | `3` |
+| `RESEARCH_FETCH_CHARS_PER_RESULT` | Per-result fetched-content cap fed into the synthesis prompt | `1500` |
 
 ---
 
@@ -325,7 +352,13 @@ e.g. behind a proxy that already rate-limits.
 | `code` | default | Code generation |
 | `files` | `ENABLED_TOOLS=chat,code,files` | Sandboxed read/write/list within `WORKSPACE_DIR` |
 | `shell` | `ENABLED_TOOLS=chat,code,shell` | Subprocess execution within `WORKSPACE_DIR` + `SHELL_ALLOWED_COMMANDS` |
-| `git` | `ENABLED_TOOLS=chat,code,git` | Read-only git operations (status, diff, log, show, branch) |
+| `git` | `ENABLED_TOOLS=chat,code,git` | Read-only git operations (status, diff, log, show, branch) — deliberately never gains a write counterpart reachable by the router: a commit/push has a real cost if the router hallucinates, so any git write stays a separate, human-confirmed flow outside tool dispatch, not a router decision |
+| `memory` | `ENABLED_TOOLS=chat,code,memory` | Router-dispatchable RAG remember/recall (v3.7) |
+| `test` | `ENABLED_TOOLS=chat,code,test` | Sandboxed pytest/ruff runner, own allowlist (`TEST_ALLOWED_COMMANDS`) separate from the shell tool's |
+| `review` | `ENABLED_TOOLS=chat,code,review` | Reads a file (optionally runs its tests first) and returns an LLM analysis — "relis X et donne ton avis", not just "lis X" (see [Router reachability](#tools) note below on that exact ambiguity) |
+| `web_fetch` | `ENABLED_TOOLS=chat,code,web_fetch` | Fetches a URL you already know — no search capability, SSRF-guarded, best-effort HTML→text extraction |
+| `web_search` | `ENABLED_TOOLS=chat,code,web_search` | Ranked links/snippets from a self-hosted SearXNG instance — no synthesis, just the list |
+| `research` | `ENABLED_TOOLS=chat,code,research` | Search → fetch top results → synthesize one answer, as a single deterministic call (see below) |
 
 A tool is only dispatchable if it has a `run()` function **and** appears in `ENABLED_TOOLS`.
 Implementing `run()` in a module is not enough — the opt-in is intentional for tools with side effects.
@@ -354,6 +387,19 @@ values). Set `LLAMA_CPP_USE_GRAMMAR=false` if your server version doesn't suppor
 completion field, or to rule it out while debugging — the prompt-engineering + parser fallback
 chain underneath it all is unchanged and still does the same job on its own, just with a higher
 failure rate on a stressed prompt.
+
+**Why `research` exists alongside `web_search` (v3.10):** a plain search only returns links and
+snippets — turning that into an actual synthesized answer needs a second step (fetch a promising
+result, then have the model write a real answer from it). Asking the router to decide that second
+step itself proved unreliable in practice with a small local model: even with an explicit worked
+JSON example showing exactly what to do next, it would sometimes just repeat the identical search
+call instead, tripping the loop guard. Disabling `LLAMA_CPP_CACHE_PROMPT` and reproducing the same
+failure ruled out a KV-cache bug — this is a genuine limit at multi-step self-correction for this
+model class, not a fixable prompt or infra issue. `research` (`graphs/research.py`) removes the
+decision from the router's hands entirely: search → fetch the top `RESEARCH_FETCH_TOP_N` results →
+one synthesis call, run as a fixed sequence inside a single dispatchable call, the same pattern
+already used by the `review` graph. `web_search` stays for when the user genuinely wants a list of
+links/sources rather than an answer.
 
 **Why `/chat` isn't streamed (yet):** for `tool="chat"`, the router's single LLM call already
 *is* the answer — `content` in `{"tool":"chat","content":"..."}` is generated in the same call as
@@ -535,7 +581,10 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.4** | done | Portfolio: architecture diagram, `.env.example`, LinkedIn writeup |
 | **v3.5** | done | Test coverage (llm/cli/trace: 26-39% → 98-100%), router reachable to files/shell/git, API rate limiting |
 | **v3.6** | done | Response quality: GBNF grammar-constrained decoding for llama.cpp |
-| **v3.7** | current | Vector memory / RAG: SQLite-vec, `/remember` + `/search`, `!remember`/`!recall` REPL commands, a router-dispatchable `memory` tool, Qwen3-Embedding-0.6B |
+| **v3.7** | done | Vector memory / RAG: SQLite-vec, `/remember` + `/search`, `!remember`/`!recall` REPL commands, a router-dispatchable `memory` tool, Qwen3-Embedding-0.6B |
+| **v3.8** | done | Prompt-cache reliability: pinned llama-server slot, `MEMORY_MAX_HISTORY` raised to stop a sliding window from fighting KV-cache reuse — root-caused a remaining cache-reuse gap to the served model's own hybrid architecture, not Forge |
+| **v3.9** | done | Context compaction + drawer: `rag_pointer`/`llm_summary` strategies, pin/unpin, `/history` `/drawer` `/compact` endpoints, `!compact` REPL command, files write-diff |
+| **v3.10** | current | Hardening + new tools: dedicated `test` tool, `web_fetch` (SSRF-guarded), `web_search` + `research` (self-hosted SearXNG), review graph gains an optional test-run step and chat-dispatch; router disambiguation fixes (files vs review, tool descriptions/examples for every new tool) found through real usage |
 
 ---
 

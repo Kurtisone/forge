@@ -26,9 +26,10 @@ def test_review_with_no_file_prints_usage_and_returns_1(capsys):
 def test_review_calls_graph_with_default_question(monkeypatch, capsys):
     captured = {}
 
-    def fake_run(file_path, question="Que peut-on améliorer ?"):
+    def fake_run(file_path, question="Que peut-on améliorer ?", test_path=None):
         captured["file_path"] = file_path
         captured["question"] = question
+        captured["test_path"] = test_path
         return "looks fine"
 
     monkeypatch.setattr("forge.graphs.review.run", fake_run)
@@ -37,6 +38,7 @@ def test_review_calls_graph_with_default_question(monkeypatch, capsys):
     assert code == 0
     assert captured["file_path"] == "src/forge/main.py"
     assert captured["question"] == "Que peut-on améliorer ?"
+    assert captured["test_path"] is None
     assert "looks fine" in capsys.readouterr().out
 
 
@@ -44,10 +46,26 @@ def test_review_joins_extra_args_into_the_question(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "forge.graphs.review.run",
-        lambda file_path, question="x": captured.setdefault("question", question),
+        lambda file_path, question="x", test_path=None: captured.setdefault(
+            "question", question
+        ),
     )
     cli_mod._cmd_review(["file.py", "Any", "security", "issues?"])
     assert captured["question"] == "Any security issues?"
+
+
+def test_review_parses_tests_flag(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "forge.graphs.review.run",
+        lambda file_path, question="x", test_path=None: captured.update(
+            file_path=file_path, question=question, test_path=test_path
+        ),
+    )
+    cli_mod._cmd_review(["file.py", "--tests", "tests/test_file.py", "Any", "issues?"])
+    assert captured["test_path"] == "tests/test_file.py"
+    assert captured["question"] == "Any issues?"
+    assert captured["file_path"] == "file.py"
 
 
 # ── forge replay ──────────────────────────────────────────────────────

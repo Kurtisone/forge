@@ -13,6 +13,8 @@ the only way a tool becomes routable is the same ENABLED_TOOLS opt-in
 that already gates it for the Graph engine.
 """
 
+from forge.context_info import today_line
+
 _SENTINEL_INPUT = "\x00USER_INPUT\x00"
 _SENTINEL_HISTORY = "\x00HISTORY_BLOCK\x00"
 # Separate from history on purpose: history must stay an exact mirror
@@ -41,8 +43,11 @@ TOOL_DESCRIPTIONS = {
         "content is a JSON string describing ONE file operation: "
         '{"action":"read","path":"..."} or '
         '{"action":"write","path":"...","content":"..."} or '
-        '{"action":"list","path":"..."}. Only use this when the user '
-        "explicitly asks to read, write, or list a file."
+        '{"action":"list","path":"..."}. Use "read" when the user just '
+        'wants to see/read a file\'s raw content -- "lis X", "relis X", '
+        '"montre-moi X" with no request for an opinion or analysis. Only '
+        "use this when the user explicitly asks to read, write, or list a "
+        "file."
     ),
     "shell": (
         'content is a single shell command, e.g. "ls -la" or '
@@ -71,6 +76,60 @@ TOOL_DESCRIPTIONS = {
         "raw search results are not a real answer, you need one more step "
         'to phrase them as a natural reply to the user. For "remember", '
         '"done": false is optional; a short confirmation is usually enough.'
+    ),
+    "review": (
+        "content is a JSON string describing a file review: "
+        '{"file_path":"...","question":"...","test_path":"..."}. '
+        '"question" and "test_path" are optional. Set "test_path" when the '
+        "user also wants that file's tests run first, so the review can "
+        "use the test output as evidence. Only use this when the user "
+        "explicitly asks for an OPINION or ANALYSIS of a file -- "
+        '"relis X et donne ton avis", "qu\'en penses-tu", "vérifie que X '
+        'est correct", "critique ce fichier". If the user just says "lis '
+        'X" / "relis X" / "montre-moi X" with no request for an opinion, '
+        'that is "files":"read", NOT review -- the verb "lire"/"relire" '
+        "alone does not mean review, only when paired with a request for "
+        "feedback."
+    ),
+    "web_fetch": (
+        'content is a single URL, e.g. "https://example.com/page". This '
+        "tool fetches a URL you already know -- it does NOT search, it "
+        "cannot look anything up or discover a URL for you. Only use it "
+        "when the user gives an explicit URL, or names a specific "
+        "well-known page whose exact URL you are confident about. NEVER "
+        'guess a URL for "latest news", "actualités", current events, '
+        "stock prices, or anything else you don't have a real, specific "
+        "URL for -- a guessed URL will very likely 404 or fetch the "
+        'wrong page. If "research" is enabled and you don\'t have a real '
+        "URL, use that instead -- it searches, fetches, and answers in "
+        'one call. If "research" is not enabled, answer in chat instead '
+        "and say you cannot browse or search the web."
+    ),
+    "research": (
+        "content is a question or topic in plain text (not a URL, not "
+        'JSON), e.g. "actualités jeu vidéo" or "derniers résultats de '
+        "l'équipe de France\". Searches the web, fetches the most "
+        "relevant pages, and returns ONE synthesized answer -- this is "
+        "a single call that does everything internally, never respond "
+        'with "done":false after it and never call it twice in a row. '
+        "This is the DEFAULT choice whenever the user wants an actual "
+        'answer or summary about something current/live ("actualité", '
+        '"quoi de neuf sur X", "que se passe-t-il avec X", current '
+        "events, results, prices) and you don't have a specific URL. "
+        'Prefer this over "web_search" whenever the user wants an '
+        "answer, not just a list of links."
+    ),
+    "web_search": (
+        "content is a search query (plain text, not a URL), e.g. "
+        '"articles récents sur le langage Zig". Returns a ranked list '
+        "of results (title, URL, snippet) only -- no page content, no "
+        "synthesis. Only use this when the user specifically wants "
+        'links/sources themselves ("trouve-moi des articles sur X", '
+        '"donne-moi des liens sur Y") rather than an answer. If the '
+        'user wants an actual answer or summary, use "research" '
+        "instead -- it exists specifically because chaining "
+        '"web_search" into a second step reliably failed with this '
+        "model (repeated the same search instead of answering)."
     ),
 }
 
@@ -130,6 +189,18 @@ _TOOL_EXAMPLES = {
                 '\\"path\\":\\"hello.go\\"}","done":false}'
             ),
         ),
+        # Fourth example: disambiguates from "review" below. A bare
+        # "relis X" with no request for an opinion is just a read --
+        # observed live, this specific phrasing ("Relis <file>") was
+        # inconsistently routed to review or files depending on
+        # unrelated conversation history, because review's own first
+        # example (below) used to be this exact same bare phrasing.
+        # Both tools' examples now anchor the same verb to different
+        # tools based on whether feedback is requested.
+        (
+            "Relis hello.go",
+            '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"hello.go\\"}"}',
+        ),
     ],
     "shell": [
         ("List the files here", '{"tool":"shell","content":"ls -la"}'),
@@ -168,6 +239,68 @@ _TOOL_EXAMPLES = {
             ),
         ),
     ],
+    "review": [
+        # First example deliberately pairs "relire" with an explicit
+        # request for feedback ("et donne-moi ton avis"), not the bare
+        # verb alone -- this used to be just "Peux-tu relire X ?" with
+        # no opinion request, which taught the model that "relire"
+        # alone means review. That directly conflicted with files'
+        # own "Relis X" -> read example (added above after this was
+        # observed live: the same bare phrasing routed inconsistently
+        # between the two tools depending on unrelated history).
+        (
+            "Peux-tu relire src/forge/graph.py et me donner ton avis ?",
+            (
+                '{"tool":"review","content":"{\\"file_path\\":'
+                '\\"src/forge/graph.py\\"}"}'
+            ),
+        ),
+        # Second example: with test_path set, the review graph runs
+        # that file's tests first and uses the output as evidence --
+        # the model needs to see the field used, not just read about
+        # it in the description above.
+        (
+            "Relis src/forge/graph.py et lance ses tests dans tests/test_graph.py",
+            (
+                '{"tool":"review","content":"{\\"file_path\\":'
+                '\\"src/forge/graph.py\\",\\"test_path\\":'
+                '\\"tests/test_graph.py\\"}"}'
+            ),
+        ),
+    ],
+    "web_fetch": [
+        (
+            "Fetch https://example.com/status and tell me what it says",
+            '{"tool":"web_fetch","content":"https://example.com/status"}',
+        ),
+    ],
+    "research": [
+        # No "done":false here -- research is a single, self-contained
+        # call (search -> fetch -> synthesize happen internally in one
+        # graph run). This exists specifically because chaining
+        # web_search into a router-decided second step reliably failed
+        # with this model (confirmed live, twice, with different hint
+        # designs, and with prompt caching disabled to rule out a
+        # cache bug) -- so the fix removes the decision from the
+        # router's hands entirely rather than asking it to try harder.
+        (
+            "Tu peux me faire l'actualité du jeu vidéo s'il te plaît",
+            '{"tool":"research","content":"actualité jeu vidéo"}',
+        ),
+        (
+            "Quelles sont les dernières actualités en bourse ?",
+            '{"tool":"research","content":"actualités bourse aujourd\'hui"}',
+        ),
+    ],
+    "web_search": [
+        # Only for when the user wants links/sources themselves, not
+        # an answer -- contrast with "research" above, which is the
+        # default for an actual question about something current.
+        (
+            "Trouve-moi des articles récents sur le langage Zig",
+            '{"tool":"web_search","content":"articles récents langage Zig"}',
+        ),
+    ],
 }
 
 # If ENABLED_TOOLS ends up empty (misconfiguration), fall back to this
@@ -198,7 +331,8 @@ def _examples(tools: list[str]) -> str:
 def _build_template(tools: list[str]) -> str:
     return (
         "/no_think\n"
-        "You are Forge, a JSON-routing assistant.\n\n"
+        "You are Forge, a JSON-routing assistant.\n"
+        f"{today_line()}\n\n"
         "Return ONLY valid JSON. NO EXPLANATION, NO TEXT OUTSIDE THE JSON.\n\n"
         "Format:\n"
         "{\n"
@@ -237,6 +371,11 @@ _MAX_HISTORY_ENTRY = 120  # chars per entry displayed in the prompt
 # too much for an 8k-token local model's prompt budget alongside
 # everything else in it.
 _MAX_STEP_CONTEXT_FILE_ENTRY = 4000
+# A web_search result needs room for several ranked results (title +
+# URL + snippet each) to actually be useful for the model to pick
+# from -- much more than a compact history summary, though nowhere
+# near as much as a full file read.
+_MAX_STEP_CONTEXT_SEARCH_ENTRY = 1500
 
 
 def _format_history(history: list[dict] | None) -> str:
@@ -266,6 +405,27 @@ def _format_history(history: list[dict] | None) -> str:
             content = content[:_MAX_HISTORY_ENTRY] + "…"
         lines.append(f"- {speaker}: {content}")
 
+    # Addresses a real unresolved case from v3.9: "analyse le contenu"
+    # referring implicitly to a file mentioned earlier (not named
+    # again) could make the model answer from imagined content
+    # instead of ever actually reading the real file. A files/review
+    # confirmation persisted above (e.g. "[ok] written N bytes to
+    # notes.py") already contains the real path -- this instruction
+    # is what tells the model to go find and reuse it, instead of
+    # guessing or fabricating file content. Cross-turn reference
+    # resolution, not a single missing worked example, so this is a
+    # standing instruction rather than a step_context-gated hint like
+    # the ones below (those only fire within a single multi-step run).
+    lines.append(
+        '\nIf the new message below refers to a file vaguely ("ce '
+        'fichier", "le contenu", "améliore-le", "analyse-le") without '
+        "naming a path, look through the context above for the most "
+        "recently mentioned real file path (from a files/review "
+        "action) and use that exact path. Do NOT invent file content "
+        "from memory -- read the file first if you don't already have "
+        "its current content in this context."
+    )
+
     return "\n".join(lines) + "\n"
 
 
@@ -281,9 +441,11 @@ def _format_step_context(step_context: list[dict] | None) -> str:
     lines = ["\nResult from a tool you already called earlier in this turn:"]
     last_was_memory_result = False
     last_was_files_read = False
+    last_was_web_search = False
     for turn in step_context:
         content = turn.get("content", "")
         last_was_memory_result = content.startswith("[memory]")
+        last_was_web_search = content.startswith("[web_search]")
         # A files read: the "[files] " prefix, but not a write
         # confirmation/error, which both start with "[ok]"/"[error]"
         # right after that prefix.
@@ -295,9 +457,12 @@ def _format_step_context(step_context: list[dict] | None) -> str:
         # step, and _MAX_HISTORY_ENTRY (120 chars) is sized for
         # compact history summaries, not for something the model must
         # accurately rewrite. Still bounded, just far less aggressively.
-        cap = (
-            _MAX_STEP_CONTEXT_FILE_ENTRY if last_was_files_read else _MAX_HISTORY_ENTRY
-        )
+        if last_was_files_read:
+            cap = _MAX_STEP_CONTEXT_FILE_ENTRY
+        elif last_was_web_search:
+            cap = _MAX_STEP_CONTEXT_SEARCH_ENTRY
+        else:
+            cap = _MAX_HISTORY_ENTRY
         if len(content) > cap:
             content = content[:cap] + "…"
         lines.append(f"- {content}")
@@ -343,6 +508,37 @@ def _format_step_context(step_context: list[dict] | None) -> str:
             'applied>"}. Do NOT call "action":"read" again, and do NOT '
             "just answer in chat -- the user expects the actual file to "
             "be updated, not a description of what to change."
+        )
+    elif last_was_web_search:
+        # Same loop-guard reasoning as memory/files above -- and the
+        # same lesson learned twice already on this file (memory's
+        # recall hint, and web_search's own worked examples needing
+        # done:false): a prose instruction alone is not enough, this
+        # model needs the exact JSON shape to copy. The first version
+        # of this hint was prose-only ("respond with tool:chat...")
+        # and the model repeated web_search with the identical query
+        # instead, tripping the loop guard -- confirmed live, not
+        # hypothetical.
+        #
+        # Two genuinely valid next steps exist here (answer from the
+        # snippets, or fetch one result for full detail), so the hint
+        # states both with a concrete example each, rather than
+        # forcing a single path: forcing "always fetch" would waste a
+        # step when the snippets already answer the question, and
+        # forcing "always answer from snippets" would give a shallow
+        # answer when the user actually needs a specific page's full
+        # content.
+        lines.append(
+            "The search results above already contain titles, URLs, and "
+            "snippets. Do NOT call web_search again with the same or a "
+            "similar query -- pick ONE of these two next steps:\n"
+            "1) If the snippets already answer the question, respond "
+            'with {"tool":"chat","content":"<natural answer written in '
+            'your own words from the snippets above>"}. Do NOT just '
+            "list the raw results back as your answer.\n"
+            "2) If the user needs the full content of one specific "
+            'result, respond with {"tool":"web_fetch","content":"<that '
+            "result's exact URL>\"}."
         )
 
     return "\n".join(lines) + "\n"

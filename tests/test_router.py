@@ -409,3 +409,228 @@ def test_plain_text_answer_is_not_flagged_as_fallback():
     decision = parse_router_output("Bien sûr, voici la réponse à votre question.")
     assert decision.is_fallback is False
     assert "Bien sûr" in decision.content
+
+
+def test_prompt_includes_review_description_when_enabled():
+    prompt = build_router_prompt(
+        "relis ce fichier", available_tools=["chat", "code", "review"]
+    )
+    assert '"review"' in prompt
+    assert "file_path" in prompt
+
+
+def test_prompt_omits_review_when_not_enabled():
+    prompt = build_router_prompt("relis ce fichier", available_tools=["chat", "code"])
+    assert '"review"' not in prompt
+
+
+def test_prompt_includes_review_test_path_example():
+    """Regression-style: without a worked example showing test_path,
+    a small local model only ever sees file_path and never combines a
+    review with running that file's tests, even when explicitly asked
+    to."""
+    prompt = build_router_prompt(
+        "relis ce fichier et ses tests", available_tools=["chat", "code", "review"]
+    )
+    assert '\\"test_path\\"' in prompt
+
+
+def test_prompt_review_examples_json_is_well_formed():
+    import json
+
+    prompt = build_router_prompt(
+        "relis ce fichier", available_tools=["chat", "code", "review"]
+    )
+    for line in prompt.splitlines():
+        if '"tool":"review"' in line and line.strip().startswith("{"):
+            outer = json.loads(line.strip().rstrip(","))
+            inner = json.loads(outer["content"])
+            assert "file_path" in inner
+
+
+def test_prompt_disambiguates_bare_relis_from_review_with_opinion():
+    """
+    Regression test for the exact ambiguity hit in production use:
+    review's own first worked example used to be a bare "relire X"
+    with no request for feedback, which taught the model that the
+    verb alone means review -- directly conflicting with files' own
+    "relis X" -> read example. Both tools' examples must now anchor
+    the same verb to different tools based on whether an opinion is
+    requested, not just to the presence of "relis"/"relire".
+    """
+    prompt = build_router_prompt(
+        "relis quelque chose",
+        available_tools=["chat", "code", "files", "review"],
+    )
+    # files' bare-read example must be present, unqualified by any
+    # opinion request
+    assert '"tool":"files"' in prompt
+    assert "Relis hello.go" in prompt
+
+    # review's example must pair the same verb with an explicit
+    # request for feedback, not stand alone
+    assert "et me donner ton avis" in prompt or "donne ton avis" in prompt
+
+
+def test_prompt_includes_web_fetch_description_and_examples():
+    """
+    Regression test for a real gap hit in production use: web_fetch
+    had no entry at all in TOOL_DESCRIPTIONS/_TOOL_EXAMPLES, so the
+    router fell back to the generic "content is the input this tool
+    expects" wording and produced malformed content (an empty/non-URL
+    string, observed as "[error] unsupported scheme: ''").
+    """
+    prompt = build_router_prompt(
+        "fetch a url", available_tools=["chat", "code", "web_fetch"]
+    )
+    assert '"web_fetch"' in prompt
+    assert "does NOT search" in prompt
+    assert "https://example.com/status" in prompt
+
+
+def test_prompt_web_fetch_defers_to_research_when_available():
+    """
+    web_fetch's description must point to "research" for vague/no-URL
+    requests once it exists -- the old behavior (teaching a chat
+    refusal, then later a web_search deferral) became stale once
+    Forge gained a reliable single-call research tool. web_search
+    chaining into a second router-decided step reliably failed with
+    this model, which is exactly why "research" exists.
+    """
+    prompt = build_router_prompt(
+        "actualités", available_tools=["chat", "code", "web_fetch", "research"]
+    )
+    assert "research" in prompt
+    # the vague-news example now lives under research, not web_fetch
+    assert "actualités bourse" in prompt
+
+
+def test_prompt_omits_web_fetch_when_not_enabled():
+    prompt = build_router_prompt("fetch a url", available_tools=["chat", "code"])
+    assert '"web_fetch"' not in prompt
+
+
+def test_prompt_includes_web_search_description_and_examples():
+    prompt = build_router_prompt(
+        "cherche quelque chose",
+        available_tools=["chat", "code", "web_search"],
+    )
+    assert '"web_search"' in prompt
+    assert "not a URL" in prompt
+    assert "langage Zig" in prompt
+
+
+def test_prompt_includes_research_description_and_examples():
+    """
+    "research" (search -> fetch -> synthesize as one deterministic
+    graph run, see graphs/research.py) must have its own description
+    and examples distinct from web_search -- it's the default choice
+    for an actual answer/summary about something current, while
+    web_search stays for when the user wants links/sources themselves.
+    """
+    prompt = build_router_prompt(
+        "actualité du jeu vidéo",
+        available_tools=["chat", "code", "research"],
+    )
+    assert '"research"' in prompt
+    assert "one call" in prompt or "internally" in prompt
+    assert "actualité jeu vidéo" in prompt
+    assert "actualités bourse" in prompt
+
+
+def test_prompt_research_examples_never_use_done_false():
+    """
+    Regression guard for the opposite bug: research must NEVER be
+    taught with "done":false, since it's explicitly a single,
+    self-contained call (search+fetch+synthesize happen inside the
+    graph, not across router steps). Adding done:false here would
+    reintroduce the same multi-step chaining reliability problem
+    research exists specifically to avoid.
+    """
+    prompt = build_router_prompt(
+        "actualité du jeu vidéo",
+        available_tools=["chat", "code", "research"],
+    )
+    examples_block = prompt[prompt.find("Examples:") :]
+    for line in examples_block.splitlines():
+        if '"tool":"research"' in line:
+            assert '"done"' not in line, f"research example must not use done: {line}"
+
+
+def test_prompt_omits_web_search_when_not_enabled():
+    prompt = build_router_prompt(
+        "cherche quelque chose", available_tools=["chat", "code"]
+    )
+    assert '"web_search"' not in prompt
+
+
+def test_prompt_steers_toward_chat_or_fetch_after_a_web_search_result():
+    step_context = [
+        {
+            "role": "assistant",
+            "content": (
+                "[web_search] Search results for 'Zig': "
+                "1. Zig homepage\n   https://ziglang.org\n   A general-purpose language."
+            ),
+        }
+    ]
+    prompt = build_router_prompt(
+        "cherche Zig",
+        available_tools=["chat", "code", "web_search", "web_fetch"],
+        step_context=step_context,
+    )
+    assert "Do NOT call web_search again" in prompt
+    assert '"tool":"chat","content":"<natural answer' in prompt
+    assert '"tool":"web_fetch","content":"<that result' in prompt
+
+
+def test_prompt_omits_web_search_steering_hint_with_no_step_context():
+    prompt = build_router_prompt(
+        "cherche Zig", available_tools=["chat", "code", "web_search"]
+    )
+    assert "Do NOT call web_search again" not in prompt
+
+
+def test_prompt_includes_todays_date():
+    """
+    Regression test for a real issue observed live: the model
+    confused 2025 and 2026 in a research synthesis with no date
+    grounding at all, only correcting itself once the user manually
+    stated the date in their own prompt. The router prompt must
+    always state today's date so this doesn't depend on the user
+    remembering to do that themselves.
+    """
+    from forge.context_info import today_line
+
+    prompt = build_router_prompt("hello", available_tools=["chat", "code"])
+    assert today_line() in prompt
+
+
+def test_prompt_includes_vague_file_reference_instruction_when_history_exists():
+    """
+    Closes a real unresolved case from v3.9: "analyse le contenu"
+    referring implicitly to a file mentioned earlier in the
+    conversation (not named again) could make the model answer from
+    imagined content instead of ever reading the real file. The
+    history block must always carry an instruction to resolve a vague
+    later reference against the most recent real file path already
+    visible in that same history, rather than fabricating one.
+    """
+    history = [
+        {"role": "user", "content": "Crée un fichier notes.py avec x = 1"},
+        {"role": "assistant", "content": "[ok] written 9 bytes to notes.py"},
+    ]
+    prompt = build_router_prompt(
+        "améliore le contenu",
+        available_tools=["chat", "code", "files"],
+        history=history,
+    )
+    assert "refers to a file vaguely" in prompt
+    assert "notes.py" in prompt  # the real path stayed visible in history
+
+
+def test_prompt_omits_vague_file_reference_instruction_with_no_history():
+    prompt = build_router_prompt(
+        "améliore le contenu", available_tools=["chat", "code", "files"]
+    )
+    assert "refers to a file vaguely" not in prompt

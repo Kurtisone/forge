@@ -117,6 +117,19 @@ SHELL_ALLOWED_COMMANDS: set[str] = {
     if c.strip()
 }
 
+# --- Test/lint tool ----------------------------------------------------------
+# Separate from SHELL_ALLOWED_COMMANDS on purpose: the test tool has its own
+# narrower allowlist so "run the tests" / "lint this" stay first-class router
+# intents with a purpose-built safety boundary, independent of whatever the
+# general shell tool happens to allow.
+TEST_TIMEOUT = int(os.getenv("TEST_TIMEOUT", "60"))
+_default_test_cmds = "pytest,ruff"
+TEST_ALLOWED_COMMANDS: set[str] = {
+    c.strip()
+    for c in os.getenv("TEST_ALLOWED_COMMANDS", _default_test_cmds).split(",")
+    if c.strip()
+}
+
 # --- Tool allowlist ---------------------------------------------------------# A module exposing run() in src/forge/tools/ is NOT dispatchable just
 # because it exists. It must also be explicitly listed here. This is
 # the guard that matters once files.py / git.py / shell.py stop being
@@ -164,3 +177,53 @@ EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://127.0.0.1:8082/embedding")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 EMBEDDING_TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT", "30"))
 RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")
+
+# --- Web fetch tool ----------------------------------------------------------
+# WEB_FETCH_ALLOWED_DOMAINS is empty by default (any public domain is
+# fetchable) -- the SSRF guard in tools/web_fetch.py (blocking private/
+# loopback/link-local resolved IPs) is NOT configurable and always applies,
+# regardless of this allowlist. This matters specifically because Forge
+# itself sits on a home network (NiPoGi behind WireGuard) that a
+# router-hallucinated URL must never be able to reach.
+#
+# Known limitation, not fixed by raising this value alone: heavy
+# corporate portals (observed live: boursorama.com) often wrap large
+# navigation megamenus in generic <div>s instead of semantic
+# <nav>/<header>/<footer>/<aside>, which tools/web_fetch.py's
+# extractor skips by tag name only -- real content on such sites can
+# still be pushed far down past a lot of noise. A real "main content"
+# heuristic (à la Readability/trafilatura) would need a new
+# dependency, which this tool deliberately avoids -- see
+# tools/web_fetch.py's module docstring. web_fetch stays best-effort
+# on non-semantic sites; it's reliable on simpler/standards-compliant
+# pages (docs, articles, wikis).
+WEB_FETCH_TIMEOUT = int(os.getenv("WEB_FETCH_TIMEOUT", "15"))
+WEB_FETCH_MAX_BYTES = int(os.getenv("WEB_FETCH_MAX_BYTES", str(2 * 1024 * 1024)))
+WEB_FETCH_ALLOWED_DOMAINS: set[str] = {
+    d.strip().lower()
+    for d in os.getenv("WEB_FETCH_ALLOWED_DOMAINS", "").split(",")
+    if d.strip()
+}
+
+# --- Web search tool (SearXNG) ------------------------------------------------
+# Requires a self-hosted SearXNG instance -- not a cloud search API, in
+# keeping with Forge's self-hosting posture. SearXNG must have "json" added
+# to search.formats in its own settings.yml (disabled by default upstream,
+# to discourage scraping public instances -- safe to enable on a private,
+# self-hosted one that only Forge talks to). Distinct from web_fetch: this
+# queries a search index for ranked results, it does not fetch a page whose
+# URL is already known.
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://127.0.0.1:8888")
+SEARXNG_TIMEOUT = int(os.getenv("SEARXNG_TIMEOUT", "10"))
+SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", "5"))
+
+# --- Research graph (search -> fetch top N -> synthesize) --------------------
+# Deliberately a deterministic sequence, not a router-driven multi-step
+# chain: see graphs/research.py's module docstring for why -- the router
+# repeatedly failed to reliably follow a "search then decide what's next"
+# instruction with this model, even with explicit worked examples, so the
+# decision was removed from the router's hands entirely for this flow.
+RESEARCH_FETCH_TOP_N = int(os.getenv("RESEARCH_FETCH_TOP_N", "3"))
+RESEARCH_FETCH_CHARS_PER_RESULT = int(
+    os.getenv("RESEARCH_FETCH_CHARS_PER_RESULT", "1500")
+)

@@ -63,22 +63,30 @@ class Orchestrator:
             # --- Loop guard ----------------------------------------------
             call_signature = (decision.tool, decision.content)
             if call_signature in state.seen_calls:
-                if decision.tool == "memory":
-                    # A repeated recall -> rephrase attempt is a known,
+                if decision.tool in ("memory", "web_search"):
+                    # A repeated call on the second step is a known,
                     # non-fatal failure mode with small local models: the
                     # steering hint in router/prompt.py asks them to
-                    # switch to chat on the second step, but in practice
-                    # they sometimes call memory again instead. state
-                    # already holds the previous (successful) memory
-                    # result at this point -- degrade to that instead of
-                    # surfacing an internal loop-guard message. Every
-                    # other tool still hard-fails below: a repeat there
-                    # is a genuine signal worth surfacing, not something
-                    # to paper over.
+                    # switch to chat (or web_fetch, for web_search) on
+                    # the second step, but in practice they sometimes
+                    # repeat the same tool call instead -- confirmed live
+                    # for web_search with two different hint phrasings
+                    # (prose-only, then an explicit worked JSON example)
+                    # and with prompt caching disabled to rule out a
+                    # cache-reuse bug, so this isn't a prompt-wording or
+                    # infra problem, it's a genuine self-correction limit
+                    # of this model class. state already holds the
+                    # previous (successful) result at this point --
+                    # degrade to that instead of surfacing an internal
+                    # loop-guard message. Every other tool still
+                    # hard-fails below: a repeat there is a genuine
+                    # signal worth surfacing, not something to paper
+                    # over.
                     log.warning(
-                        "memory tool repeated identical call (%r) -- "
+                        "%s tool repeated identical call (%r) -- "
                         "falling back to its previous result instead of "
                         "a loop-guard error",
+                        decision.tool,
                         decision.content,
                     )
                     return self._finish(state, remember=True)

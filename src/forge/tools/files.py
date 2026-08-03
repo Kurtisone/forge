@@ -39,15 +39,27 @@ def _safe_path(relative: str) -> Path:
     """
     Resolve *relative* against WORKSPACE_DIR and verify it stays inside.
     Raises PermissionError on any traversal attempt.
+
+    A leading "/" is stripped rather than treated as an escape attempt:
+    "/hello.go" and "hello.go" both mean the same file at the workspace
+    root -- a router-emitted path with a leading slash is a normal,
+    expected shape (observed in real usage), not a traversal attempt.
+    This is also what actually prevents the escape, not just what's
+    convenient: Path(workspace) / "/etc/passwd" would otherwise
+    silently discard the workspace prefix entirely (a pathlib join
+    with an absolute right-hand side replaces the left side), so
+    stripping first is what guarantees the join always stays relative.
     """
     workspace = Path(WORKSPACE_DIR).resolve()
     workspace.mkdir(parents=True, exist_ok=True)
 
-    target = (workspace / relative).resolve()
+    target = (workspace / relative.lstrip("/")).resolve()
     try:
         target.relative_to(workspace)
     except ValueError:
-        raise PermissionError(f"path {relative!r} escapes workspace {str(workspace)!r}")
+        raise PermissionError(
+            f"path {relative!r} escapes workspace {str(workspace)!r}"
+        ) from None
     return target
 
 

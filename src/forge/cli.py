@@ -2,8 +2,13 @@
 Forge CLI — command-line entry points beyond the REPL.
 
 Available commands:
-  forge review <file> [question]   — review a file with the LLM
-  forge replay <run_id>            — replay a past execution trace
+  forge review <file> [question] [--tests <path>]   — review a file
+                                                        with the LLM,
+                                                        optionally
+                                                        running its
+                                                        tests first
+  forge replay <run_id>                              — replay a past
+                                                        execution trace
 
 Run from container:
   podman run --rm --env-file .env.local \\
@@ -12,6 +17,7 @@ Run from container:
 
 Or directly:
   PYTHONPATH=src python -m forge.cli review src/forge/main.py
+  PYTHONPATH=src python -m forge.cli review src/forge/graph.py --tests tests/test_graph.py
 """
 
 import sys
@@ -19,8 +25,17 @@ import sys
 
 def _cmd_review(args: list[str]) -> int:
     if not args:
-        print("Usage: forge review <file> [question]", file=sys.stderr)
+        print("Usage: forge review <file> [question] [--tests <path>]", file=sys.stderr)
         return 1
+
+    test_path = None
+    if "--tests" in args:
+        idx = args.index("--tests")
+        if idx + 1 >= len(args):
+            print("Usage: --tests requires a path argument", file=sys.stderr)
+            return 1
+        test_path = args[idx + 1]
+        args = args[:idx] + args[idx + 2 :]
 
     file_path = args[0]
     question = " ".join(args[1:]) if len(args) > 1 else "Que peut-on améliorer ?"
@@ -28,7 +43,7 @@ def _cmd_review(args: list[str]) -> int:
     from forge.graphs.review import run
 
     print(f"Reviewing {file_path!r}…\n")
-    result = run(file_path, question=question)
+    result = run(file_path, question=question, test_path=test_path)
     print(result)
     return 0
 

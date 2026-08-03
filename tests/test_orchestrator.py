@@ -577,10 +577,47 @@ def test_memory_repeated_recall_degrades_gracefully_instead_of_erroring(
     assert "Stopped" not in result.output
 
 
-def test_non_memory_tool_repeat_still_hard_fails(monkeypatch):
-    """The safety net above is scoped to the memory tool only -- every
-    other tool must keep failing loud on a repeated call, since that's
-    a genuine bug signal there, not a known small-model quirk."""
+def test_web_search_repeated_call_degrades_gracefully_instead_of_erroring(
+    monkeypatch,
+):
+    """
+    Reproduces a real failure from live testing: the small local model
+    repeated the identical web_search call on the second step instead
+    of following the steering hint (switching to chat or web_fetch),
+    tripping the generic loop guard -- confirmed with two different
+    hint phrasings (prose-only, then an explicit worked JSON example)
+    and with prompt caching disabled to rule out a cache-reuse bug, so
+    this is a genuine small-model self-correction limit, not a prompt
+    or infra problem. Same fallback as memory's recall: degrade to the
+    already-successful previous result instead of surfacing the
+    internal "Stopped: the router tried to repeat the same step."
+    message.
+    """
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setitem(
+        TOOLS, "web_search", lambda content: "Search results for 'Zig':\n1. ..."
+    )
+
+    search_call = json.dumps(
+        {"tool": "web_search", "content": "langage Zig", "done": False}
+    )
+    # Always returns the identical call -> the loop guard trips on step 2.
+    monkeypatch.setattr(orch_mod, "call_llm", lambda p: search_call)
+
+    result = Orchestrator(max_steps=2).run("Cherche des infos sur Zig")
+
+    assert result.ok
+    assert result.error is None
+    assert result.tool == "web_search"
+    assert result.output == "Search results for 'Zig':\n1. ..."
+    assert "Stopped" not in result.output
+
+
+def test_non_memory_non_web_search_tool_repeat_still_hard_fails(monkeypatch):
+    """The safety net above is scoped to memory and web_search only --
+    every other tool must keep failing loud on a repeated call, since
+    that's a genuine bug signal there, not a known small-model quirk."""
     monkeypatch.setattr(
         orch_mod,
         "call_llm",
