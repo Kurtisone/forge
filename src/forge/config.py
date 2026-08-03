@@ -227,3 +227,16 @@ RESEARCH_FETCH_TOP_N = int(os.getenv("RESEARCH_FETCH_TOP_N", "3"))
 RESEARCH_FETCH_CHARS_PER_RESULT = int(
     os.getenv("RESEARCH_FETCH_CHARS_PER_RESULT", "1500")
 )
+
+# --- Sysadmin graph (discover -> collect -> synthesize) ---------------------
+# Deliberately read-only, always: no command in graphs/sysadmin.py can
+# mutate anything (no systemctl restart/stop, no podman stop/rm) -- this
+# mirrors the tools/git.py decision to keep that tool strictly read-only
+# too, with any write action requiring an explicit human-confirmed flow
+# outside the router's reach. Not configurable here on purpose, unlike
+# SHELL_ALLOWED_COMMANDS: sysadmin's command set is fixed in code, not
+# environment-extensible, so enabling this tool can never accidentally
+# grant more than "read logs, discover what's running."
+SYSADMIN_DISCOVERY_TIMEOUT = int(os.getenv("SYSADMIN_DISCOVERY_TIMEOUT", "10"))
+SYSADMIN_COLLECT_TIMEOUT = int(os.getenv("SYSADMIN_COLLECT_TIMEOUT", "15"))
+SYSADMIN_MAX_LOG_LINES = int(os.getenv("SYSADMIN_MAX_LOG_LINES", "200"))
