@@ -16,11 +16,17 @@ User Input
 LLM Router  (structured JSON decision)
    ↓
 Tool Dispatcher
-   ├── chat     (conversational response)
-   ├── code     (code generation)
-   ├── files    (sandboxed read/write/list)
-   ├── shell    (sandboxed subprocess)
-   └── git      (read-only git operations)
+   ├── chat        (conversational response)
+   ├── code        (code generation)
+   ├── files       (sandboxed read/write/list)
+   ├── shell       (sandboxed subprocess)
+   ├── git         (read-only git operations)
+   ├── memory      (remember/recall, vector search)
+   ├── test        (sandboxed pytest/ruff runner)
+   ├── review      (read a file, optionally test it, analyze)
+   ├── web_fetch   (fetch a known URL)
+   ├── web_search  (SearXNG links/snippets, no synthesis)
+   └── research    (search → fetch → synthesize, one call)
 ```
 
 The model must output a strict JSON instruction (`{"tool": "...", "content": "..."}`)
@@ -108,7 +114,9 @@ src/forge/
 ├── graph.py             # Node / Edge / Graph execution engine
 ├── graphs/
 │   ├── default.py       # router → dispatch → fallback (drop-in for Orchestrator)
-│   └── review.py        # read_file → llm_review (chains filesystem + LLM)
+│   ├── review.py        # read_file → [run_tests] → llm_review (optional test_path adds the middle step)
+│   └── research.py      # search → fetch top N → synthesize, one deterministic call (v3.10)
+├── text_cleaning.py     # shared plain-text response cleaning (review.py + research.py)
 │
 ├── router/
 │   ├── prompt.py        # router prompt template — isolated; nothing else builds prompts
@@ -120,13 +128,18 @@ src/forge/
 │   ├── code.py
 │   ├── files.py         # sandboxed read/write/list within WORKSPACE_DIR
 │   ├── shell.py         # sandboxed subprocess within WORKSPACE_DIR + allowlist
-│   ├── git.py           # read-only git operations (status/diff/log/show/branch)
-│   └── memory.py        # router-dispatchable remember/recall (v3.7) — same rag.py backend
+│   ├── git.py           # read-only git operations (status/diff/log/show/branch) — no write counterpart, by design
+│   ├── memory.py        # router-dispatchable remember/recall (v3.7) — same rag.py backend
+│   ├── test.py          # sandboxed pytest/ruff runner, own allowlist (v3.10)
+│   ├── review.py        # dispatchable wrapper around graphs/review.py (v3.10)
+│   ├── web_fetch.py      # fetch a known URL, SSRF-guarded (v3.10)
+│   ├── web_search.py    # SearXNG-backed search, links/snippets only (v3.10)
+│   └── research.py      # dispatchable wrapper around graphs/research.py (v3.10)
 │
 ├── memory.py            # JSON-backed rolling conversation history + key/value facts
 ├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
 ├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search)
-├── cli.py               # forge review <file> / forge replay <run_id>
+├── cli.py               # forge review <file> [--tests <path>] / forge replay <run_id>
 ├── main.py              # REPL — !clear, !trace, !remember, !recall, !help
 │
 └── providers/
