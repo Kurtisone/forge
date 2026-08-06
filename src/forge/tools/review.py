@@ -39,6 +39,7 @@ from pathlib import Path
 
 from forge.config import WORKSPACE_DIR
 from forge.graphs.review import run as review_run
+from forge.kernel.capability import Requirements
 from forge.tool_payload import loads_payload
 
 # A filename component cannot exceed 255 bytes on ext4/btrfs, so a
@@ -74,6 +75,16 @@ def _looks_like_a_path(relative: str) -> str | None:
     if len(relative) > _MAX_PATH_CHARS:
         return f"path is {len(relative)} chars, over the {_MAX_PATH_CHARS} limit"
     return None
+
+
+# Reads a file and calls the LLM. Running the optional tests is
+# delegated to the `test` tool, which declares its own profile.
+REQUIREMENTS = Requirements(
+    network=False,
+    llm=True,
+    mutates_workspace=False,
+    spawns_process=False,
+)
 
 
 def _safe_workspace_path(relative: str) -> Path:

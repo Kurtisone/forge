@@ -33,7 +33,17 @@ Interface: run(content: str) -> str
 import requests
 
 from forge.config import SEARXNG_MAX_RESULTS, SEARXNG_TIMEOUT, SEARXNG_URL
+from forge.kernel.capability import Requirements
 from forge.logger import log
+
+# Reaches the Internet through the self-hosted SearXNG instance.
+REQUIREMENTS = Requirements(
+    network=True,
+    llm=False,
+    mutates_workspace=False,
+    spawns_process=False,
+)
+
 
 _MAX_SNIPPET_CHARS = 300
 

@@ -32,7 +32,17 @@ import shlex
 import subprocess
 from pathlib import Path
 
+from forge.kernel.capability import Requirements
 from forge.logger import log
+
+# Read-only subcommands only, but each one is a subprocess.
+REQUIREMENTS = Requirements(
+    network=False,
+    llm=False,
+    mutates_workspace=False,
+    spawns_process=True,
+)
+
 
 _ALLOWED_SUBCOMMANDS = {
     "status",

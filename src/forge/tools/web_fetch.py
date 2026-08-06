@@ -46,7 +46,17 @@ from forge.config import (
     WEB_FETCH_MAX_BYTES,
     WEB_FETCH_TIMEOUT,
 )
+from forge.kernel.capability import Requirements
 from forge.logger import log
+
+# One outbound HTTP(S) request, behind the SSRF guard.
+REQUIREMENTS = Requirements(
+    network=True,
+    llm=False,
+    mutates_workspace=False,
+    spawns_process=False,
+)
+
 
 _MAX_OUTPUT_CHARS = 6_000
 _REDIRECT_CODES = {301, 302, 303, 307, 308}

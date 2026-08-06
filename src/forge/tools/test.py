@@ -70,7 +70,18 @@ from forge.config import (
     TEST_TIMEOUT,
     WORKSPACE_DIR,
 )
+from forge.kernel.capability import Requirements
 from forge.logger import log
+
+# pytest/ruff run in a subprocess and write caches into the
+# workspace. The allowlist is fixed in code, so no Internet.
+REQUIREMENTS = Requirements(
+    network=False,
+    llm=False,
+    mutates_workspace=True,
+    spawns_process=True,
+)
+
 
 _MAX_OUTPUT_CHARS = 8_000
 
