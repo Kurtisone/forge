@@ -9,6 +9,10 @@ Available commands:
                                                         tests first
   forge replay <run_id>                              — replay a past
                                                         execution trace
+  forge capabilities                                 — list what Forge
+                                                        can currently do
+                                                        and what each
+                                                        capability needs
 
 Run from container:
   podman run --rm --env-file .env.local \\
@@ -82,9 +86,41 @@ def _cmd_replay(args: list[str]) -> int:
     return 0
 
 
+def _cmd_capabilities(args: list[str]) -> int:
+    from forge.kernel import registry as capabilities
+    from forge.tools.registry import load_tools
+
+    load_tools()
+
+    names = capabilities.capability_names()
+    if not names:
+        print("No capabilities registered — check ENABLED_TOOLS in .env.local.")
+        return 0
+
+    width = max(max(len(n) for n in names), len("CAPABILITY"))
+    print(f"{len(names)} capabilit{'y' if len(names) == 1 else 'ies'} registered\n")
+    print(f"   {'CAPABILITY'.ljust(width)}  {'PROVIDER'.ljust(width)}  REQUIRES")
+    for name in names:
+        for cap in capabilities.candidates(name):
+            mark = " " if cap.declared else "!"
+            print(
+                f" {mark} {cap.name.ljust(width)}  "
+                f"{cap.provider.ljust(width)}  {cap.requirements.summary()}"
+            )
+
+    missing = capabilities.undeclared()
+    if missing:
+        print(
+            f"\n! {len(missing)} provider(s) declare no REQUIREMENTS and are shown "
+            "with the most demanding profile."
+        )
+    return 0
+
+
 _COMMANDS = {
     "review": _cmd_review,
     "replay": _cmd_replay,
+    "capabilities": _cmd_capabilities,
 }
 
 
