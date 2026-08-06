@@ -15,6 +15,7 @@ rather than left to documentation:
 """
 
 import dataclasses
+import importlib
 import sys
 
 import pytest
@@ -257,3 +258,39 @@ def test_registry_exposes_no_way_to_choose():
     """
     for forbidden in ("resolve", "best", "pick", "select", "choose"):
         assert not hasattr(capabilities, forbidden)
+
+
+def test_every_shipped_tool_declares_its_requirements():
+    """
+    A forcing function, not a style check.
+
+    An undeclared tool still works -- it is registered with the most
+    demanding profile and flagged. But that profile denies it under any
+    policy restriction, so a tool that simply forgot to declare would
+    look broken in a degraded context for a reason nobody would think
+    to look for. Failing here, at the moment the tool is added, is the
+    cheap version of that discovery.
+
+    Scans the package rather than a list, so a new tool is covered the
+    day its file lands. The fix is one REQUIREMENTS constant in the
+    module the failure names.
+    """
+    import pkgutil
+
+    import forge.tools as tools_pkg
+    from forge.kernel.capability import Requirements
+
+    missing = []
+    for module in pkgutil.iter_modules(tools_pkg.__path__):
+        if module.name == "registry":
+            continue
+        mod = importlib.import_module(f"forge.tools.{module.name}")
+        if not hasattr(mod, "run"):
+            continue
+        if not isinstance(getattr(mod, "REQUIREMENTS", None), Requirements):
+            missing.append(module.name)
+
+    assert not missing, (
+        f"tools without a REQUIREMENTS declaration: {sorted(missing)} -- "
+        "add one to each module (see forge/kernel/capability.py)"
+    )
