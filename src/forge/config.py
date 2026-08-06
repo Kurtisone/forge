@@ -495,3 +495,23 @@ SYSADMIN_LOG_CHARS_BUDGET = int(os.getenv("SYSADMIN_LOG_CHARS_BUDGET", "2000"))
 SYSADMIN_JOURNAL_DIR = os.getenv("SYSADMIN_JOURNAL_DIR", "")
 SYSADMIN_DBUS_ADDRESS = os.getenv("SYSADMIN_DBUS_ADDRESS", "")
 SYSADMIN_PODMAN_URL = os.getenv("SYSADMIN_PODMAN_URL", "")
+
+# --- Policy Engine ----------------------------------------------------------
+# Transversal gate consulted before a capability runs (ARCHITECTURE.md,
+# "Policy Engine"). Each flag denies a whole class of capability by the
+# static requirements it declares, regardless of which tool it is.
+#
+# All three default to true, so an untouched deployment behaves exactly
+# as before. They exist to make a degraded context expressible as
+# configuration rather than as a code path: NiPoGi offline or a metered
+# connection -> POLICY_ALLOW_NETWORK=false and research / web_fetch /
+# web_search stop being reachable while chat, code, memory and review
+# keep working. A machine where Forge should look but never touch ->
+# POLICY_ALLOW_WORKSPACE_WRITES=false.
+#
+# This is a deny gate, not a permission grant: it can only subtract from
+# what ENABLED_TOOLS already allows. Turning a flag on never makes a
+# tool reachable that was not already opted in.
+POLICY_ALLOW_NETWORK = _bool("POLICY_ALLOW_NETWORK", "true")
+POLICY_ALLOW_WORKSPACE_WRITES = _bool("POLICY_ALLOW_WORKSPACE_WRITES", "true")
+POLICY_ALLOW_SUBPROCESS = _bool("POLICY_ALLOW_SUBPROCESS", "true")

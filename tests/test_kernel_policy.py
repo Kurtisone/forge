@@ -1,0 +1,242 @@
+"""
+Tests for forge.kernel.policy: the deterministic deny gate, and its
+integration into both execution paths.
+
+The policy flags are read into forge.kernel.policy at import time, so
+tests monkeypatch them there rather than on forge.config -- the same
+pattern as tests/test_registry.py with ENABLED_TOOLS.
+
+Three properties are asserted rather than merely documented:
+
+1. The gate only ever SUBTRACTS. No combination of flags can make a
+   capability run that was not already reachable, and a capability
+   requiring nothing is allowed no matter what is switched off.
+2. Denials are explained. A blocked capability returns a reason that
+   reaches the caller, because a capability that silently does not run
+   is indistinguishable from one that ran badly.
+3. Denial is by declared requirement, never by tool name -- so a tool
+   that declares nothing is caught by every flag, and a new tool is
+   covered the day it lands without editing a list here.
+"""
+
+import json
+
+import pytest
+
+from forge.kernel import policy
+from forge.kernel.capability import LOCAL_READONLY, Requirements, ToolCapability
+from forge.orchestrator import Orchestrator
+
+NETWORK_ONLY = Requirements(
+    network=True, llm=False, mutates_workspace=False, spawns_process=False
+)
+WRITES_ONLY = Requirements(
+    network=False, llm=False, mutates_workspace=True, spawns_process=False
+)
+SUBPROCESS_ONLY = Requirements(
+    network=False, llm=False, mutates_workspace=False, spawns_process=True
+)
+LLM_ONLY = Requirements(
+    network=False, llm=True, mutates_workspace=False, spawns_process=False
+)
+
+
+def _cap(name: str, requirements: Requirements) -> ToolCapability:
+    return ToolCapability(
+        name=name,
+        provider=name,
+        handler=lambda content: content,
+        requirements=requirements,
+        declared=True,
+    )
+
+
+def _deny(monkeypatch, **flags) -> None:
+    """Switch policy flags off by name, e.g. _deny(mp, network=False)."""
+    mapping = {
+        "network": "POLICY_ALLOW_NETWORK",
+        "writes": "POLICY_ALLOW_WORKSPACE_WRITES",
+        "subprocess": "POLICY_ALLOW_SUBPROCESS",
+    }
+    for key, value in flags.items():
+        monkeypatch.setattr(policy, mapping[key], value)
+
+
+# --- Verdict ----------------------------------------------------------------
+
+
+def test_verdict_is_truthy_when_allowed():
+    assert policy.Verdict(allowed=True)
+    assert not policy.Verdict(allowed=False, reason="nope")
+
+
+def test_allowed_verdict_carries_no_reason():
+    assert policy.check(_cap("chat", LOCAL_READONLY)).reason == ""
+
+
+# --- Default posture --------------------------------------------------------
+
+
+def test_everything_is_allowed_by_default():
+    """An untouched deployment must behave as if this module did not exist."""
+    for requirements in (LOCAL_READONLY, NETWORK_ONLY, WRITES_ONLY, SUBPROCESS_ONLY):
+        assert policy.check(_cap("x", requirements)).allowed is True
+
+
+# --- Denial by declared requirement -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flag", "requirements", "expected"),
+    [
+        ("network", NETWORK_ONLY, "network access"),
+        ("writes", WRITES_ONLY, "workspace writes"),
+        ("subprocess", SUBPROCESS_ONLY, "subprocesses"),
+    ],
+)
+def test_each_flag_denies_its_own_requirement(
+    monkeypatch, flag, requirements, expected
+):
+    _deny(monkeypatch, **{flag: False})
+    verdict = policy.check(_cap("target", requirements))
+    assert verdict.allowed is False
+    assert expected in verdict.reason
+    assert "target" in verdict.reason
+
+
+def test_a_flag_does_not_deny_an_unrelated_requirement(monkeypatch):
+    _deny(monkeypatch, network=False)
+    assert policy.check(_cap("files", WRITES_ONLY)).allowed is True
+    assert policy.check(_cap("test", SUBPROCESS_ONLY)).allowed is True
+
+
+def test_local_readonly_survives_every_flag_being_off(monkeypatch):
+    """
+    The gate only subtracts: a capability that requires nothing has
+    nothing to subtract, whatever the context.
+    """
+    _deny(monkeypatch, network=False, writes=False, subprocess=False)
+    assert policy.check(_cap("chat", LOCAL_READONLY)).allowed is True
+
+
+def test_llm_alone_is_never_denied(monkeypatch):
+    """
+    There is deliberately no POLICY_ALLOW_LLM. The router itself calls
+    the LLM on every single turn, so a flag denying LLM use would deny
+    Forge the ability to route at all -- the useful question is *which*
+    model runs where, which belongs to the Scheduler, not to a boolean
+    gate. Asserted so the omission reads as a decision, not an oversight.
+    """
+    _deny(monkeypatch, network=False, writes=False, subprocess=False)
+    assert policy.check(_cap("review", LLM_ONLY)).allowed is True
+
+
+def test_several_blocked_requirements_are_all_named(monkeypatch):
+    _deny(monkeypatch, network=False, writes=False, subprocess=False)
+    verdict = policy.check(_cap("shell", Requirements()))
+    assert verdict.allowed is False
+    for expected in ("network access", "workspace writes", "subprocesses"):
+        assert expected in verdict.reason
+
+
+def test_the_reason_order_is_stable(monkeypatch):
+    """
+    Reasons are built in declaration order, not in the order flags were
+    flipped, so the same capability always explains itself the same way.
+    """
+    _deny(monkeypatch, network=False, subprocess=False)
+    first = policy.check(_cap("shell", Requirements())).reason
+    _deny(monkeypatch, subprocess=False, network=False)
+    assert policy.check(_cap("shell", Requirements())).reason == first
+
+
+def test_an_undeclared_capability_is_caught_by_every_flag(monkeypatch):
+    """
+    Fail-closed, end to end: undeclared requirements default to the most
+    demanding profile, so a tool that declares nothing is denied by any
+    restriction rather than slipping through it.
+    """
+    undeclared = ToolCapability(name="mystery", provider="mystery", handler=lambda c: c)
+    assert undeclared.declared is False
+    for flag in ("network", "writes", "subprocess"):
+        mp = pytest.MonkeyPatch()
+        _deny(mp, **{flag: False})
+        assert policy.check(undeclared).allowed is False
+        mp.undo()
+
+
+def test_policy_is_deterministic(monkeypatch):
+    _deny(monkeypatch, network=False)
+    cap = _cap("research", NETWORK_ONLY)
+    assert policy.check(cap) == policy.check(cap)
+
+
+def test_active_summary_reports_what_is_switched_off(monkeypatch):
+    assert policy.active_summary() == "unrestricted"
+    _deny(monkeypatch, network=False, subprocess=False)
+    summary = policy.active_summary()
+    assert "network" in summary and "subprocess" in summary
+    assert "writes" not in summary
+
+
+# --- Integration: the gate actually stops execution -------------------------
+
+
+def _pin_tool(monkeypatch, name, handler, requirements):
+    """
+    Install a capability through the real derivation path: a tool in
+    TOOLS (so the router parser accepts the name) whose REQUIREMENTS
+    are pinned in the registry's cache. Going through TOOLS rather than
+    REGISTERED matters -- the parser validates router output against
+    the enabled tool set before dispatch is ever reached.
+    """
+    from forge.kernel import registry as capabilities
+    from forge.tools import registry as tool_registry
+
+    monkeypatch.setitem(tool_registry.TOOLS, name, handler)
+    monkeypatch.setitem(capabilities._REQUIREMENTS, name, (requirements, True))
+
+
+def test_orchestrator_refuses_a_denied_capability(monkeypatch):
+    """
+    The denial must reach the user as an explained refusal, not as a
+    confusing downstream error from a tool that should never have run.
+    """
+    import forge.orchestrator as orch_mod
+
+    ran = []
+
+    def handler(_content):
+        ran.append(True)
+        return "should never run"
+
+    _pin_tool(monkeypatch, "netthing", handler, NETWORK_ONLY)
+    _deny(monkeypatch, network=False)
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "netthing", "content": "go"}),
+    )
+
+    result = Orchestrator().run("fetch something")
+
+    assert ran == [], "a denied capability must not have its handler called"
+    assert result.ok is False
+    assert "network access" in (result.error or "")
+
+
+def test_orchestrator_still_runs_an_allowed_capability(monkeypatch):
+    """The gate must not become a blanket refusal once any flag is off."""
+    import forge.orchestrator as orch_mod
+
+    _pin_tool(monkeypatch, "localthing", lambda c: f"ran:{c}", LOCAL_READONLY)
+    _deny(monkeypatch, network=False, writes=False, subprocess=False)
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "localthing", "content": "ok"}),
+    )
+
+    result = Orchestrator().run("do something local")
+    assert result.ok is True
+    assert result.output == "ran:ok"

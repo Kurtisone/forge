@@ -18,6 +18,7 @@ Node order:
 
 from forge.errors import ProviderError
 from forge.graph import Graph
+from forge.kernel import policy
 from forge.kernel.registry import candidates
 from forge.llm import call_llm
 from forge.logger import log
@@ -72,6 +73,16 @@ def _dispatch_node(state: AgentState) -> AgentState:
         )
         log.error("graph dispatch: %s", state.error)
         state.final_output = f"Tool error: {decision.tool}"
+        return state
+
+    verdict = policy.check(providers[0])
+    if not verdict:
+        log.warning(
+            "graph dispatch: policy denied %r: %s", decision.tool, verdict.reason
+        )
+        state.ok = False
+        state.error = verdict.reason
+        state.final_output = verdict.reason
         return state
 
     try:
