@@ -18,10 +18,10 @@ Node order:
 
 from forge.errors import ProviderError
 from forge.graph import Graph
+from forge.kernel.registry import candidates
 from forge.llm import call_llm
 from forge.logger import log
 from forge.router import build_router_prompt, parse_router_output
-from forge.tools.registry import get_tool
 from forge.types import AgentState
 
 
@@ -53,14 +53,29 @@ def _dispatch_node(state: AgentState) -> AgentState:
         state.error = "dispatch: no router decision available"
         return state
 
-    handler = get_tool(decision.tool)
-    if handler is None:
-        log.warning("graph dispatch: no handler for %r, using content", decision.tool)
+    providers = candidates(decision.tool)
+    if not providers:
+        log.warning(
+            "graph dispatch: no capability for %r, using content", decision.tool
+        )
         state.final_output = decision.content
         return state
 
+    if len(providers) > 1:
+        # Same reasoning as orchestrator._dispatch: unreachable until a
+        # capability has a second provider, and a hard stop rather than
+        # an implicit pick when it does.
+        state.ok = False
+        state.error = (
+            f"capability {decision.tool!r} has {len(providers)} providers "
+            "and no Cognitive Scheduler to choose between them"
+        )
+        log.error("graph dispatch: %s", state.error)
+        state.final_output = f"Tool error: {decision.tool}"
+        return state
+
     try:
-        output = handler(decision.content)
+        output = providers[0].execute(decision.content)
         if not isinstance(output, str) or not output.strip():
             raise ValueError(f"tool {decision.tool!r} returned empty or non-str output")
         state.final_output = output
