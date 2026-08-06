@@ -7,6 +7,7 @@ import json
 
 import forge.orchestrator as orch_mod
 from forge.orchestrator import Orchestrator
+from forge.tools import registry as tool_registry
 
 
 def test_chat_round_trip(monkeypatch):
@@ -217,15 +218,56 @@ def test_persisted_user_turn_is_rendered_exactly_like_the_live_turn(monkeypatch)
 
 
 def test_unknown_tool_falls_back_to_chat(monkeypatch):
+    """
+    A router decision naming a tool that isn't registered must fall
+    back to chat rather than reaching dispatch.
+
+    The tool name here is deliberately one that can never exist. This
+    test used to name "shell", which made it pass or fail depending on
+    the ambient ENABLED_TOOLS: with shell enabled -- the normal local
+    configuration -- shell IS registered, the parser accepts it, and
+    the run correctly dispatches to shell instead of falling back, so
+    the assertion failed. CI never caught it because CI runs the
+    default tool set. The behaviour being tested is the fallback, not
+    the exclusion of any particular tool, so the fixture no longer
+    depends on which tools happen to be enabled.
+    """
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {"tool": "no_such_tool_exists", "content": "do the thing"}
+        ),
+    )
+    result = Orchestrator().run("do something with an unknown tool")
+    assert result.tool == "chat"
+
+
+def test_disabled_tool_is_not_reachable_from_router_output(monkeypatch):
+    """
+    The companion property, pinned explicitly instead of inherited
+    from the environment: when a tool is NOT in the enabled set, a
+    router decision naming it must not reach that tool's handler.
+
+    This is the guarantee the previous version of the test above was
+    really about -- worth keeping, but only meaningful when the tool
+    set is pinned by the test rather than by whoever ran it.
+    """
+    monkeypatch.setattr(tool_registry, "ENABLED_TOOLS", {"chat", "code"})
+    tool_registry.load_tools()
+
     monkeypatch.setattr(
         orch_mod,
         "call_llm",
         lambda prompt: json.dumps({"tool": "shell", "content": "rm -rf /"}),
     )
-    result = Orchestrator().run("do something dangerous")
-    assert (
-        result.tool == "chat"
-    )  # shell isn't registered, parser/orchestrator fall back
+    try:
+        result = Orchestrator().run("do something dangerous")
+        assert result.tool == "chat"
+        assert tool_registry.get_tool("shell") is None
+    finally:
+        monkeypatch.undo()
+        tool_registry.load_tools()
 
 
 def test_fallback_placeholder_is_not_remembered(monkeypatch, tmp_path):
