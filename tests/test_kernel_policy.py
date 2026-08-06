@@ -240,3 +240,31 @@ def test_orchestrator_still_runs_an_allowed_capability(monkeypatch):
     result = Orchestrator().run("do something local")
     assert result.ok is True
     assert result.output == "ran:ok"
+
+
+def test_the_shipped_defaults_are_permissive(monkeypatch):
+    """
+    The claim the autouse fixture in conftest.py would otherwise hide:
+    an untouched deployment must behave exactly as it did before the
+    Policy Engine existed. Checked against forge.config with the
+    variables absent, not against the pinned test values.
+    """
+    import importlib
+
+    import forge.config as config_mod
+
+    for var in (
+        "POLICY_ALLOW_NETWORK",
+        "POLICY_ALLOW_WORKSPACE_WRITES",
+        "POLICY_ALLOW_SUBPROCESS",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    try:
+        importlib.reload(config_mod)
+        assert config_mod.POLICY_ALLOW_NETWORK is True
+        assert config_mod.POLICY_ALLOW_WORKSPACE_WRITES is True
+        assert config_mod.POLICY_ALLOW_SUBPROCESS is True
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config_mod)
