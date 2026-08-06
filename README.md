@@ -118,6 +118,64 @@ flowchart TD
     style HostProxies stroke-dasharray: 4 3
 ```
 
+#### The Kernel layer
+
+Dispatch does not look tools up directly any more. Both execution paths — the
+orchestrator and the graph engine — ask the **Capability Registry** which
+providers answer for a capability name, then consult the **Policy Engine**
+before running one. This is Niveau 2 of the trajectory in
+[ARCHITECTURE.md](ARCHITECTURE.md), and it is deliberately the whole of it:
+there is no Scheduler yet, because nothing yet needs one.
+
+```
+Router decision
+      │
+      ▼
+Capability Registry ──► candidates(name)
+      │                 (lists; never chooses)
+      ▼
+Policy Engine ────────► Verdict(allowed, reason)
+      │
+      ▼
+capability.execute(content) ──► ToolResult
+```
+
+The Registry is a **view**, not a snapshot: it derives capabilities from the
+enabled tool set at call time and resolves the handler at execution time, so
+it cannot go stale. It has no `resolve()` / `best()` / `pick()` — listing and
+choosing are different jobs, and choosing belongs to the Cognitive Scheduler
+that does not exist yet. A capability with two providers is a hard error today
+rather than an implicit pick of the first.
+
+Each tool declares a `REQUIREMENTS` constant: four statically knowable facts
+(reaches the Internet, calls the LLM itself, writes to the workspace, spawns a
+process). They are declarations, not measurements — cost, latency and quality
+scores arrive when something measures them, not before. A tool that declares
+nothing gets the most demanding profile and is flagged, so omission is never
+mistaken for harmlessness.
+
+```
+$ forge capabilities
+11 capabilities registered
+policy: denying network
+
+   CAPABILITY  PROVIDER    REQUIRES
+   chat        chat        local, read-only
+   files       files       writes
+   git         git         subprocess
+ x research    research    network, llm
+   review      review      llm
+ x web_search  web_search  network
+```
+
+The Policy Engine is a deny gate over those declarations, and it only ever
+subtracts from what `ENABLED_TOOLS` already allows. Its use is context, not
+containment — the real sandboxing stays in the tools themselves (`web_fetch`'s
+SSRF guard, `files`' workspace confinement, `shell`'s allowlist). Off the
+network that hosts SearXNG, `POLICY_ALLOW_NETWORK=false` makes `research` and
+`web_search` refuse with a stated reason instead of failing later with a
+connection error, while `chat`, `code`, `memory` and `review` keep working.
+
 GitHub renders this diagram automatically; if you're reading this elsewhere, the ASCII
 directory tree below covers the same layering.
 
@@ -164,8 +222,13 @@ src/forge/
 ├── memory.py            # JSON-backed rolling conversation history + key/value facts
 ├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
 ├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search)
-├── cli.py               # forge review <file> [--tests <path>] / forge replay <run_id>
+├── cli.py               # forge review <file> [--tests <path>] / forge replay <run_id> / forge capabilities
 ├── main.py              # REPL — !clear, !trace, !remember, !recall, !help
+│
+├── kernel/              # Capability layer — see ARCHITECTURE.md
+│   ├── capability.py    # Capability interface, Requirements, ToolCapability
+│   ├── registry.py      # Capability Registry — lists candidates, never chooses
+│   └── policy.py        # Policy Engine — deterministic deny gate, explained verdicts
 │
 └── providers/
     ├── llama_cpp.py
@@ -184,7 +247,7 @@ user_input
    ↓
 Orchestrator._route()      →  RouterDecision   (LLM layer)
    ↓
-Orchestrator._dispatch()   →  ToolResult       (tools layer)
+Orchestrator._dispatch()   →  ToolResult       (capability + policy, then tools layer)
    ↓
 done? ──no──→  fold result into history  ──→  route again (up to MAX_STEPS)
    │
