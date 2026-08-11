@@ -48,8 +48,14 @@ _ALLOWED_GET_PATTERNS = [
     re.compile(r"^(/v[\d.]+)?(/libpod)?/containers/json(\?.*)?$"),
     re.compile(r"^(/v[\d.]+)?(/libpod)?/containers/[^/]+/logs(\?.*)?$"),
     # /_ping is harmless and useful for a startup healthcheck of this
-    # proxy itself; not a container-data endpoint.
-    re.compile(r"^/_ping$"),
+    # proxy itself; not a container-data endpoint. Must tolerate the
+    # same optional version/libpod prefix as the other two patterns --
+    # the real podman CLI pings via e.g. "/v5.4.2/libpod/_ping" before
+    # its actual request, not the bare "/_ping" this originally only
+    # matched, which made every real podman command fail its own
+    # connectivity check with a 403 from this proxy. Caught in
+    # production on 2026-08-11.
+    re.compile(r"^(/v[\d.]+)?(/libpod)?/_ping$"),
 ]
 
 

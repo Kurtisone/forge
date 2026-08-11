@@ -32,6 +32,16 @@ def test_allows_ping():
     assert _is_allowed("GET", "/_ping")
 
 
+def test_allows_versioned_ping_like_real_podman_client():
+    """Regression test: the real podman CLI pings via a versioned path
+    (e.g. /v5.4.2/libpod/_ping) before its actual request, not the
+    bare /_ping this originally only matched -- every real podman
+    command failed its own connectivity check with a 403 from this
+    proxy until this was fixed. Caught in production on 2026-08-11."""
+    assert _is_allowed("GET", "/v5.4.2/libpod/_ping")
+    assert _is_allowed("GET", "/v5.4.2/_ping")
+
+
 def test_rejects_non_get_methods_even_on_allowed_paths():
     """The core guarantee: no verb other than GET reaches the real
     socket, no matter the path -- start/stop/rm/exec/pull all go
