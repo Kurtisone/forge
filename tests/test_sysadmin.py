@@ -257,6 +257,106 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
     assert "line 0 of a very long journalctl dump" not in captured["prompt"]
 
 
+def test_run_fixed_prefixes_error_on_nonzero_exit(monkeypatch):
+    """Regression test for the exact bug hit in production on
+    2026-08-11: _run_fixed captured stdout/stderr on a FAILED command
+    (real exit code != 0) exactly like a successful one -- only actual
+    Python exceptions (FileNotFoundError/TimeoutExpired) got the
+    "[error]" prefix. systemctl's real two-line failure message
+    ("System has not been booted with systemd...\nFailed to connect
+    to bus...") slipped through as valid output and got parsed as two
+    fake unit names ("System", "Failed") by _discover_node."""
+
+    class FakeCompletedProcess:
+        returncode = 1
+        stdout = (
+            "System has not been booted with systemd as init system "
+            "(PID 1). Can't operate.\nFailed to connect to bus: Host is down"
+        )
+        stderr = ""
+
+    monkeypatch.setattr(
+        sysadmin_mod.subprocess, "run", lambda *a, **kw: FakeCompletedProcess()
+    )
+
+    result = sysadmin_mod._run_fixed(["systemctl", "list-units"], 10)
+
+    assert result.startswith("[error]")
+    assert "System has not been booted" in result
+
+
+def test_sysadmin_discover_handles_nonzero_exit_gracefully(monkeypatch):
+    """End-to-end version of the above: a real command failure (exit
+    code != 0, no Python exception) must not be parsed as fake unit/
+    container names, exactly like the FileNotFoundError case already
+    covered by test_sysadmin_discover_handles_missing_executables_gracefully."""
+
+    def fake_run_fixed_nonzero_exit(cmd, timeout):
+        if cmd[0] == "systemctl":
+            return (
+                "[error] systemctl exited 1: System has not been booted "
+                "with systemd as init system (PID 1). Can't operate.\n"
+                "Failed to connect to bus: Host is down"
+            )
+        if cmd[0] == "podman":
+            return (
+                '[error] podman exited 125: Cannot connect to Podman. '
+                'Error: unable to connect to Podman socket: dial unix '
+                '/run/forge-podman-ro-proxy.sock: connect: no such file '
+                "or directory"
+            )
+        return "kernel log line"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_nonzero_exit)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+
+    from forge import subtrace
+
+    sysadmin_mod.run(None, None)
+    steps = subtrace.pop()
+
+    discover_detail = steps[0]["detail"]
+    assert "System" not in discover_detail.split("erreur (")[0]
+    assert "Failed" not in discover_detail.split("erreur (")[0]
+    assert "has not been booted" in discover_detail
+    assert "no such file or directory" in discover_detail
+    assert steps[0]["ok"] is False
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": None, "question": None}
+    )
+    assert state.context["units"] == []
+    assert state.context["containers"] == []
+
+
+def test_sysadmin_collect_flags_error_in_sub_steps(monkeypatch):
+    """The collect step must be flagged ok=False when the underlying
+    command failed (e.g. podman couldn't reach its socket) -- before
+    this fix only the discover step could be flagged, even though the
+    exact same production case showed a failing collect too."""
+
+    def fake_run_fixed(cmd, timeout):
+        if cmd[0] == "systemctl":
+            return "forge.service loaded active running"
+        if cmd[0] == "podman" and "ps" in cmd:
+            return "test-container"
+        if cmd[0] == "podman" and "logs" in cmd:
+            return "[error] podman exited 125: connection refused"
+        return "kernel log"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+
+    from forge import subtrace
+
+    sysadmin_mod.run("test-container", None)
+    steps = subtrace.pop()
+
+    collect_step = next(s for s in steps if s["label"] == "collect")
+    assert collect_step["ok"] is False
+    assert "connection refused" in collect_step["detail"]
+
+
 def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
     """Regression test for the exact bug hit in production: journalctl/
     podman/systemctl aren't necessarily installed inside Forge's own

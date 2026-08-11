@@ -209,7 +209,23 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
 
     output = (result.stdout or result.stderr or "").strip()
     lines = output.splitlines()[:SYSADMIN_MAX_LOG_LINES]
-    return "\n".join(lines) if lines else "[no output]"
+    joined = "\n".join(lines) if lines else "[no output]"
+
+    if result.returncode != 0:
+        # The command RAN (no Python-level exception above) but the
+        # target itself failed -- e.g. systemctl unable to reach the
+        # bus, podman unable to reach its socket. This must carry the
+        # same "[error]" prefix as the exception-based cases above:
+        # without it, a real production case slipped straight through
+        # as if it were valid data -- systemctl's two-line failure
+        # message ("System has not been booted with systemd...\n
+        # Failed to connect to bus...") got parsed as two fake unit
+        # names ("System", "Failed") by _discover_node, and podman's
+        # connection-refused text got parsed as a fake container name
+        # the same way. Caught in production on 2026-08-11.
+        return f"[error] {cmd[0]} exited {result.returncode}: {joined}"
+
+    return joined
 
 
 def _discover_node(state: AgentState) -> AgentState:
@@ -373,6 +389,8 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
     containers = state.context.get("containers", [])
     units_error = state.context.get("discover_units_error")
     containers_error = state.context.get("discover_containers_error")
+    collected_logs = state.context.get("collected_logs", "")
+    collect_error = collected_logs if collected_logs.startswith("[error]") else None
 
     def discover_detail() -> str:
         services_part = (
@@ -385,20 +403,31 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
         )
         return f"{services_part} | {containers_part}"
 
+    def collect_detail() -> str:
+        source = state.context.get("log_source", "?")
+        if collect_error:
+            return f"source : {source} | erreur : {collect_error}"
+        return f"source : {source}"
+
     details = {
         "discover": discover_detail,
-        "collect": lambda: f"source : {state.context.get('log_source', '?')}",
+        "collect": collect_detail,
         "synthesize": lambda: f"diagnostic généré ({len(state.final_output or '')} caractères)",
     }
     return [
         {
             "label": ts.decision_tool,
             "detail": details.get(ts.decision_tool, lambda: "")(),
-            # A discover step with a real subprocess error is flagged
-            # even though the overall run still succeeds (kernel-log
-            # fallback keeps the run useful) -- ts.tool_ok alone can't
+            # A discover/collect step with a real subprocess error is
+            # flagged even though the overall run still succeeds (the
+            # kernel-log fallback, or the LLM diagnosing the meta-error
+            # itself, keeps the run useful) -- ts.tool_ok alone can't
             # express this partial failure since it tracks state.ok.
-            "ok": (False if ts.decision_tool == "discover" and (units_error or containers_error) else ts.tool_ok),
+            "ok": (
+                False if ts.decision_tool == "discover" and (units_error or containers_error)
+                else False if ts.decision_tool == "collect" and collect_error
+                else ts.tool_ok
+            ),
             "duration_ms": ts.duration_ms,
         }
         for ts in state.trace
