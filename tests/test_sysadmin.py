@@ -257,6 +257,43 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
     assert "line 0 of a very long journalctl dump" not in captured["prompt"]
 
 
+def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
+    """Regression test for the exact bug hit in production: journalctl/
+    podman/systemctl aren't necessarily installed inside Forge's own
+    container image. _run_fixed's error string ("[error] executable
+    not found: 'podman'") must never be parsed as if it were a real
+    unit/container name -- it must produce an empty discovery list and
+    a visible error, not a fake entry literally named "[error]"."""
+
+    def fake_run_fixed_missing_binaries(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD:
+            return "[error] executable not found: 'systemctl'"
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD:
+            return "[error] executable not found: 'podman'"
+        return "kernel log line"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_missing_binaries)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic sur les logs kernel.")
+
+    from forge import subtrace
+
+    sysadmin_mod.run(None, None)
+    steps = subtrace.pop()
+
+    discover_step = steps[0]
+    assert "[error]" not in discover_step["detail"].split("erreur (")[0]  # no fake entry before the error label
+    assert "executable not found: 'systemctl'" in discover_step["detail"]
+    assert "executable not found: 'podman'" in discover_step["detail"]
+    assert discover_step["ok"] is False  # flagged even though the overall run still succeeds
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": None, "question": None}
+    )
+    # kernel-log fallback keeps the run useful even when discovery failed entirely
+    assert state.context["units"] == []
+    assert state.context["containers"] == []
+
+
 def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
     """The top-level run() (the one tools/sysadmin.py calls) must
     publish readable sub-steps via forge.subtrace so the UI can show

@@ -171,10 +171,23 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
 
 def _discover_node(state: AgentState) -> AgentState:
     units_raw = _run_fixed(_DISCOVER_UNITS_CMD, SYSADMIN_DISCOVERY_TIMEOUT)
-    units = [line.split()[0] for line in units_raw.splitlines() if line.split()]
+    if units_raw.startswith("[error]"):
+        # e.g. "executable not found: 'systemctl'" -- systemd tooling
+        # isn't necessarily present inside Forge's own container image.
+        # Must not be parsed as a fake unit named "[error]".
+        log.warning("sysadmin: unit discovery failed: %s", units_raw)
+        units: list[str] = []
+        state.context["discover_units_error"] = units_raw
+    else:
+        units = [line.split()[0] for line in units_raw.splitlines() if line.split()]
 
     containers_raw = _run_fixed(_DISCOVER_CONTAINERS_CMD, SYSADMIN_DISCOVERY_TIMEOUT)
-    containers = [line.strip() for line in containers_raw.splitlines() if line.strip()]
+    if containers_raw.startswith("[error]"):
+        log.warning("sysadmin: container discovery failed: %s", containers_raw)
+        containers: list[str] = []
+        state.context["discover_containers_error"] = containers_raw
+    else:
+        containers = [line.strip() for line in containers_raw.splitlines() if line.strip()]
 
     state.context["units"] = units
     state.context["containers"] = containers
@@ -315,11 +328,22 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
     separate publish rather than a widened tool contract."""
     units = state.context.get("units", [])
     containers = state.context.get("containers", [])
+    units_error = state.context.get("discover_units_error")
+    containers_error = state.context.get("discover_containers_error")
+
+    def discover_detail() -> str:
+        services_part = (
+            f"services : erreur ({units_error})" if units_error
+            else f"services : {_format_discovered_list(units)}"
+        )
+        containers_part = (
+            f"containers : erreur ({containers_error})" if containers_error
+            else f"containers : {_format_discovered_list(containers)}"
+        )
+        return f"{services_part} | {containers_part}"
+
     details = {
-        "discover": lambda: (
-            f"services : {_format_discovered_list(units)} | "
-            f"containers : {_format_discovered_list(containers)}"
-        ),
+        "discover": discover_detail,
         "collect": lambda: f"source : {state.context.get('log_source', '?')}",
         "synthesize": lambda: f"diagnostic généré ({len(state.final_output or '')} caractères)",
     }
@@ -327,7 +351,11 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
         {
             "label": ts.decision_tool,
             "detail": details.get(ts.decision_tool, lambda: "")(),
-            "ok": ts.tool_ok,
+            # A discover step with a real subprocess error is flagged
+            # even though the overall run still succeeds (kernel-log
+            # fallback keeps the run useful) -- ts.tool_ok alone can't
+            # express this partial failure since it tracks state.ok.
+            "ok": (False if ts.decision_tool == "discover" and (units_error or containers_error) else ts.tool_ok),
             "duration_ms": ts.duration_ms,
         }
         for ts in state.trace
