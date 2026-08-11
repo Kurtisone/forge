@@ -11,10 +11,22 @@ regression that reintroduces an injection path can't hide behind a
 mocked-away _run_fixed.
 """
 
+import json
 import subprocess
 
 import forge.graphs.sysadmin as sysadmin_mod
 from forge.graphs.sysadmin import build as build_sysadmin
+
+
+def _fake_busctl_units_json(names: list[str]) -> str:
+    """Builds a real busctl --json=short ListUnits shape (verified
+    against actual production output before writing this, not
+    guessed): {"type": "a(ssssssouso)", "data": [[[10-field tuple], ...]]}."""
+    rows = [
+        [n, n, "loaded", "active", "running", "", f"/org/freedesktop/systemd1/unit/{n}", 0, "", "/"]
+        for n in names
+    ]
+    return json.dumps({"type": "a(ssssssouso)", "data": [rows]})
 
 
 def _fake_run_fixed(cmd, timeout):
@@ -22,7 +34,7 @@ def _fake_run_fixed(cmd, timeout):
     same mocking level as research's web_search.search/web_fetch.run,
     since _run_fixed is sysadmin's one external boundary."""
     if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
-        return "searxng.service loaded active running\nforge.service loaded active running"
+        return _fake_busctl_units_json(["searxng.service", "forge.service"])
     if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
         return "test-container"
     if cmd[0] == "journalctl" and "-u" in cmd:
@@ -112,8 +124,10 @@ def test_sysadmin_never_passes_unvalidated_name_to_subprocess(monkeypatch):
     def fake_subprocess_run(cmd, **kwargs):
         calls.append(cmd)
         assert kwargs.get("shell") is not True
-        if cmd[0] == "systemctl":
-            return subprocess.CompletedProcess(cmd, 0, stdout="forge.service loaded active running", stderr="")
+        if cmd[0] == "busctl":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=_fake_busctl_units_json(["forge.service"]), stderr=""
+            )
         if cmd[0] == "podman" and cmd[1] == "ps":
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout="kernel log", stderr="")
@@ -230,7 +244,7 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
 
     def fake_run_fixed_huge(cmd, timeout):
         if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
-            return "forge.service loaded active running"
+            return _fake_busctl_units_json(["forge.service"])
         if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
             return ""
         return huge_log
@@ -265,7 +279,10 @@ def test_run_fixed_prefixes_error_on_nonzero_exit(monkeypatch):
     "[error]" prefix. systemctl's real two-line failure message
     ("System has not been booted with systemd...\nFailed to connect
     to bus...") slipped through as valid output and got parsed as two
-    fake unit names ("System", "Failed") by _discover_node."""
+    fake unit names ("System", "Failed") by _discover_node -- this is
+    also why systemctl was replaced by busctl for discovery (see
+    _DISCOVER_UNITS_CMD's docstring), but the underlying _run_fixed
+    exit-code bug applies to any command, not just that one."""
 
     class FakeCompletedProcess:
         returncode = 1
@@ -279,7 +296,7 @@ def test_run_fixed_prefixes_error_on_nonzero_exit(monkeypatch):
         sysadmin_mod.subprocess, "run", lambda *a, **kw: FakeCompletedProcess()
     )
 
-    result = sysadmin_mod._run_fixed(["systemctl", "list-units"], 10)
+    result = sysadmin_mod._run_fixed(["busctl", "call"], 10)
 
     assert result.startswith("[error]")
     assert "System has not been booted" in result
@@ -292,9 +309,9 @@ def test_sysadmin_discover_handles_nonzero_exit_gracefully(monkeypatch):
     covered by test_sysadmin_discover_handles_missing_executables_gracefully."""
 
     def fake_run_fixed_nonzero_exit(cmd, timeout):
-        if cmd[0] == "systemctl":
+        if cmd[0] == "busctl":
             return (
-                "[error] systemctl exited 1: System has not been booted "
+                "[error] busctl exited 1: System has not been booted "
                 "with systemd as init system (PID 1). Can't operate.\n"
                 "Failed to connect to bus: Host is down"
             )
@@ -336,8 +353,8 @@ def test_sysadmin_collect_flags_error_in_sub_steps(monkeypatch):
     exact same production case showed a failing collect too."""
 
     def fake_run_fixed(cmd, timeout):
-        if cmd[0] == "systemctl":
-            return "forge.service loaded active running"
+        if cmd[0] == "busctl":
+            return _fake_busctl_units_json(["forge.service"])
         if cmd[0] == "podman" and "ps" in cmd:
             return "test-container"
         if cmd[0] == "podman" and "logs" in cmd:
@@ -367,7 +384,7 @@ def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
 
     def fake_run_fixed_missing_binaries(cmd, timeout):
         if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
-            return "[error] executable not found: 'systemctl'"
+            return "[error] executable not found: 'busctl'"
         if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
             return "[error] executable not found: 'podman'"
         return "kernel log line"
@@ -382,7 +399,7 @@ def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
 
     discover_step = steps[0]
     assert "[error]" not in discover_step["detail"].split("erreur (")[0]  # no fake entry before the error label
-    assert "executable not found: 'systemctl'" in discover_step["detail"]
+    assert "executable not found: 'busctl'" in discover_step["detail"]
     assert "executable not found: 'podman'" in discover_step["detail"]
     assert discover_step["ok"] is False  # flagged even though the overall run still succeeds
 
@@ -403,8 +420,8 @@ def test_sysadmin_uses_configured_journal_dir(monkeypatch):
 
     def fake_run_fixed(cmd, timeout):
         calls.append(cmd)
-        if cmd[0] == "systemctl":
-            return "forge.service loaded active running"
+        if cmd[0] == "busctl":
+            return _fake_busctl_units_json(["forge.service"])
         if cmd[0] == "podman":
             return ""
         return "kernel log"
@@ -429,8 +446,8 @@ def test_sysadmin_uses_configured_podman_url(monkeypatch):
 
     def fake_run_fixed(cmd, timeout):
         calls.append(cmd)
-        if cmd[0] == "systemctl":
-            return ""
+        if cmd[0] == "busctl":
+            return _fake_busctl_units_json([])
         if cmd[0] == "podman" and "ps" in cmd:
             return "test-container"
         return "container log"
@@ -464,13 +481,54 @@ def test_sysadmin_no_proxy_configured_leaves_commands_unchanged(monkeypatch):
     file already exercises -- must produce byte-identical commands to
     before this became configurable at all."""
     assert sysadmin_mod._DISCOVER_UNITS_CMD() == [
-        "systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend",
+        "busctl", "--json=short", "call",
+        "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager", "ListUnits",
     ]
     assert sysadmin_mod._DISCOVER_CONTAINERS_CMD() == ["podman", "ps", "--format", "{{.Names}}"]
     assert sysadmin_mod._collect_cmd("kernel", "") == [
         "journalctl", "-k", "--no-pager", "-n", str(sysadmin_mod.SYSADMIN_MAX_LOG_LINES),
     ]
     assert "DBUS_SYSTEM_BUS_ADDRESS" not in sysadmin_mod._subprocess_env()
+
+
+def test_sysadmin_discover_units_cmd_includes_address_when_configured(monkeypatch):
+    """Unlike systemctl (which ignores DBUS_SYSTEM_BUS_ADDRESS
+    entirely -- see _DISCOVER_UNITS_CMD's docstring), busctl takes the
+    proxy address as an explicit CLI flag, confirmed against real
+    production output to actually work."""
+    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus")
+    cmd = sysadmin_mod._DISCOVER_UNITS_CMD()
+    assert "--address=unix:path=/run/forge-dbus-proxy/bus" in cmd
+
+
+def test_parse_busctl_units_extracts_names_from_real_shape():
+    """Parses the exact busctl --json=short shape confirmed against
+    real production output: {"type": "a(ssssssouso)", "data": [[10-field tuples]]},
+    unit name at index 0 of each tuple."""
+    raw = _fake_busctl_units_json(["cups.service", "forge.service", "searxng-something.service"])
+    assert sysadmin_mod._parse_busctl_units(raw) == [
+        "cups.service", "forge.service", "searxng-something.service",
+    ]
+
+
+def test_parse_busctl_units_handles_empty_list():
+    raw = _fake_busctl_units_json([])
+    assert sysadmin_mod._parse_busctl_units(raw) == []
+
+
+def test_parse_busctl_units_raises_on_malformed_json():
+    import pytest
+
+    with pytest.raises(json.JSONDecodeError):
+        sysadmin_mod._parse_busctl_units("not json at all")
+
+
+def test_parse_busctl_units_raises_on_unexpected_shape():
+    import pytest
+
+    with pytest.raises((KeyError, IndexError, TypeError)):
+        sysadmin_mod._parse_busctl_units(json.dumps({"unexpected": "shape"}))
 
 
 def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
@@ -500,11 +558,11 @@ def test_sysadmin_discover_detail_caps_long_lists(monkeypatch):
     """A host with many active units shouldn't dump a wall of text
     into the UI's step detail -- _format_discovered_list caps the
     shown names and summarizes the rest."""
-    many_units = "\n".join(f"unit{i}.service loaded active running" for i in range(20))
+    many_units_names = [f"unit{i}.service" for i in range(20)]
 
     def fake_run_fixed_many(cmd, timeout):
         if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
-            return many_units
+            return _fake_busctl_units_json(many_units_names)
         if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
             return ""
         return "kernel log"

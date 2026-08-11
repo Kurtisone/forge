@@ -231,7 +231,7 @@ state instead of falling back to kernel-only diagnosis:
 podman run -d --name forge \
   --env-file .env.local \
   -v $(pwd)/data:/app/data \
-  -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy/bus:/run/systemd/private:ro \
+  -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
   -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
   -p 8000:8000 \
   forge-core

@@ -46,6 +46,7 @@ Usage (Python):
   print(run(target_hint="searxng", question="pourquoi ça redémarre ?"))
 """
 
+import json
 import subprocess
 
 from forge import subtrace
@@ -99,10 +100,42 @@ _EXAMPLE_LEAK_FRAGMENTS = [
 # means "unchanged": no proxy configured, no extra flag added, exact
 # same command as before this was made configurable.
 def _DISCOVER_UNITS_CMD() -> list[str]:
-    # systemctl reads its bus address from the DBUS_SYSTEM_BUS_ADDRESS
-    # env var, not a CLI flag -- see _subprocess_env() below for where
-    # SYSADMIN_DBUS_ADDRESS actually gets applied.
-    return ["systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend"]
+    # `systemctl list-units` was the original approach but had to be
+    # abandoned: confirmed in production (SYSTEMD_LOG_LEVEL=debug)
+    # that systemctl hardcodes a connection attempt at
+    # /run/systemd/private first -- a systemd-specific shortcut
+    # protocol, NOT standard D-Bus -- and never falls back to
+    # DBUS_SYSTEM_BUS_ADDRESS (or any other address) if that exact
+    # path is unavailable, which it always is inside a container whose
+    # PID 1 isn't systemd. `busctl` has no such quirk: it speaks
+    # standard D-Bus and honors --address correctly, confirmed
+    # repeatedly against the same filtered proxy that systemctl
+    # refused to use. --json=short gives a real parseable structure
+    # (see _parse_busctl_units) instead of the columnar text
+    # `systemctl list-units` produces.
+    cmd = ["busctl", "--json=short"]
+    if SYSADMIN_DBUS_ADDRESS:
+        cmd.append(f"--address={SYSADMIN_DBUS_ADDRESS}")
+    return cmd + [
+        "call",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "ListUnits",
+    ]
+
+
+def _parse_busctl_units(raw: str) -> list[str]:
+    """ListUnits' D-Bus signature is a(ssssssouso) -- an array of
+    10-field tuples (name, description, load_state, active_state,
+    sub_state, following, unit_path, job_id, job_type, job_path).
+    `busctl --json=short` wraps that as {"type": "...", "data": [rows]}
+    where `data[0]` is the array of tuples and each tuple's index 0 is
+    the unit name -- verified against real output in production
+    before writing this, not guessed from the D-Bus spec alone."""
+    parsed = json.loads(raw)
+    rows = parsed["data"][0]
+    return [row[0] for row in rows if row]
 
 
 def _DISCOVER_CONTAINERS_CMD() -> list[str]:
@@ -231,14 +264,19 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
 def _discover_node(state: AgentState) -> AgentState:
     units_raw = _run_fixed(_DISCOVER_UNITS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
     if units_raw.startswith("[error]"):
-        # e.g. "executable not found: 'systemctl'" -- systemd tooling
+        # e.g. "executable not found: 'busctl'" -- systemd tooling
         # isn't necessarily present inside Forge's own container image.
         # Must not be parsed as a fake unit named "[error]".
         log.warning("sysadmin: unit discovery failed: %s", units_raw)
         units: list[str] = []
         state.context["discover_units_error"] = units_raw
     else:
-        units = [line.split()[0] for line in units_raw.splitlines() if line.split()]
+        try:
+            units = _parse_busctl_units(units_raw)
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+            log.warning("sysadmin: failed to parse busctl ListUnits output: %s", e)
+            units = []
+            state.context["discover_units_error"] = f"[error] failed to parse busctl output: {e}"
 
     containers_raw = _run_fixed(_DISCOVER_CONTAINERS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
     if containers_raw.startswith("[error]"):

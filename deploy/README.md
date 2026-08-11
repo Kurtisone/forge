@@ -40,43 +40,39 @@ podman run ... -v /var/log/journal:/host-journal:ro forge-core
 SYSADMIN_JOURNAL_DIR=/host-journal
 ```
 
-### 2. systemctl -- forge-dbus-proxy (xdg-dbus-proxy)
+### 2. systemd units -- forge-dbus-proxy (xdg-dbus-proxy) + busctl
 
-`systemctl list-units`/`GetUnit` talk to systemd over D-Bus -- no
-file-based equivalent exists. `forge-dbus-proxy.sh` uses
-`xdg-dbus-proxy` (the same tool Flatpak uses to sandbox D-Bus access)
-to expose a NEW socket that only forwards five read-only method calls
-and silently drops everything else --
-`StartUnit`/`StopUnit`/`RestartUnit`/`Reboot`/... never reach the
-real bus at all, confirmed in practice: `ListUnits` succeeds,
-`StartUnit` returns `Access denied` straight from the proxy.
-
-Critical detail confirmed with `SYSTEMD_LOG_LEVEL=debug` in
-production: `systemctl` does NOT use `DBUS_SYSTEM_BUS_ADDRESS` for
-this at all -- it hardcodes an attempt at `/run/systemd/private`
-first (a direct shortcut to systemd PID 1, same D-Bus wire protocol,
-just bypassing the public bus broker) and never falls back to the env
-var if that path doesn't exist. Since our proxy speaks the same real
-D-Bus protocol, the fix is to bind-mount its socket file directly
-onto that exact path rather than anywhere else:
+Discovery talks to systemd over D-Bus -- no file-based equivalent
+exists. `forge-dbus-proxy.sh` uses `xdg-dbus-proxy` (the same tool
+Flatpak uses to sandbox D-Bus access) to expose a NEW socket that only
+forwards five read-only method calls and silently drops everything
+else -- `StartUnit`/`StopUnit`/`RestartUnit`/`Reboot`/... never reach
+the real bus at all, confirmed in practice: `ListUnits` succeeds,
+a mutating call returns `Access denied` straight from the proxy.
 
 ```
--v ${XDG_RUNTIME_DIR}/forge-dbus-proxy/bus:/run/systemd/private:ro
+-v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro
 ```
-
-The filtering itself is unaffected by which path the socket is
-mounted at -- `--filter` denies everything not explicitly listed
-regardless of how a client reaches the proxy.
-
-`SYSADMIN_DBUS_ADDRESS` is no longer required for `systemctl`
-specifically (it finds the socket at its default path automatically
-once mounted as above) but is kept as an explicit, harmless override
--- useful if a future feature calls `busctl` directly instead of
-`systemctl`, or if a mount ever needs to live somewhere else:
 
 ```
 SYSADMIN_DBUS_ADDRESS=unix:path=/run/forge-dbus-proxy/bus
 ```
+
+**`systemctl` was tried first and abandoned** -- confirmed with
+`SYSTEMD_LOG_LEVEL=debug` in production that it does NOT use
+`DBUS_SYSTEM_BUS_ADDRESS` at all for this: it hardcodes an attempt at
+`/run/systemd/private` (a systemd-specific shortcut protocol to PID 1,
+not standard D-Bus) and gives up immediately if that exact path
+doesn't exist, with zero fallback. Mounting our proxy's socket
+directly onto `/run/systemd/private` was tried next and also failed
+(`No data available` -- a real D-Bus client doesn't speak that
+shortcut protocol's handshake). `graphs/sysadmin.py` instead uses
+`busctl --json=short --address=<proxy> call ...` for discovery --
+`busctl` is a generic D-Bus client with none of `systemctl`'s
+container-detection quirks, and it was the one tool that worked
+consistently against the proxy throughout this whole investigation.
+`journalctl`/`podman logs` for actually reading logs are unaffected by
+any of this (neither goes through D-Bus).
 
 ### 3. podman logs/ps -- podman_ro_proxy.py
 
@@ -98,7 +94,7 @@ SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
 podman run -d --name forge \
   --env-file .env.local \
   -v $(pwd)/data:/app/data \
-  -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy/bus:/run/systemd/private:ro \
+  -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
   -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
   -p 8000:8000 \
   forge-core
@@ -149,13 +145,15 @@ host:
   socket) -- `systemctl` never even tries `DBUS_SYSTEM_BUS_ADDRESS`
   for this: `SYSTEMD_LOG_LEVEL=debug` shows it hardcodes an attempt at
   `/run/systemd/private` first and gives up immediately if that exact
-  path doesn't exist, with no fallback to the env var at all. Fix:
-  bind-mount the proxy's socket file onto that exact path instead
-  (`-v .../forge-dbus-proxy/bus:/run/systemd/private:ro`) -- see the
-  systemctl section above. `busctl` itself doesn't have this quirk
-  (it does honor `DBUS_SYSTEM_BUS_ADDRESS` normally), which is why it
-  kept succeeding throughout this exact debugging session while
-  `systemctl` kept failing on the identical proxy.
+  path doesn't exist, with no fallback to the env var at all.
+  Bind-mounting the proxy's socket onto that exact path was tried next
+  and produced a *different* error (`No data available`) -- that path
+  uses a systemd-specific shortcut protocol, not standard D-Bus, so a
+  generic D-Bus proxy can't speak it correctly either. The actual fix
+  was to stop using `systemctl` for discovery entirely and use
+  `busctl` instead (see the section above) -- it has none of these
+  quirks and was the one tool that worked consistently against the
+  proxy throughout this whole investigation.
 
 - **Both `systemctl --user is-active` calls stuck on `activating`**,
   and `journalctl --user -u forge-podman-ro-proxy.service` shows
