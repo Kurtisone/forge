@@ -33,11 +33,11 @@ exec xdg-dbus-proxy \
   "unix:path=/run/dbus/system_bus_socket" \
   "$PROXY_SOCKET" \
   --filter \
-  --call="org.freedesktop.systemd1.Manager.ListUnits@/org/freedesktop/systemd1=talk" \
-  --call="org.freedesktop.systemd1.Manager.ListUnitsByPatterns@/org/freedesktop/systemd1=talk" \
-  --call="org.freedesktop.systemd1.Manager.GetUnit@/org/freedesktop/systemd1=talk" \
-  --call="org.freedesktop.DBus.Properties.Get@/org/freedesktop/systemd1=talk" \
-  --call="org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/systemd1=talk"
+  --call="org.freedesktop.systemd1=org.freedesktop.systemd1.Manager.ListUnits@/org/freedesktop/systemd1" \
+  --call="org.freedesktop.systemd1=org.freedesktop.systemd1.Manager.ListUnitsByPatterns@/org/freedesktop/systemd1" \
+  --call="org.freedesktop.systemd1=org.freedesktop.systemd1.Manager.GetUnit@/org/freedesktop/systemd1" \
+  --call="org.freedesktop.systemd1=org.freedesktop.DBus.Properties.Get@/org/freedesktop/systemd1" \
+  --call="org.freedesktop.systemd1=org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/systemd1"
 
 # Note what's deliberately absent: StartUnit, StopUnit, RestartUnit,
 # KillUnit, ReloadUnit, EnableUnitFiles, DisableUnitFiles, Reboot,
