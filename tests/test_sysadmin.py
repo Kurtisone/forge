@@ -257,6 +257,28 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
     assert "line 0 of a very long journalctl dump" not in captured["prompt"]
 
 
+def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
+    """The top-level run() (the one tools/sysadmin.py calls) must
+    publish readable sub-steps via forge.subtrace so the UI can show
+    discover/collect/synthesize as expandable detail -- see
+    forge/subtrace.py's docstring."""
+    from forge import subtrace
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic clair.")
+
+    sysadmin_mod.run("searxng.service", None)
+
+    steps = subtrace.pop()
+    labels = [s["label"] for s in steps]
+    assert labels == ["discover", "collect", "synthesize"]
+    assert "service(s) actif(s)" in steps[0]["detail"]
+    assert "journalctl -u searxng.service" in steps[1]["detail"]
+    assert "caractères" in steps[2]["detail"]
+    assert all(s["ok"] for s in steps)
+    assert all(isinstance(s["duration_ms"], int) for s in steps)
+
+
 def test_sysadmin_cleans_json_wrapped_response_like_review(monkeypatch):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
     monkeypatch.setattr(

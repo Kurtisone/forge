@@ -313,6 +313,23 @@
     }
     .step-pill.ok  { border-color: var(--green); color: var(--green); }
     .step-pill.err { border-color: var(--red);   color: var(--red); }
+    .step-pill.expandable { cursor: pointer; user-select: none; }
+    .step-pill.expandable:hover { background: var(--surface); }
+    .step-pill .caret { display: inline-block; margin-left: 4px; transition: transform .15s; }
+    .step-pill.open .caret { transform: rotate(90deg); }
+    .sub-steps {
+      display: none; flex-direction: column; gap: 4px;
+      margin: 8px 0 2px 4px; padding-left: 10px;
+      border-left: 2px solid var(--border);
+    }
+    .sub-steps.open { display: flex; }
+    .sub-step-row {
+      display: flex; align-items: baseline; gap: 8px;
+      font-size: .78rem;
+    }
+    .sub-step-label { color: var(--accent); font-family: var(--mono); min-width: 80px; }
+    .sub-step-detail { color: var(--muted); }
+    .sub-step-ms { color: var(--muted); font-size: .72rem; margin-left: auto; }
     #traces-refresh {
       align-self: flex-start; margin-bottom: 4px;
     }
@@ -693,6 +710,17 @@ async function compactNow() {
   setTimeout(() => { btn.textContent = original; btn.disabled = false }, 2000)
 }
 
+// Toggles one step's sub-steps panel (discover/collect/synthesize
+// detail for graph-based tools). `pillEl` gets the 'open' class too,
+// purely for the caret rotation -- see the .step-pill.open CSS rule.
+function toggleSubSteps(subId, pillEl) {
+  const panel = document.getElementById(subId)
+  if (!panel) return
+  const opening = !panel.classList.contains('open')
+  panel.classList.toggle('open', opening)
+  pillEl.classList.toggle('open', opening)
+}
+
 // ── Traces ────────────────────────────────────────────────────────
 async function loadTraces() {
   const list = document.getElementById('traces-list')
@@ -710,9 +738,32 @@ async function loadTraces() {
       const ok = t.ok
       const card = document.createElement('div')
       card.className = 'trace-card'
-      const steps = (t.steps || []).map(s =>
-        `<span class="step-pill ${s.tool_ok ? 'ok' : 'err'}">${s.router_tool || '?'} ${s.duration_ms}ms</span>`
-      ).join('')
+
+      // Each step becomes a pill; steps that carry sub_steps (graph-based
+      // tools like sysadmin/review/research publish these -- see
+      // forge/subtrace.py) get a caret and are clickable to reveal the
+      // internal discover/collect/synthesize breakdown right underneath.
+      let stepsHtml = ''
+      let subStepsHtml = ''
+      ;(t.steps || []).forEach((s, i) => {
+        const subId = `sub-${t.run_id}-${i}`
+        const hasSub = Array.isArray(s.sub_steps) && s.sub_steps.length > 0
+        stepsHtml += `<span class="step-pill ${s.tool_ok ? 'ok' : 'err'} ${hasSub ? 'expandable' : ''}"` +
+          (hasSub ? ` onclick="toggleSubSteps('${subId}', this)"` : '') + `>` +
+          `${s.router_tool || '?'} ${s.duration_ms}ms` +
+          (hasSub ? '<span class="caret">▸</span>' : '') +
+          `</span>`
+        if (hasSub) {
+          const rows = s.sub_steps.map(sub => `
+            <div class="sub-step-row">
+              <span class="sub-step-label">${escapeHtml(sub.label || '?')}</span>
+              <span class="sub-step-detail">${escapeHtml(sub.detail || '')}</span>
+              <span class="sub-step-ms">${sub.duration_ms != null ? sub.duration_ms + 'ms' : ''}</span>
+            </div>`).join('')
+          subStepsHtml += `<div class="sub-steps" id="${subId}">${rows}</div>`
+        }
+      })
+
       card.innerHTML = `
         <div class="trace-header">
           <span class="trace-id">#${t.run_id}</span>
@@ -720,7 +771,8 @@ async function loadTraces() {
           <span class="trace-time">${t.timestamp} · ${t.total_ms}ms</span>
         </div>
         <div class="trace-input">${escapeHtml(t.user_input_preview || '')}</div>
-        <div class="trace-steps">${steps}</div>
+        <div class="trace-steps">${stepsHtml}</div>
+        ${subStepsHtml}
         ${t.error ? `<div style="color:var(--red);font-size:.78rem;margin-top:6px">⚠ ${escapeHtml(t.error)}</div>` : ''}
       `
       list.appendChild(card)

@@ -48,6 +48,7 @@ Usage (Python):
 
 import subprocess
 
+from forge import subtrace
 from forge.config import (
     SYSADMIN_COLLECT_TIMEOUT,
     SYSADMIN_DISCOVERY_TIMEOUT,
@@ -267,6 +268,30 @@ def build() -> Graph:
     return g
 
 
+def _to_sub_steps(state: AgentState) -> list[dict]:
+    """Turn this run's internal graph trace (already recorded node by
+    node by graph.py's Node.execute) into small, human-readable steps
+    for the UI -- see forge/subtrace.py's docstring for why this is a
+    separate publish rather than a widened tool contract."""
+    details = {
+        "discover": lambda: (
+            f"{len(state.context.get('units', []))} service(s) actif(s), "
+            f"{len(state.context.get('containers', []))} container(s)"
+        ),
+        "collect": lambda: f"source : {state.context.get('log_source', '?')}",
+        "synthesize": lambda: f"diagnostic généré ({len(state.final_output or '')} caractères)",
+    }
+    return [
+        {
+            "label": ts.decision_tool,
+            "detail": details.get(ts.decision_tool, lambda: "")(),
+            "ok": ts.tool_ok,
+            "duration_ms": ts.duration_ms,
+        }
+        for ts in state.trace
+    ]
+
+
 def run(target_hint: str | None, question: str | None) -> str:
     """Discover active units/containers, collect logs for target_hint
     (or fall back to kernel logs), and synthesize one diagnosis."""
@@ -274,4 +299,5 @@ def run(target_hint: str | None, question: str | None) -> str:
         target_hint or "",
         initial_context={"target_hint": target_hint, "question": question},
     )
+    subtrace.publish(_to_sub_steps(state))
     return state.final_output or ""

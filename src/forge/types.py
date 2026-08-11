@@ -47,6 +47,10 @@ class ToolResult:
     output: str
     ok: bool = True
     error: str | None = None
+    # Populated only for graph-based tools (review/research/sysadmin)
+    # that published internal node steps via forge.subtrace -- see
+    # that module's docstring. None for every other tool, unchanged.
+    sub_steps: list[dict] | None = None
 
 
 @dataclass
@@ -67,11 +71,14 @@ class TraceStep:
     tool_ok: bool | None = None
     tool_error: str | None = None
     duration_ms: int | None = None
+    # See ToolResult.sub_steps -- copied through by finish() below.
+    sub_steps: list[dict] | None = None
 
     def finish(self, result: "ToolResult") -> None:
         self.tool_ok = result.ok
         self.tool_error = result.error
         self.duration_ms = int((time.monotonic() - self.started_at) * 1000)
+        self.sub_steps = result.sub_steps
 
     def to_dict(self) -> dict:
         return {
@@ -81,6 +88,7 @@ class TraceStep:
             "tool_ok": self.tool_ok,
             "tool_error": self.tool_error,
             "duration_ms": self.duration_ms,
+            "sub_steps": self.sub_steps,
         }
 
 
