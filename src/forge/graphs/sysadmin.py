@@ -51,6 +51,7 @@ import subprocess
 from forge.config import (
     SYSADMIN_COLLECT_TIMEOUT,
     SYSADMIN_DISCOVERY_TIMEOUT,
+    SYSADMIN_LOG_CHARS_BUDGET,
     SYSADMIN_MAX_LOG_LINES,
 )
 from forge.context_info import today_line
@@ -215,10 +216,21 @@ def _clean_diagnosis_response(raw: str) -> str:
     return cleaned
 
 
+def _truncate_log_block(log_block: str, budget: int) -> str:
+    """Hard character cap independent of line count -- SYSADMIN_MAX_LOG_LINES
+    alone isn't a safe context guarantee (line length varies a lot
+    between journalctl/podman output). Keeps the END of the block:
+    _run_fixed already returns at most the tail N lines via -n/--tail,
+    so the most recent -- most relevant -- events are at the end."""
+    if len(log_block) <= budget:
+        return log_block
+    return "…[troncated, showing the most recent output]…\n" + log_block[-budget:]
+
+
 def _synthesize_node(state: AgentState) -> AgentState:
     question = state.context.get("question") or "Diagnostique le problème et propose une solution."
     source = state.context["log_source"]
-    log_block = state.context["collected_logs"]
+    log_block = _truncate_log_block(state.context["collected_logs"], SYSADMIN_LOG_CHARS_BUDGET)
 
     prompt = _SYNTHESIS_PROMPT.format(
         today_line=today_line(),

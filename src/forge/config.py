@@ -239,4 +239,16 @@ RESEARCH_FETCH_CHARS_PER_RESULT = int(
 # grant more than "read logs, discover what's running."
 SYSADMIN_DISCOVERY_TIMEOUT = int(os.getenv("SYSADMIN_DISCOVERY_TIMEOUT", "10"))
 SYSADMIN_COLLECT_TIMEOUT = int(os.getenv("SYSADMIN_COLLECT_TIMEOUT", "15"))
-SYSADMIN_MAX_LOG_LINES = int(os.getenv("SYSADMIN_MAX_LOG_LINES", "200"))
+# 200 was the original default and blew the 4096-token context on its
+# own (200 journalctl lines ~= 4000+ tokens before the rest of the
+# prompt) -- see the SYSADMIN_LOG_CHARS_BUDGET note below for the
+# actual fix; this default is now just a sane collection size, not
+# the thing keeping the prompt in budget.
+SYSADMIN_MAX_LOG_LINES = int(os.getenv("SYSADMIN_MAX_LOG_LINES", "40"))
+# Hard character cap on the log block actually inserted into the LLM
+# prompt, independent of line count -- same reasoning as
+# RESEARCH_FETCH_CHARS_PER_RESULT in graphs/research.py. Truncates
+# keeping the END of the log (most recent events), not the start:
+# journalctl/podman logs already return the tail via -n/--tail, so
+# the most relevant lines are at the end of that output.
+SYSADMIN_LOG_CHARS_BUDGET = int(os.getenv("SYSADMIN_LOG_CHARS_BUDGET", "2000"))

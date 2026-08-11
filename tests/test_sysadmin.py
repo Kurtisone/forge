@@ -217,6 +217,46 @@ def test_sysadmin_unwraps_substantive_json_wrapped_answer(monkeypatch):
     assert '"tool"' not in state.final_output
 
 
+def test_sysadmin_truncates_oversized_log_block(monkeypatch):
+    """Regression test for the real production crash: llama.cpp
+    rejected a request at 4362 tokens against a 4096-token context
+    because SYSADMIN_MAX_LOG_LINES=200 alone didn't bound prompt size.
+    The log block actually inserted into the prompt must respect
+    SYSADMIN_LOG_CHARS_BUDGET regardless of how many lines were
+    collected, and must keep the END of the log (most recent, most
+    relevant events), not the start."""
+    huge_log = "\n".join(f"line {i} of a very long journalctl dump" for i in range(2000))
+    assert len(huge_log) > sysadmin_mod.SYSADMIN_LOG_CHARS_BUDGET
+
+    def fake_run_fixed_huge(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD:
+            return "forge.service loaded active running"
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD:
+            return ""
+        return huge_log
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_huge)
+
+    captured = {}
+
+    def fake_call_llm(prompt):
+        captured["prompt"] = prompt
+        return "diagnosis"
+
+    monkeypatch.setattr(sysadmin_mod, "call_llm", fake_call_llm)
+
+    build_sysadmin().run(
+        "", initial_context={"target_hint": "forge.service", "question": None}
+    )
+
+    # the prompt must stay well under what blew the real context window
+    assert len(captured["prompt"]) < 4000
+    # the tail of the log (most recent lines) must be preserved
+    assert "line 1999" in captured["prompt"]
+    # the head must have been dropped
+    assert "line 0 of a very long journalctl dump" not in captured["prompt"]
+
+
 def test_sysadmin_cleans_json_wrapped_response_like_review(monkeypatch):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
     monkeypatch.setattr(
