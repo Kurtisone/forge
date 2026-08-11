@@ -51,9 +51,12 @@ import subprocess
 from forge import subtrace
 from forge.config import (
     SYSADMIN_COLLECT_TIMEOUT,
+    SYSADMIN_DBUS_ADDRESS,
     SYSADMIN_DISCOVERY_TIMEOUT,
+    SYSADMIN_JOURNAL_DIR,
     SYSADMIN_LOG_CHARS_BUDGET,
     SYSADMIN_MAX_LOG_LINES,
+    SYSADMIN_PODMAN_URL,
 )
 from forge.context_info import today_line
 from forge.errors import ProviderError
@@ -88,24 +91,61 @@ _EXAMPLE_LEAK_FRAGMENTS = [
     "manquant.conf",
 ]
 
-# Fixed, parameter-free discovery commands.
-_DISCOVER_UNITS_CMD = [
-    "systemctl",
-    "list-units",
-    "--type=service",
-    "--state=running",
-    "--no-pager",
-    "--no-legend",
-]
-_DISCOVER_CONTAINERS_CMD = ["podman", "ps", "--format", "{{.Names}}"]
+# Fixed, parameter-free discovery commands. Functions, not static
+# lists: SYSADMIN_DBUS_ADDRESS/SYSADMIN_PODMAN_URL let these target a
+# filtered proxy instead of the raw host bus/socket -- see config.py's
+# comment above these three env vars, and deploy/README.md for the
+# proxies themselves. Empty (default, incl. every test in this file)
+# means "unchanged": no proxy configured, no extra flag added, exact
+# same command as before this was made configurable.
+def _DISCOVER_UNITS_CMD() -> list[str]:
+    # systemctl reads its bus address from the DBUS_SYSTEM_BUS_ADDRESS
+    # env var, not a CLI flag -- see _subprocess_env() below for where
+    # SYSADMIN_DBUS_ADDRESS actually gets applied.
+    return ["systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend"]
 
-# {name} is substituted only after collect_node has verified the name
-# against discover_node's own output -- see collect_node's docstring.
-_COLLECT_TEMPLATES = {
-    "unit": ["journalctl", "-u", "{name}", "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)],
-    "container": ["podman", "logs", "--tail", str(SYSADMIN_MAX_LOG_LINES), "{name}"],
-    "kernel": ["journalctl", "-k", "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)],
-}
+
+def _DISCOVER_CONTAINERS_CMD() -> list[str]:
+    base = ["podman"]
+    if SYSADMIN_PODMAN_URL:
+        base += ["--url", SYSADMIN_PODMAN_URL]
+    return base + ["ps", "--format", "{{.Names}}"]
+
+
+def _collect_cmd(kind: str, name: str) -> list[str]:
+    """Build a collection command. {name} is substituted only after
+    collect_node has verified it against discover_node's own output --
+    see collect_node's docstring. `kind` selects journalctl-by-unit,
+    podman-logs, or journalctl-kernel; the journal dir / podman URL
+    flags are added only when the matching proxy is configured."""
+    if kind == "unit":
+        cmd = ["journalctl"]
+        if SYSADMIN_JOURNAL_DIR:
+            cmd += ["-D", SYSADMIN_JOURNAL_DIR]
+        return cmd + ["-u", name, "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)]
+    if kind == "container":
+        cmd = ["podman"]
+        if SYSADMIN_PODMAN_URL:
+            cmd += ["--url", SYSADMIN_PODMAN_URL]
+        return cmd + ["logs", "--tail", str(SYSADMIN_MAX_LOG_LINES), name]
+    if kind == "kernel":
+        cmd = ["journalctl"]
+        if SYSADMIN_JOURNAL_DIR:
+            cmd += ["-D", SYSADMIN_JOURNAL_DIR]
+        return cmd + ["-k", "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)]
+    raise ValueError(f"unknown collect kind: {kind!r}")
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Same minimal-env posture as tools/shell.py: no host env
+    variables reach the subprocess except what's explicitly listed.
+    DBUS_SYSTEM_BUS_ADDRESS is added only when SYSADMIN_DBUS_ADDRESS
+    is configured, pointing systemctl at the filtered proxy socket
+    from deploy/forge-dbus-proxy.sh -- never the real system bus."""
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "TERM": "dumb"}
+    if SYSADMIN_DBUS_ADDRESS:
+        env["DBUS_SYSTEM_BUS_ADDRESS"] = SYSADMIN_DBUS_ADDRESS
+    return env
 
 _SYNTHESIS_PROMPT = """/no_think
 {today_line}
@@ -148,7 +188,9 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
     """Run a command whose every element is either a fixed literal or
     a name already verified against discover_node's own output.
     Never shell=True, never a hand-built string -- same posture as
-    tools/shell.py's allowlisted subprocess.run(parts, ...)."""
+    tools/shell.py's allowlisted subprocess.run(parts, ...). Uses
+    _subprocess_env() so DBUS_SYSTEM_BUS_ADDRESS (when configured)
+    points systemctl at the filtered proxy, not the host bus."""
     try:
         result = subprocess.run(
             cmd,
@@ -156,6 +198,7 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=_subprocess_env(),
         )
     except FileNotFoundError:
         return f"[error] executable not found: {cmd[0]!r}"
@@ -170,7 +213,7 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
 
 
 def _discover_node(state: AgentState) -> AgentState:
-    units_raw = _run_fixed(_DISCOVER_UNITS_CMD, SYSADMIN_DISCOVERY_TIMEOUT)
+    units_raw = _run_fixed(_DISCOVER_UNITS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
     if units_raw.startswith("[error]"):
         # e.g. "executable not found: 'systemctl'" -- systemd tooling
         # isn't necessarily present inside Forge's own container image.
@@ -181,7 +224,7 @@ def _discover_node(state: AgentState) -> AgentState:
     else:
         units = [line.split()[0] for line in units_raw.splitlines() if line.split()]
 
-    containers_raw = _run_fixed(_DISCOVER_CONTAINERS_CMD, SYSADMIN_DISCOVERY_TIMEOUT)
+    containers_raw = _run_fixed(_DISCOVER_CONTAINERS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
     if containers_raw.startswith("[error]"):
         log.warning("sysadmin: container discovery failed: %s", containers_raw)
         containers: list[str] = []
@@ -206,10 +249,10 @@ def _collect_node(state: AgentState) -> AgentState:
     containers = state.context["containers"]
 
     if target_hint and target_hint in units:
-        cmd = [p.format(name=target_hint) for p in _COLLECT_TEMPLATES["unit"]]
+        cmd = _collect_cmd("unit", target_hint)
         source = f"journalctl -u {target_hint}"
     elif target_hint and target_hint in containers:
-        cmd = [p.format(name=target_hint) for p in _COLLECT_TEMPLATES["container"]]
+        cmd = _collect_cmd("container", target_hint)
         source = f"podman logs {target_hint}"
     else:
         if target_hint:
@@ -217,7 +260,7 @@ def _collect_node(state: AgentState) -> AgentState:
                 "sysadmin: target_hint %r not found in discovery, falling back to kernel logs",
                 target_hint,
             )
-        cmd = _COLLECT_TEMPLATES["kernel"]
+        cmd = _collect_cmd("kernel", "")
         source = "journalctl -k"
 
     state.context["log_source"] = source

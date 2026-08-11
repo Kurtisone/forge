@@ -21,9 +21,9 @@ def _fake_run_fixed(cmd, timeout):
     """Canned output keyed off which fixed command was requested --
     same mocking level as research's web_search.search/web_fetch.run,
     since _run_fixed is sysadmin's one external boundary."""
-    if cmd == sysadmin_mod._DISCOVER_UNITS_CMD:
+    if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
         return "searxng.service loaded active running\nforge.service loaded active running"
-    if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD:
+    if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
         return "test-container"
     if cmd[0] == "journalctl" and "-u" in cmd:
         return f"log line for unit {cmd[cmd.index('-u') + 1]}"
@@ -229,9 +229,9 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
     assert len(huge_log) > sysadmin_mod.SYSADMIN_LOG_CHARS_BUDGET
 
     def fake_run_fixed_huge(cmd, timeout):
-        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD:
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
             return "forge.service loaded active running"
-        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD:
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
             return ""
         return huge_log
 
@@ -266,9 +266,9 @@ def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
     a visible error, not a fake entry literally named "[error]"."""
 
     def fake_run_fixed_missing_binaries(cmd, timeout):
-        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD:
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
             return "[error] executable not found: 'systemctl'"
-        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD:
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
             return "[error] executable not found: 'podman'"
         return "kernel log line"
 
@@ -292,6 +292,85 @@ def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
     # kernel-log fallback keeps the run useful even when discovery failed entirely
     assert state.context["units"] == []
     assert state.context["containers"] == []
+
+
+def test_sysadmin_uses_configured_journal_dir(monkeypatch):
+    """SYSADMIN_JOURNAL_DIR (deploy/README.md: host's /var/log/journal
+    bind-mounted read-only) must add -D <dir> to every journalctl
+    call, not just kernel logs."""
+    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_JOURNAL_DIR", "/host-journal")
+    calls = []
+
+    def fake_run_fixed(cmd, timeout):
+        calls.append(cmd)
+        if cmd[0] == "systemctl":
+            return "forge.service loaded active running"
+        if cmd[0] == "podman":
+            return ""
+        return "kernel log"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+
+    sysadmin_mod.run("forge.service", None)
+
+    journalctl_calls = [c for c in calls if c[0] == "journalctl"]
+    assert journalctl_calls, "expected at least one journalctl call"
+    for c in journalctl_calls:
+        assert c[1:3] == ["-D", "/host-journal"]
+
+
+def test_sysadmin_uses_configured_podman_url(monkeypatch):
+    """SYSADMIN_PODMAN_URL (deploy/README.md: podman_ro_proxy.py's
+    socket, never the raw host socket) must add --url <value> to
+    every podman call."""
+    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_PODMAN_URL", "unix:///run/forge-podman-ro-proxy.sock")
+    calls = []
+
+    def fake_run_fixed(cmd, timeout):
+        calls.append(cmd)
+        if cmd[0] == "systemctl":
+            return ""
+        if cmd[0] == "podman" and "ps" in cmd:
+            return "test-container"
+        return "container log"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+
+    sysadmin_mod.run("test-container", None)
+
+    podman_calls = [c for c in calls if c[0] == "podman"]
+    assert podman_calls, "expected at least one podman call"
+    for c in podman_calls:
+        assert c[1:3] == ["--url", "unix:///run/forge-podman-ro-proxy.sock"]
+
+
+def test_sysadmin_passes_configured_dbus_address_to_subprocess_env(monkeypatch):
+    """SYSADMIN_DBUS_ADDRESS (deploy/README.md: forge-dbus-proxy.sh's
+    filtered bus, never the real host system bus) must reach systemctl
+    via DBUS_SYSTEM_BUS_ADDRESS in the subprocess env, and the minimal
+    env posture (no host env leaking through) must be preserved."""
+    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus")
+
+    env = sysadmin_mod._subprocess_env()
+    assert env["DBUS_SYSTEM_BUS_ADDRESS"] == "unix:path=/run/forge-dbus-proxy/bus"
+    assert env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
+    assert "HOME" not in env or env.get("SECRET") is None  # no unexpected leakage
+
+
+def test_sysadmin_no_proxy_configured_leaves_commands_unchanged(monkeypatch):
+    """Default (empty) config -- the case every other test in this
+    file already exercises -- must produce byte-identical commands to
+    before this became configurable at all."""
+    assert sysadmin_mod._DISCOVER_UNITS_CMD() == [
+        "systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--no-legend",
+    ]
+    assert sysadmin_mod._DISCOVER_CONTAINERS_CMD() == ["podman", "ps", "--format", "{{.Names}}"]
+    assert sysadmin_mod._collect_cmd("kernel", "") == [
+        "journalctl", "-k", "--no-pager", "-n", str(sysadmin_mod.SYSADMIN_MAX_LOG_LINES),
+    ]
+    assert "DBUS_SYSTEM_BUS_ADDRESS" not in sysadmin_mod._subprocess_env()
 
 
 def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
@@ -324,9 +403,9 @@ def test_sysadmin_discover_detail_caps_long_lists(monkeypatch):
     many_units = "\n".join(f"unit{i}.service loaded active running" for i in range(20))
 
     def fake_run_fixed_many(cmd, timeout):
-        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD:
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
             return many_units
-        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD:
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
             return ""
         return "kernel log"
 

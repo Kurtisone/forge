@@ -252,3 +252,31 @@ SYSADMIN_MAX_LOG_LINES = int(os.getenv("SYSADMIN_MAX_LOG_LINES", "40"))
 # journalctl/podman logs already return the tail via -n/--tail, so
 # the most relevant lines are at the end of that output.
 SYSADMIN_LOG_CHARS_BUDGET = int(os.getenv("SYSADMIN_LOG_CHARS_BUDGET", "2000"))
+
+# --- Read-only access to the HOST's journalctl/systemctl/podman ------------
+# Forge's own container has no business holding real systemd/podman
+# privilege (mutation) -- see deploy/README.md for the full design.
+# Empty (default) means "talk to whatever is reachable normally",
+# which inside Forge's own minimal container image is nothing at all
+# (no journalctl/systemctl/podman binaries, no bus, no socket) --
+# each of these three only does anything once the matching deploy/
+# artifact is wired up:
+#
+# - SYSADMIN_JOURNAL_DIR: host's /var/log/journal bind-mounted
+#   read-only into the container (e.g. "/host-journal"). journalctl
+#   reads journal files directly -- no daemon, no socket -- so this
+#   one needs nothing beyond the RO bind mount + the binary itself.
+# - SYSADMIN_DBUS_ADDRESS: address of the FILTERED bus exposed by
+#   deploy/forge-dbus-proxy.sh (xdg-dbus-proxy), never the host's real
+#   system bus directly -- the proxy allows only read-only systemd
+#   method calls (ListUnits/GetUnit), denies everything else
+#   (StartUnit/StopUnit/...) at the bus level itself, before Forge's
+#   own code is ever in a position to decide anything.
+# - SYSADMIN_PODMAN_URL: address of deploy/podman_ro_proxy.py, never
+#   the host's real podman.sock directly -- that proxy allows only
+#   GET /containers/json and GET /containers/{id}/logs, rejecting
+#   every other verb/path (start/stop/rm/exec/...) before it reaches
+#   the real socket.
+SYSADMIN_JOURNAL_DIR = os.getenv("SYSADMIN_JOURNAL_DIR", "")
+SYSADMIN_DBUS_ADDRESS = os.getenv("SYSADMIN_DBUS_ADDRESS", "")
+SYSADMIN_PODMAN_URL = os.getenv("SYSADMIN_PODMAN_URL", "")
