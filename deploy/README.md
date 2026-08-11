@@ -94,6 +94,7 @@ SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
 podman run -d --name forge \
   --env-file .env.local \
   -v $(pwd)/data:/app/data \
+  -v /var/log/journal:/host-journal:ro \
   -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
   -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
   -p 8000:8000 \
@@ -102,8 +103,26 @@ podman run -d --name forge \
 
 (`${XDG_RUNTIME_DIR}` on the host side -- e.g. `/run/user/1000` on a
 rootless setup; the paths on the right of each `:` are what
-`SYSADMIN_DBUS_ADDRESS`/`SYSADMIN_PODMAN_URL` in `.env.local` above
-actually refer to, since those are seen from *inside* the container.)
+`SYSADMIN_JOURNAL_DIR`/`SYSADMIN_DBUS_ADDRESS`/`SYSADMIN_PODMAN_URL`
+in `.env.local` above actually refer to, since those are seen from
+*inside* the container. `journalctl -u <unit>` currently only reaches
+entries indexed under the user session journal reliably -- see the
+"still open" note below.)
+
+## Still open: `journalctl -u` on host-level (root) services
+
+Confirmed working end to end: discovery (`busctl`), `podman logs`,
+and generic `journalctl -D ... -n N` all read real host data through
+the mounted journal. `journalctl -u <unit>` specifically only finds
+entries for units logging to the user session journal
+(`user@1000.service` confirmed present) -- root-owned system services
+like `steamos-manager.service` didn't show up under `_SYSTEMD_UNIT`
+in a spot check, even though `system.journal` itself is being read
+(generic recent-entries queries pull real system-level lines fine).
+Likely an ACL/permission-scoping nuance on SteamOS's journal group,
+not a mount problem. Not blocking `sysadmin`'s main use case (`podman
+logs` on containers works fully) -- left as a follow-up rather than
+chased further this session.
 
 ## Troubleshooting -- real issues hit standing this up
 

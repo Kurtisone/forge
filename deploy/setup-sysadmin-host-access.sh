@@ -70,3 +70,8 @@ echo "  SYSADMIN_DBUS_ADDRESS=unix:path=/run/forge-dbus-proxy/bus"
 echo "  SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock"
 echo "Then mount both sockets when running Forge's container -- see README.md's"
 echo "'API server' section for the full podman run command."
+echo
+echo "Journal access (journalctl -u/-k) is separate and not handled by this"
+echo "script -- it's just a bind mount, no proxy/service needed. Add"
+echo "-v /var/log/journal:/host-journal:ro to the podman run command and"
+echo "SYSADMIN_JOURNAL_DIR=/host-journal to .env.local. See deploy/README.md."

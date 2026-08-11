@@ -221,9 +221,10 @@ open http://<host-ip>:8000
 Exposing this beyond localhost or a trusted LAN? Set `API_TOKEN` in `.env.local`
 first — see [Configuration](#configuration) and [API Endpoints](#api-endpoints).
 
-**Optional: `sysadmin` host access (v3.11)** — mount the two read-only proxy
-sockets to let `sysadmin` read the host's real `journalctl`/`systemctl`/`podman`
-state instead of falling back to kernel-only diagnosis:
+**Optional: `sysadmin` host access (v3.11)** — mount the read-only proxies
+and the journal to let `sysadmin` read the host's real
+`journalctl`/`systemctl`/`podman` state instead of falling back to
+kernel-only diagnosis:
 
 ```bash
 ./deploy/setup-sysadmin-host-access.sh   # one-time, idempotent
@@ -231,10 +232,20 @@ state instead of falling back to kernel-only diagnosis:
 podman run -d --name forge \
   --env-file .env.local \
   -v $(pwd)/data:/app/data \
+  -v /var/log/journal:/host-journal:ro \
   -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
   -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
   -p 8000:8000 \
   forge-core
+```
+
+In `.env.local`:
+
+```
+SYSADMIN_JOURNAL_DIR=/host-journal
+SYSADMIN_DBUS_ADDRESS=unix:path=/run/forge-dbus-proxy/bus
+SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
+SYSADMIN_MAX_LOG_LINES=100
 ```
 
 Full design and troubleshooting: [`deploy/README.md`](deploy/README.md).
