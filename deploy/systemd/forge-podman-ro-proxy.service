@@ -1,0 +1,16 @@
+[Unit]
+Description=Forge sysadmin: read-only proxy in front of podman.sock
+Documentation=file:///%h/Forge/deploy/README.md
+Requires=podman.socket
+After=podman.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/Forge/deploy/podman_ro_proxy.py \
+  --upstream %t/podman/podman.sock \
+  --listen %t/forge-podman-ro-proxy.sock
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

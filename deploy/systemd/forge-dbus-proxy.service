@@ -1,0 +1,13 @@
+[Unit]
+Description=Forge sysadmin: filtered read-only D-Bus proxy (xdg-dbus-proxy)
+Documentation=file:///%h/Forge/deploy/README.md
+After=dbus.socket
+
+[Service]
+Type=simple
+ExecStart=%h/Forge/deploy/forge-dbus-proxy.sh
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -2,97 +2,123 @@
 
 `sysadmin` needs to read the HOST's `journalctl`/`systemctl`/`podman`
 state, but Forge's own container has no business holding real
-mutation privilege over any of them. This directory has the three
-independent pieces that make that possible while staying
-structurally read-only -- not "read-only by convention in the Forge
-code", but read-only because the mutating calls simply don't exist on
-the other end of what's mounted into the container.
+mutation privilege over any of them. Each piece below is optional and
+independent; `sysadmin` degrades gracefully without any of them
+(falls back to kernel-log diagnosis, or reports the specific missing
+piece -- see graphs/sysadmin.py's `_discover_node`).
 
-Each piece is optional and independent; `sysadmin` degrades
-gracefully without any of them (falls back to kernel-log diagnosis,
-or reports the specific missing piece -- see graphs/sysadmin.py's
-`_discover_node`).
-
-## 1. journalctl -- bind mount, no proxy needed
-
-`journalctl` reads journal files directly off disk; no daemon, no
-socket. So this one is just a bind mount and a binary:
+## Quick setup (recommended)
 
 ```bash
-# host
-podman run ... \
-  -v /var/log/journal:/host-journal:ro \
-  forge-core
+./deploy/setup-sysadmin-host-access.sh
 ```
 
-Install the `journalctl` binary in the Forge image (Containerfile
-already does this -- see the `apt-get install` line) and set:
+This is idempotent and does everything in one go: checks
+`xdg-dbus-proxy` is present, enables `podman.socket`, installs and
+enables the two `systemd --user` units so both proxies persist across
+reboots (no more relaunching background jobs by hand every session).
+It ends by printing the exact `.env.local` lines to add. Read on only
+if you want to understand what it's doing, or need to troubleshoot.
+
+Provisioning a new host with Ansible instead? See
+`deploy/ansible/sysadmin-proxies.yml` -- same steps, adapted to your
+NiPoGi playbook once you get there.
+
+## The three pieces, and why each is shaped the way it is
+
+### 1. journalctl -- bind mount, no proxy needed
+
+`journalctl` reads journal files directly off disk; no daemon, no
+socket. Just a bind mount and a binary (the Containerfile already
+installs the binary):
+
+```bash
+podman run ... -v /var/log/journal:/host-journal:ro forge-core
+```
 
 ```
 SYSADMIN_JOURNAL_DIR=/host-journal
 ```
 
-## 2. systemctl -- forge-dbus-proxy.sh (xdg-dbus-proxy)
+### 2. systemctl -- forge-dbus-proxy (xdg-dbus-proxy)
 
-`systemctl list-units`/`GetUnit` talk to systemd over D-Bus -- there
-is no file-based equivalent. `forge-dbus-proxy.sh` uses
+`systemctl list-units`/`GetUnit` talk to systemd over D-Bus -- no
+file-based equivalent exists. `forge-dbus-proxy.sh` uses
 `xdg-dbus-proxy` (the same tool Flatpak uses to sandbox D-Bus access)
 to expose a NEW socket that only forwards five read-only method calls
-(`ListUnits`, `ListUnitsByPatterns`, `GetUnit`, and the two
-`Properties` getters) and silently drops everything else --
+and silently drops everything else --
 `StartUnit`/`StopUnit`/`RestartUnit`/`Reboot`/... never reach the
-real bus at all.
-
-Run it on the host (or as a sidecar sharing a volume with Forge),
-started before Forge and kept running alongside it -- wrap it in a
-systemd unit for anything beyond manual testing:
-
-```bash
-./forge-dbus-proxy.sh &
-```
-
-Mount the resulting socket directory into Forge's container and set:
+real bus at all, confirmed in practice: `ListUnits` succeeds,
+`StartUnit` returns `Access denied` straight from the proxy.
 
 ```
 SYSADMIN_DBUS_ADDRESS=unix:path=/run/forge-dbus-proxy/bus
 ```
 
-```bash
-podman run ... \
-  -v /run/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
-  forge-core
-```
-
-## 3. podman logs/ps -- podman_ro_proxy.py
+### 3. podman logs/ps -- podman_ro_proxy.py
 
 podman.sock exposes podman's full REST API. A `:ro` bind mount only
-protects the socket *file*, not the *requests* sent through it --
-there is no read-only mode for the socket itself. `podman_ro_proxy.py`
-is a small stdlib-only HTTP proxy that sits in front of the real
-`podman.sock`, forwards only `GET /containers/json` and
-`GET /containers/{id}/logs`, and returns 403 on every other verb or
-path before it ever reaches the real socket. See
+protects the socket *file*, not the *requests* sent through it.
+`podman_ro_proxy.py` (stdlib-only) forwards only
+`GET /containers/json` and `GET /containers/{id}/logs`, and returns
+403 on every other verb or path -- confirmed in practice: a `POST
+/containers/create` gets `403 Forbidden` from the proxy itself. See
 `tests/test_podman_ro_proxy.py` for the filter's own test coverage.
-
-Run it on the host:
-
-```bash
-python3 deploy/podman_ro_proxy.py \
-  --upstream /run/podman/podman.sock \
-  --listen /run/forge-podman-ro-proxy.sock
-```
-
-Mount its socket into Forge's container and set:
 
 ```
 SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
 ```
 
+## Running Forge with both proxies mounted
+
 ```bash
-podman run ... \
-  -v /run/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
+podman run -d --name forge \
+  --env-file .env.local \
+  -v $(pwd)/data:/app/data \
+  -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
+  -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
+  -p 8000:8000 \
   forge-core
 ```
+
+(`${XDG_RUNTIME_DIR}` on the host side -- e.g. `/run/user/1000` on a
+rootless setup; the paths on the right of each `:` are what
+`SYSADMIN_DBUS_ADDRESS`/`SYSADMIN_PODMAN_URL` in `.env.local` above
+actually refer to, since those are seen from *inside* the container.)
+
+## Troubleshooting -- real issues hit standing this up
+
+These are the actual failures encountered getting this running the
+first time, kept here because they're easy to hit again on a fresh
+host:
+
+- **`mkdir: /run/forge-dbus-proxy: Permission non accordée`** -- `/run`
+  itself is root-owned; a plain user can't create directories there.
+  `forge-dbus-proxy.sh` now defaults to `$XDG_RUNTIME_DIR` (rootless-
+  friendly) instead of `/run` directly, so this shouldn't reoccur --
+  if it does, you're likely running as a user without a proper
+  `XDG_RUNTIME_DIR` set (check `echo $XDG_RUNTIME_DIR`).
+
+- **`busctl ... Failed to connect ... No such file or directory`**
+  even with the right flags -- almost always the shell you're running
+  `busctl` in doesn't have the env var set (new terminal tab, `export`
+  didn't survive). Check `echo $FORGE_DBUS_PROXY_DIR` first.
+
+- **`busctl ... Call failed: org.freedesktop.DBus.Error.ServiceUnknown`**
+  on a call that *should* be allowed -- this means the proxy
+  connected fine but the `--call=` rule syntax was wrong. The correct
+  form is `--call=NAME=RULE` (bus name first, `method@path` second)
+  -- easy to get backwards. `forge-dbus-proxy.sh` has the corrected
+  syntax; if you hand-edit it, double check against `man
+  xdg-dbus-proxy`.
+
+- **`curl ... Empty reply from server`** on `podman_ro_proxy.py`, with
+  a `FileNotFoundError` connecting to the upstream socket in the
+  proxy's own stderr -- `podman.socket` is very likely inactive.
+  Having `podman ps` work from the CLI does NOT mean the REST API
+  socket is running; the CLI talks to podman directly for local
+  operations and doesn't need it. Fix:
+  `systemctl --user enable --now podman.socket`.
 
 ## Why not just mount the real sockets with a confirmation step in Forge's code?
 

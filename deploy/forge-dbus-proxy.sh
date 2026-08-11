@@ -23,7 +23,12 @@
 
 set -euo pipefail
 
-PROXY_SOCKET_DIR="${FORGE_DBUS_PROXY_DIR:-/run/forge-dbus-proxy}"
+# Rootless-friendly by default: $XDG_RUNTIME_DIR (e.g. /run/user/1000)
+# is writable by the current user, unlike /run itself which needs
+# root -- this was the first friction point hit deploying this on a
+# rootless SteamOS host. Override with FORGE_DBUS_PROXY_DIR if you
+# really are running as root / want /run directly.
+PROXY_SOCKET_DIR="${FORGE_DBUS_PROXY_DIR:-${XDG_RUNTIME_DIR:-/run}/forge-dbus-proxy}"
 PROXY_SOCKET="$PROXY_SOCKET_DIR/bus"
 
 mkdir -p "$PROXY_SOCKET_DIR"

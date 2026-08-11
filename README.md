@@ -221,6 +221,24 @@ open http://<host-ip>:8000
 Exposing this beyond localhost or a trusted LAN? Set `API_TOKEN` in `.env.local`
 first — see [Configuration](#configuration) and [API Endpoints](#api-endpoints).
 
+**Optional: `sysadmin` host access (v3.11)** — mount the two read-only proxy
+sockets to let `sysadmin` read the host's real `journalctl`/`systemctl`/`podman`
+state instead of falling back to kernel-only diagnosis:
+
+```bash
+./deploy/setup-sysadmin-host-access.sh   # one-time, idempotent
+
+podman run -d --name forge \
+  --env-file .env.local \
+  -v $(pwd)/data:/app/data \
+  -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
+  -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
+  -p 8000:8000 \
+  forge-core
+```
+
+Full design and troubleshooting: [`deploy/README.md`](deploy/README.md).
+
 **REPL (interactive terminal, local only):**
 
 ```bash
@@ -359,6 +377,7 @@ e.g. behind a proxy that already rate-limits.
 | `web_fetch` | `ENABLED_TOOLS=chat,code,web_fetch` | Fetches a URL you already know — no search capability, SSRF-guarded, best-effort HTML→text extraction |
 | `web_search` | `ENABLED_TOOLS=chat,code,web_search` | Ranked links/snippets from a self-hosted SearXNG instance — no synthesis, just the list |
 | `research` | `ENABLED_TOOLS=chat,code,research` | Search → fetch top results → synthesize one answer, as a single deterministic call (see below) |
+| `sysadmin` | `ENABLED_TOOLS=chat,code,sysadmin` | Discover → collect → synthesize: diagnoses a service/system problem from real logs, read-only always — never restarts/stops anything. Works kernel-log-only out of the box; see [`deploy/README.md`](deploy/README.md) for read-only proxies giving it real `journalctl`/`systemctl`/`podman` access |
 
 A tool is only dispatchable if it has a `run()` function **and** appears in `ENABLED_TOOLS`.
 Implementing `run()` in a module is not enough — the opt-in is intentional for tools with side effects.
