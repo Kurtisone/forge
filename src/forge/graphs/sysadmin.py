@@ -82,7 +82,11 @@ _PROMPT_LEAK_MARKERS = [
     "GOOD ANSWER:",
     "NEVER DO THIS",
 ]
-_EXAMPLE_LEAK_FRAGMENT = "port 8888 est déjà occupé"
+_EXAMPLE_LEAK_FRAGMENTS = [
+    "port 8888 est déjà occupé",  # previous example, kept as a permanent safety net
+    "exemple-service.service",
+    "manquant.conf",
+]
 
 # Fixed, parameter-free discovery commands.
 _DISCOVER_UNITS_CMD = [
@@ -122,15 +126,21 @@ Respond in plain text ONLY. Do NOT wrap your answer in JSON, and do
 NOT return a {{"tool":...,"content":...}} object -- that format is
 for a different system (a routing decision) and never applies here.
 
-GOOD ANSWER: Le service searxng redémarre en boucle car le port 8888
-est déjà occupé au démarrage d'après les lignes "address already in
-use". Je te propose de vérifier quel processus occupe ce port avant
-de relancer le service.
+GOOD ANSWER (this is only an example of FORM AND TONE -- these exact
+names, files and details are fictional placeholders, not real logs;
+copying any of them into your own answer is always wrong, no matter
+what the actual logs above say): Le service exemple-service.service
+échoue au démarrage car la configuration référence un fichier
+introuvable (/etc/exemple/manquant.conf). Je te propose de vérifier
+que ce fichier existe et, si besoin, de le recréer avant de relancer
+le service.
 NEVER DO THIS: {{"tool":"chat","content":"..."}}
 
-Now write your own diagnosis for the question above, in the same
-plain format as GOOD ANSWER -- not the NEVER DO THIS shape. Be
-concise.
+Now write your own diagnosis using ONLY what actually appears in the
+collected logs above -- the words "exemple-service" and
+"manquant.conf" must never appear in your answer, they belong to the
+placeholder example only, never to a real one. Same plain format as
+GOOD ANSWER, not the NEVER DO THIS shape. Be concise.
 """
 
 
@@ -219,7 +229,7 @@ def _clean_diagnosis_response(raw: str) -> str:
         log.warning("sysadmin: model echoed prompt instructions instead of answering")
         return "[error] Le modèle n'a pas généré de réponse exploitable. Réessayez."
 
-    if _EXAMPLE_LEAK_FRAGMENT in cleaned:
+    if any(fragment in cleaned for fragment in _EXAMPLE_LEAK_FRAGMENTS):
         log.warning(
             "sysadmin: model copied the GOOD ANSWER example verbatim "
             "instead of diagnosing the actual logs"
@@ -286,15 +296,29 @@ def build() -> Graph:
     return g
 
 
+def _format_discovered_list(names: list[str], max_shown: int = 8) -> str:
+    """Names, not just a count -- capped so a host with dozens of
+    active units doesn't produce an unreadable wall of text in the
+    UI's expanded step detail."""
+    if not names:
+        return "aucun"
+    shown = ", ".join(names[:max_shown])
+    if len(names) > max_shown:
+        shown += f", … (+{len(names) - max_shown})"
+    return shown
+
+
 def _to_sub_steps(state: AgentState) -> list[dict]:
     """Turn this run's internal graph trace (already recorded node by
     node by graph.py's Node.execute) into small, human-readable steps
     for the UI -- see forge/subtrace.py's docstring for why this is a
     separate publish rather than a widened tool contract."""
+    units = state.context.get("units", [])
+    containers = state.context.get("containers", [])
     details = {
         "discover": lambda: (
-            f"{len(state.context.get('units', []))} service(s) actif(s), "
-            f"{len(state.context.get('containers', []))} container(s)"
+            f"services : {_format_discovered_list(units)} | "
+            f"containers : {_format_discovered_list(containers)}"
         ),
         "collect": lambda: f"source : {state.context.get('log_source', '?')}",
         "synthesize": lambda: f"diagnostic généré ({len(state.final_output or '')} caractères)",

@@ -272,11 +272,39 @@ def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
     steps = subtrace.pop()
     labels = [s["label"] for s in steps]
     assert labels == ["discover", "collect", "synthesize"]
-    assert "service(s) actif(s)" in steps[0]["detail"]
+    assert "searxng.service" in steps[0]["detail"] and "forge.service" in steps[0]["detail"]
+    assert "test-container" in steps[0]["detail"]
     assert "journalctl -u searxng.service" in steps[1]["detail"]
     assert "caractères" in steps[2]["detail"]
     assert all(s["ok"] for s in steps)
     assert all(isinstance(s["duration_ms"], int) for s in steps)
+
+
+def test_sysadmin_discover_detail_caps_long_lists(monkeypatch):
+    """A host with many active units shouldn't dump a wall of text
+    into the UI's step detail -- _format_discovered_list caps the
+    shown names and summarizes the rest."""
+    many_units = "\n".join(f"unit{i}.service loaded active running" for i in range(20))
+
+    def fake_run_fixed_many(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD:
+            return many_units
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD:
+            return ""
+        return "kernel log"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_many)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+
+    from forge import subtrace
+
+    sysadmin_mod.run(None, None)
+    steps = subtrace.pop()
+
+    discover_detail = steps[0]["detail"]
+    assert "unit0.service" in discover_detail
+    assert "unit19.service" not in discover_detail  # past the cap
+    assert "+12" in discover_detail  # 20 units, 8 shown, 12 remaining
 
 
 def test_sysadmin_rejects_verbatim_example_leak(monkeypatch):
