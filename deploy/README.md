@@ -120,6 +120,22 @@ host:
   operations and doesn't need it. Fix:
   `systemctl --user enable --now podman.socket`.
 
+- **Both `systemctl --user is-active` calls stuck on `activating`**,
+  and `journalctl --user -u forge-podman-ro-proxy.service` shows
+  `can't open file '.../deploy/podman_ro_proxy.py': No such file or
+  directory` -- the unit files use a repo path substituted at install
+  time (`__FORGE_REPO_DIR__`, replaced by
+  `setup-sysadmin-host-access.sh` with wherever it's actually run
+  from), never a hardcoded guess like `~/Forge` -- a clone living
+  anywhere else (`~/Documents/Forge`, `~/projects/forge`, ...) would
+  otherwise silently break. If you ever hand-edit or hand-install the
+  `.service` files instead of using the setup script, make sure
+  `__FORGE_REPO_DIR__` has actually been replaced with a real path.
+  After fixing the path, a unit that crash-looped enough times can
+  still refuse to restart immediately ("Start request repeated too
+  quickly") -- `systemctl --user reset-failed <unit>` clears that
+  lockout (the setup script does this automatically on every run).
+
 ## Why not just mount the real sockets with a confirmation step in Forge's code?
 
 Because the confirmation would only guard the path Forge's own code

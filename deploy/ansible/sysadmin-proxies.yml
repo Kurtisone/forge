@@ -61,6 +61,21 @@
         mode: "0644"
       notify: reload systemd user daemon
 
+    # The unit files ship with a __FORGE_REPO_DIR__ placeholder rather
+    # than a hardcoded path -- a hardcoded guess (e.g. ~/Forge) breaks
+    # silently the moment the clone lives anywhere else. This mirrors
+    # exactly what setup-sysadmin-host-access.sh does with `sed` for
+    # the manual path, just as an Ansible task here.
+    - name: Substitute the real repo path into both unit files
+      ansible.builtin.replace:
+        path: "{{ ansible_env.HOME }}/.config/systemd/user/{{ item }}"
+        regexp: "__FORGE_REPO_DIR__"
+        replace: "{{ forge_repo_dir }}"
+      loop:
+        - forge-dbus-proxy.service
+        - forge-podman-ro-proxy.service
+      notify: reload systemd user daemon
+
     - name: Flush handlers before enabling (daemon-reload must happen first)
       ansible.builtin.meta: flush_handlers
 

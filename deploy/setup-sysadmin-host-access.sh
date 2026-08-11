@@ -37,9 +37,23 @@ echo "  OK: $(systemctl --user is-active podman.socket)"
 
 echo "[3/3] Installing and enabling forge-dbus-proxy + forge-podman-ro-proxy..."
 mkdir -p "$HOME/.config/systemd/user"
-cp deploy/systemd/forge-dbus-proxy.service "$HOME/.config/systemd/user/"
-cp deploy/systemd/forge-podman-ro-proxy.service "$HOME/.config/systemd/user/"
+# __FORGE_REPO_DIR__ is substituted here rather than hardcoded in the
+# unit files themselves -- a hardcoded path (e.g. assuming
+# ~/Forge) silently breaks the moment the clone lives anywhere else
+# (this exact mistake shipped once already: the units assumed
+# %h/Forge, the real clone was at %h/Documents/Forge -- systemd's own
+# %h specifier can't help here since it only expands $HOME, not the
+# repo's actual location under it).
+sed "s|__FORGE_REPO_DIR__|$PWD|g" deploy/systemd/forge-dbus-proxy.service \
+  > "$HOME/.config/systemd/user/forge-dbus-proxy.service"
+sed "s|__FORGE_REPO_DIR__|$PWD|g" deploy/systemd/forge-podman-ro-proxy.service \
+  > "$HOME/.config/systemd/user/forge-podman-ro-proxy.service"
 systemctl --user daemon-reload
+# Clears systemd's restart-rate-limit lockout (StartLimitBurst) from
+# any earlier crash loop -- without this, a fixed unit can still
+# refuse to (re)start immediately with "Start request repeated too
+# quickly" even though the underlying problem is already gone.
+systemctl --user reset-failed forge-dbus-proxy.service forge-podman-ro-proxy.service 2>/dev/null || true
 systemctl --user enable --now forge-dbus-proxy.service
 systemctl --user enable --now forge-podman-ro-proxy.service
 
