@@ -67,11 +67,22 @@ _MAX_SYNTHESIS_OUTPUT_CHARS = 4000
 
 # Same reasoning as graphs/review.py and graphs/research.py: this
 # model needs the exact shape it must NOT produce shown explicitly.
+# _PROMPT_LEAK_MARKERS catches the model echoing the INSTRUCTION
+# markers themselves (rare). _EXAMPLE_LEAK_FRAGMENT catches the
+# actually-observed failure mode: the model silently copying the
+# GOOD ANSWER *content* verbatim, without ever echoing the marker
+# word -- caught in production on 2026-08-11, where a question about
+# a completely different container ("forge-llm") got this exact
+# fabricated searxng/port-8888 text back as if it were a real
+# diagnosis. A distinctive fragment of the example is enough: an
+# unrelated real diagnosis coincidentally using this exact phrase is
+# effectively impossible.
 _PROMPT_LEAK_MARKERS = [
     "Respond in plain text",
     "GOOD ANSWER:",
     "NEVER DO THIS",
 ]
+_EXAMPLE_LEAK_FRAGMENT = "port 8888 est déjà occupé"
 
 # Fixed, parameter-free discovery commands.
 _DISCOVER_UNITS_CMD = [
@@ -207,6 +218,13 @@ def _clean_diagnosis_response(raw: str) -> str:
     if any(marker in cleaned for marker in _PROMPT_LEAK_MARKERS):
         log.warning("sysadmin: model echoed prompt instructions instead of answering")
         return "[error] Le modèle n'a pas généré de réponse exploitable. Réessayez."
+
+    if _EXAMPLE_LEAK_FRAGMENT in cleaned:
+        log.warning(
+            "sysadmin: model copied the GOOD ANSWER example verbatim "
+            "instead of diagnosing the actual logs"
+        )
+        return "[error] Le modèle a recopié un exemple au lieu de générer un vrai diagnostic. Réessayez."
 
     if not cleaned:
         return "[error] Le modèle n'a pas généré de réponse. Réessayez."

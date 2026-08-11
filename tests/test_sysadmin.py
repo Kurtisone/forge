@@ -205,7 +205,7 @@ def test_sysadmin_unwraps_substantive_json_wrapped_answer(monkeypatch):
 
     substantive_wrapped = (
         '{"tool":"chat","content":"Le service redémarre en boucle car '
-        'le port 8888 est déjà occupé au démarrage."}'
+        'le disque /var est plein à 100%."}'
     )
     monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: substantive_wrapped)
 
@@ -277,6 +277,35 @@ def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
     assert "caractères" in steps[2]["detail"]
     assert all(s["ok"] for s in steps)
     assert all(isinstance(s["duration_ms"], int) for s in steps)
+
+
+def test_sysadmin_rejects_verbatim_example_leak(monkeypatch):
+    """Regression test for the exact bug hit in production on
+    2026-08-11: the model copied the GOOD ANSWER example's content
+    verbatim (searxng/port 8888) as its "diagnosis" for a completely
+    unrelated question about a different container -- fabricated
+    misinformation presented as a real answer, and _PROMPT_LEAK_MARKERS
+    alone didn't catch it because the model never echoed the literal
+    marker word "GOOD ANSWER:", only the content after it."""
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
+    monkeypatch.setattr(
+        sysadmin_mod,
+        "call_llm",
+        lambda p: (
+            'Le service searxng redémarre en boucle car le port 8888 '
+            'est déjà occupé au démarrage d\'après les lignes "address '
+            'already in use". Je te propose de vérifier quel processus '
+            "occupe ce port avant de relancer le service."
+        ),
+    )
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": "forge-llm", "question": "logs de forge-llm ?"}
+    )
+
+    assert "[error]" in state.final_output
+    assert "searxng" not in state.final_output
+    assert "8888" not in state.final_output
 
 
 def test_sysadmin_cleans_json_wrapped_response_like_review(monkeypatch):
