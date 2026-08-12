@@ -36,6 +36,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     podman \
     && rm -rf /var/lib/apt/lists/*
 
+# --- Non-root runtime user (audit E-4) --------------------------------
+# Everything above runs as root because installing packages needs to;
+# nothing below does. uvicorn binds 8000, which is unprivileged, and
+# Forge's only writable path is /app/data (MEMORY_FILE, TRACE_FILE,
+# RAG_DB_FILE and WORKSPACE_DIR all default under `data/`, and /app is
+# WORKDIR). So there is no reason for the serving process to be able
+# to rewrite /app/src/forge/ -- which is exactly what a `shell` or
+# `files` dispatch could do while it was root.
+#
+# UID/GID 1000 is not arbitrary and not cosmetic. Under rootless
+# podman the container's UID 0 is already mapped to your host UID, and
+# that mapping is what makes the 0660 proxy sockets and the mounted
+# journal readable at all. Dropping to a container UID that maps to a
+# *subuid* would silently break every one of those. Running this image
+# non-root therefore requires --userns=keep-id at runtime, so that
+# container UID 1000 maps back to host UID 1000. See deploy/README.md,
+# "Running non-root" -- the image half without the runtime half is a
+# broken container, not a safer one.
+#
+# python:3.12 (Debian) ships no user at 1000, so this claims it
+# cleanly; useradd fails the build loudly if that ever stops being
+# true rather than quietly picking a different id.
+RUN groupadd --gid 1000 forge \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin forge \
+    && mkdir -p /run/systemd/system /app/data \
+    && chown -R forge:forge /app/data /home/forge \
+    && python -m compileall -q /app/src
+
+# HOME matters here in a way it didn't as root: the podman client
+# resolves its config and scratch paths from it, and /root exists
+# while /home/forge only does because it was just created.
+ENV HOME=/home/forge
+
+USER forge:forge
+
 EXPOSE 8000
 
 # Default: HTTP API (accessible from browser / other machines)
@@ -51,8 +86,23 @@ EXPOSE 8000
 # happens regardless of DBUS_SYSTEM_BUS_ADDRESS being set correctly,
 # confirmed in production on 2026-08-11 (the filtered D-Bus proxy
 # worked fine when tested directly with busctl; systemctl inside the
-# container still refused). /run is a fresh tmpfs at container start,
-# so this can't be done at build time -- it has to happen here, in
-# CMD, every time the container starts. `exec` keeps uvicorn as PID 1
-# so it still receives SIGTERM directly from `podman stop`.
-CMD ["sh", "-c", "mkdir -p /run/systemd/system && exec uvicorn forge.api:app --host 0.0.0.0 --port 8000"]
+# container still refused).
+#
+# The mkdir is now best-effort rather than a hard `&&`. Only the
+# directory's *existence* is checked by sd_booted() -- nothing writes
+# into it -- so there are three cases and the old form only handled
+# one:
+#   - /run is part of the image: the build-time mkdir above already
+#     did it, and this is a no-op.
+#   - /run is a tmpfs and we can write to it: this creates it, as
+#     before.
+#   - /run is a tmpfs owned by root and we are not: mkdir fails, and
+#     as a non-root process there is nothing to be done about it here.
+#     Failing the whole container start over that would take the API
+#     down for a sysadmin feature; instead it says so, once, on
+#     stderr, where the symptom would otherwise surface much later as
+#     a confusing systemctl error. Fix is a tmpfs mount on
+#     /run/systemd/system -- see deploy/README.md.
+# `exec` keeps uvicorn as PID 1 so it still receives SIGTERM directly
+# from `podman stop`.
+CMD ["sh", "-c", "mkdir -p /run/systemd/system 2>/dev/null || true; [ -d /run/systemd/system ] || echo 'forge: /run/systemd/system is missing and could not be created -- systemctl inside sysadmin will refuse to run; see deploy/README.md (Running non-root)' >&2; exec uvicorn forge.api:app --host 0.0.0.0 --port 8000"]
