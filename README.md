@@ -26,7 +26,8 @@ Tool Dispatcher
    ├── review      (read a file, optionally test it, analyze)
    ├── web_fetch   (fetch a known URL)
    ├── web_search  (SearXNG links/snippets, no synthesis)
-   └── research    (search → fetch → synthesize, one call)
+   ├── research    (search → fetch → synthesize, one call)
+   └── sysadmin    (discover → collect → synthesize, read-only diagnosis)
 ```
 
 The model must output a strict JSON instruction (`{"tool": "...", "content": "..."}`)
