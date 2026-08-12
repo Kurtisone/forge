@@ -259,6 +259,7 @@ kernel-only diagnosis:
 ./deploy/setup-sysadmin-host-access.sh   # one-time, idempotent
 
 podman run -d --name forge \
+  --group-add keep-groups \
   --env-file .env.local \
   -v $(pwd)/data:/app/data \
   -v /var/log/journal:/host-journal:ro \
@@ -267,6 +268,13 @@ podman run -d --name forge \
   -p 8000:8000 \
   forge-core
 ```
+
+(`--group-add keep-groups` — or the compose annotation
+`run.oci.keep_original_groups: "1"` — is what lets `journalctl -u
+<unit>` read root-owned system services; without it, `sysadmin` still
+works but only sees generic queries and user-session units. See
+[`deploy/README.md`](deploy/README.md#group-access-for-journalctl--u-on-root-owned-system-services)
+for why.)
 
 In `.env.local`:
 
@@ -644,7 +652,7 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.8** | done | Prompt-cache reliability: pinned llama-server slot, `MEMORY_MAX_HISTORY` raised to stop a sliding window from fighting KV-cache reuse — root-caused a remaining cache-reuse gap to the served model's own hybrid architecture, not Forge |
 | **v3.9** | done | Context compaction + drawer: `rag_pointer`/`llm_summary` strategies, pin/unpin, `/history` `/drawer` `/compact` endpoints, `!compact` REPL command, files write-diff |
 | **v3.10** | done | Hardening + new tools: dedicated `test` tool, `web_fetch` (SSRF-guarded), `web_search` + `research` (self-hosted SearXNG), review graph gains an optional test-run step and chat-dispatch; router disambiguation fixes (files vs review, tool descriptions/examples for every new tool) found through real usage |
-| **v3.11** | current | Sysadmin: `discover → collect → synthesize` graph diagnosing real service/system problems from logs, read-only always (no restart/stop path exists in the code); UI gains expandable per-step detail (`forge.subtrace`) for every graph-based tool; read-only host access via three independent proxies (`xdg-dbus-proxy` for systemd, a hand-rolled GET-only proxy for podman.sock, a plain bind mount for the journal) rather than raw socket access — real production debugging found and fixed a prompt-injection-shaped example-leak, a context-overflow crash, and `systemctl`'s undocumented refusal to honor `DBUS_SYSTEM_BUS_ADDRESS` (switched discovery to `busctl`). `journalctl -u` on root-owned system services remains a known follow-up |
+| **v3.11** | done | Sysadmin: `discover → collect → synthesize` graph diagnosing real service/system problems from logs, read-only always (no restart/stop path exists in the code); UI gains expandable per-step detail (`forge.subtrace`) for every graph-based tool; read-only host access via three independent proxies (`xdg-dbus-proxy` for systemd, a hand-rolled GET-only proxy for podman.sock, a plain bind mount for the journal) rather than raw socket access — real production debugging found and fixed a prompt-injection-shaped example-leak, a context-overflow crash, `systemctl`'s undocumented refusal to honor `DBUS_SYSTEM_BUS_ADDRESS` (switched discovery to `busctl`), and a rootless-podman supplementary-groups gap blocking `journalctl -u` on root-owned services (`--group-add keep-groups`) |
 
 ---
 

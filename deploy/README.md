@@ -90,8 +90,17 @@ SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
 
 ## Running Forge with both proxies mounted
 
+**Group access is required** for `journalctl -u <unit>` on root-owned
+system services (see "Group access" below) -- without it, `sysadmin`
+still works, but only sees generic recent-entries queries and units
+logging to the user session journal, not root services like
+`steamos-manager.service`.
+
+### podman run
+
 ```bash
 podman run -d --name forge \
+  --group-add keep-groups \
   --env-file .env.local \
   -v $(pwd)/data:/app/data \
   -v /var/log/journal:/host-journal:ro \
@@ -101,28 +110,57 @@ podman run -d --name forge \
   forge-core
 ```
 
+### podman-compose
+
+Same effect, `--group-add keep-groups`'s underlying crun annotation
+spelled out directly (works the same way in compose, which has no
+`--group-add` flag of its own):
+
+```yaml
+services:
+  forge:
+    image: forge-core
+    container_name: forge
+    restart: unless-stopped
+    annotations:
+      run.oci.keep_original_groups: "1"
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.local
+    volumes:
+      - ./data:/app/data
+      - /var/log/journal:/host-journal:ro
+      - ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro
+      - ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro
+```
+
 (`${XDG_RUNTIME_DIR}` on the host side -- e.g. `/run/user/1000` on a
 rootless setup; the paths on the right of each `:` are what
 `SYSADMIN_JOURNAL_DIR`/`SYSADMIN_DBUS_ADDRESS`/`SYSADMIN_PODMAN_URL`
 in `.env.local` above actually refer to, since those are seen from
-*inside* the container. `journalctl -u <unit>` currently only reaches
-entries indexed under the user session journal reliably -- see the
-"still open" note below.)
+*inside* the container.)
 
-## Still open: `journalctl -u` on host-level (root) services
+## Group access for `journalctl -u` on root-owned system services
 
-Confirmed working end to end: discovery (`busctl`), `podman logs`,
-and generic `journalctl -D ... -n N` all read real host data through
-the mounted journal. `journalctl -u <unit>` specifically only finds
-entries for units logging to the user session journal
-(`user@1000.service` confirmed present) -- root-owned system services
-like `steamos-manager.service` didn't show up under `_SYSTEMD_UNIT`
-in a spot check, even though `system.journal` itself is being read
-(generic recent-entries queries pull real system-level lines fine).
-Likely an ACL/permission-scoping nuance on SteamOS's journal group,
-not a mount problem. Not blocking `sysadmin`'s main use case (`podman
-logs` on containers works fully) -- left as a follow-up rather than
-chased further this session.
+Confirmed root cause: rootless podman does NOT pass the host user's
+supplementary groups (`wheel`, `adm`, etc.) into the container by
+default -- `podman exec forge id` showed `groups=0(root)` even though
+`deck` on the host is in `wheel`, which is exactly what the
+`system.journal` file's ACL requires for read access
+(`getfacl` showed `group:wheel:r-x`, nothing for "other"). Generic
+`journalctl -D ... -n N` queries and `podman logs` still worked
+without this because they don't depend on that ACL the same way; only
+`-u <unit>` on root-owned services needs it.
+
+Fix: `crun` (the default OCI runtime) can skip the `setgroups()` call
+that normally strips supplementary groups on container entry --
+`--group-add keep-groups` on the CLI, or the equivalent annotation
+`run.oci.keep_original_groups: "1"` in compose (no `--group-add` flag
+exists there). Confirmed in production: `podman exec forge id` then
+shows real supplementary groups instead of just `root`, and
+`journalctl -D /host-journal -u steamos-manager.service` returns real
+entries.
 
 ## Troubleshooting -- real issues hit standing this up
 
@@ -174,7 +212,17 @@ host:
   quirks and was the one tool that worked consistently against the
   proxy throughout this whole investigation.
 
-- **Both `systemctl --user is-active` calls stuck on `activating`**,
+- **`journalctl -D ... -u <unit>` returns nothing for a root-owned
+  system service** (e.g. `steamos-manager.service`), even though
+  generic `-n N` queries and `podman logs` both work fine through the
+  same mount -- `podman exec forge id` showing `groups=0(root)` is
+  the tell: rootless podman doesn't pass host supplementary groups
+  (`wheel`, `adm`, ...) into the container by default, and
+  `system.journal`'s ACL requires one of those groups. Fix: see
+  "Group access for `journalctl -u`" above (`--group-add keep-groups`
+  or the compose annotation).
+
+
   and `journalctl --user -u forge-podman-ro-proxy.service` shows
   `can't open file '.../deploy/podman_ro_proxy.py': No such file or
   directory` -- the unit files use a repo path substituted at install
