@@ -92,6 +92,7 @@ _EXAMPLE_LEAK_FRAGMENTS = [
     "manquant.conf",
 ]
 
+
 # Fixed, parameter-free discovery commands. Functions, not static
 # lists: SYSADMIN_DBUS_ADDRESS/SYSADMIN_PODMAN_URL let these target a
 # filtered proxy instead of the raw host bus/socket -- see config.py's
@@ -179,6 +180,7 @@ def _subprocess_env() -> dict[str, str]:
     if SYSADMIN_DBUS_ADDRESS:
         env["DBUS_SYSTEM_BUS_ADDRESS"] = SYSADMIN_DBUS_ADDRESS
     return env
+
 
 _SYNTHESIS_PROMPT = """/no_think
 {today_line}
@@ -276,7 +278,9 @@ def _discover_node(state: AgentState) -> AgentState:
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             log.warning("sysadmin: failed to parse busctl ListUnits output: %s", e)
             units = []
-            state.context["discover_units_error"] = f"[error] failed to parse busctl output: {e}"
+            state.context["discover_units_error"] = (
+                f"[error] failed to parse busctl output: {e}"
+            )
 
     containers_raw = _run_fixed(_DISCOVER_CONTAINERS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
     if containers_raw.startswith("[error]"):
@@ -284,7 +288,9 @@ def _discover_node(state: AgentState) -> AgentState:
         containers: list[str] = []
         state.context["discover_containers_error"] = containers_raw
     else:
-        containers = [line.strip() for line in containers_raw.splitlines() if line.strip()]
+        containers = [
+            line.strip() for line in containers_raw.splitlines() if line.strip()
+        ]
 
     state.context["units"] = units
     state.context["containers"] = containers
@@ -367,9 +373,14 @@ def _truncate_log_block(log_block: str, budget: int) -> str:
 
 
 def _synthesize_node(state: AgentState) -> AgentState:
-    question = state.context.get("question") or "Diagnostique le problème et propose une solution."
+    question = (
+        state.context.get("question")
+        or "Diagnostique le problème et propose une solution."
+    )
     source = state.context["log_source"]
-    log_block = _truncate_log_block(state.context["collected_logs"], SYSADMIN_LOG_CHARS_BUDGET)
+    log_block = _truncate_log_block(
+        state.context["collected_logs"], SYSADMIN_LOG_CHARS_BUDGET
+    )
 
     prompt = _SYNTHESIS_PROMPT.format(
         today_line=today_line(),
@@ -432,11 +443,13 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
 
     def discover_detail() -> str:
         services_part = (
-            f"services : erreur ({units_error})" if units_error
+            f"services : erreur ({units_error})"
+            if units_error
             else f"services : {_format_discovered_list(units)}"
         )
         containers_part = (
-            f"containers : erreur ({containers_error})" if containers_error
+            f"containers : erreur ({containers_error})"
+            if containers_error
             else f"containers : {_format_discovered_list(containers)}"
         )
         return f"{services_part} | {containers_part}"
@@ -450,7 +463,9 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
     details = {
         "discover": discover_detail,
         "collect": collect_detail,
-        "synthesize": lambda: f"diagnostic généré ({len(state.final_output or '')} caractères)",
+        "synthesize": lambda: (
+            f"diagnostic généré ({len(state.final_output or '')} caractères)"
+        ),
     }
     return [
         {
@@ -462,8 +477,10 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
             # itself, keeps the run useful) -- ts.tool_ok alone can't
             # express this partial failure since it tracks state.ok.
             "ok": (
-                False if ts.decision_tool == "discover" and (units_error or containers_error)
-                else False if ts.decision_tool == "collect" and collect_error
+                False
+                if ts.decision_tool == "discover" and (units_error or containers_error)
+                else False
+                if ts.decision_tool == "collect" and collect_error
                 else ts.tool_ok
             ),
             "duration_ms": ts.duration_ms,

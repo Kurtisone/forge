@@ -127,8 +127,12 @@ class _UnixSocketHTTPServer(socketserver.UnixStreamServer):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--upstream", required=True, help="path to the real podman.sock")
-    parser.add_argument("--listen", required=True, help="path for this proxy's own socket")
+    parser.add_argument(
+        "--upstream", required=True, help="path to the real podman.sock"
+    )
+    parser.add_argument(
+        "--listen", required=True, help="path for this proxy's own socket"
+    )
     args = parser.parse_args()
 
     if os.path.exists(args.listen):
@@ -136,7 +140,9 @@ def main() -> None:
 
     server = _UnixSocketHTTPServer(args.listen, make_handler(args.upstream))
     os.chmod(args.listen, 0o660)  # group-readable only, not world
-    print(f"podman_ro_proxy: {args.listen} -> {args.upstream} (GET-only, containers/json + logs)")
+    print(
+        f"podman_ro_proxy: {args.listen} -> {args.upstream} (GET-only, containers/json + logs)"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

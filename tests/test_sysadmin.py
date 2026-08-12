@@ -23,7 +23,18 @@ def _fake_busctl_units_json(names: list[str]) -> str:
     against actual production output before writing this, not
     guessed): {"type": "a(ssssssouso)", "data": [[[10-field tuple], ...]]}."""
     rows = [
-        [n, n, "loaded", "active", "running", "", f"/org/freedesktop/systemd1/unit/{n}", 0, "", "/"]
+        [
+            n,
+            n,
+            "loaded",
+            "active",
+            "running",
+            "",
+            f"/org/freedesktop/systemd1/unit/{n}",
+            0,
+            "",
+            "/",
+        ]
         for n in names
     ]
     return json.dumps({"type": "a(ssssssouso)", "data": [rows]})
@@ -156,7 +167,11 @@ def test_sysadmin_prompt_includes_todays_date(monkeypatch):
 
     monkeypatch.setattr(sysadmin_mod, "call_llm", fake_call_llm)
     build_sysadmin().run(
-        "", initial_context={"target_hint": "searxng.service", "question": "pourquoi ça plante ?"}
+        "",
+        initial_context={
+            "target_hint": "searxng.service",
+            "question": "pourquoi ça plante ?",
+        },
     )
 
     assert today_line() in captured["prompt"]
@@ -239,7 +254,9 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
     SYSADMIN_LOG_CHARS_BUDGET regardless of how many lines were
     collected, and must keep the END of the log (most recent, most
     relevant events), not the start."""
-    huge_log = "\n".join(f"line {i} of a very long journalctl dump" for i in range(2000))
+    huge_log = "\n".join(
+        f"line {i} of a very long journalctl dump" for i in range(2000)
+    )
     assert len(huge_log) > sysadmin_mod.SYSADMIN_LOG_CHARS_BUDGET
 
     def fake_run_fixed_huge(cmd, timeout):
@@ -317,9 +334,9 @@ def test_sysadmin_discover_handles_nonzero_exit_gracefully(monkeypatch):
             )
         if cmd[0] == "podman":
             return (
-                '[error] podman exited 125: Cannot connect to Podman. '
-                'Error: unable to connect to Podman socket: dial unix '
-                '/run/forge-podman-ro-proxy.sock: connect: no such file '
+                "[error] podman exited 125: Cannot connect to Podman. "
+                "Error: unable to connect to Podman socket: dial unix "
+                "/run/forge-podman-ro-proxy.sock: connect: no such file "
                 "or directory"
             )
         return "kernel log line"
@@ -390,7 +407,9 @@ def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
         return "kernel log line"
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_missing_binaries)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic sur les logs kernel.")
+    monkeypatch.setattr(
+        sysadmin_mod, "call_llm", lambda p: "Diagnostic sur les logs kernel."
+    )
 
     from forge import subtrace
 
@@ -398,10 +417,14 @@ def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
     steps = subtrace.pop()
 
     discover_step = steps[0]
-    assert "[error]" not in discover_step["detail"].split("erreur (")[0]  # no fake entry before the error label
+    assert (
+        "[error]" not in discover_step["detail"].split("erreur (")[0]
+    )  # no fake entry before the error label
     assert "executable not found: 'busctl'" in discover_step["detail"]
     assert "executable not found: 'podman'" in discover_step["detail"]
-    assert discover_step["ok"] is False  # flagged even though the overall run still succeeds
+    assert (
+        discover_step["ok"] is False
+    )  # flagged even though the overall run still succeeds
 
     state = build_sysadmin().run(
         "", initial_context={"target_hint": None, "question": None}
@@ -441,7 +464,9 @@ def test_sysadmin_uses_configured_podman_url(monkeypatch):
     """SYSADMIN_PODMAN_URL (deploy/README.md: podman_ro_proxy.py's
     socket, never the raw host socket) must add --url <value> to
     every podman call."""
-    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_PODMAN_URL", "unix:///run/forge-podman-ro-proxy.sock")
+    monkeypatch.setattr(
+        sysadmin_mod, "SYSADMIN_PODMAN_URL", "unix:///run/forge-podman-ro-proxy.sock"
+    )
     calls = []
 
     def fake_run_fixed(cmd, timeout):
@@ -468,7 +493,9 @@ def test_sysadmin_passes_configured_dbus_address_to_subprocess_env(monkeypatch):
     filtered bus, never the real host system bus) must reach systemctl
     via DBUS_SYSTEM_BUS_ADDRESS in the subprocess env, and the minimal
     env posture (no host env leaking through) must be preserved."""
-    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus")
+    monkeypatch.setattr(
+        sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus"
+    )
 
     env = sysadmin_mod._subprocess_env()
     assert env["DBUS_SYSTEM_BUS_ADDRESS"] == "unix:path=/run/forge-dbus-proxy/bus"
@@ -481,13 +508,26 @@ def test_sysadmin_no_proxy_configured_leaves_commands_unchanged(monkeypatch):
     file already exercises -- must produce byte-identical commands to
     before this became configurable at all."""
     assert sysadmin_mod._DISCOVER_UNITS_CMD() == [
-        "busctl", "--json=short", "call",
-        "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager", "ListUnits",
+        "busctl",
+        "--json=short",
+        "call",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "ListUnits",
     ]
-    assert sysadmin_mod._DISCOVER_CONTAINERS_CMD() == ["podman", "ps", "--format", "{{.Names}}"]
+    assert sysadmin_mod._DISCOVER_CONTAINERS_CMD() == [
+        "podman",
+        "ps",
+        "--format",
+        "{{.Names}}",
+    ]
     assert sysadmin_mod._collect_cmd("kernel", "") == [
-        "journalctl", "-k", "--no-pager", "-n", str(sysadmin_mod.SYSADMIN_MAX_LOG_LINES),
+        "journalctl",
+        "-k",
+        "--no-pager",
+        "-n",
+        str(sysadmin_mod.SYSADMIN_MAX_LOG_LINES),
     ]
     assert "DBUS_SYSTEM_BUS_ADDRESS" not in sysadmin_mod._subprocess_env()
 
@@ -497,7 +537,9 @@ def test_sysadmin_discover_units_cmd_includes_address_when_configured(monkeypatc
     entirely -- see _DISCOVER_UNITS_CMD's docstring), busctl takes the
     proxy address as an explicit CLI flag, confirmed against real
     production output to actually work."""
-    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus")
+    monkeypatch.setattr(
+        sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus"
+    )
     cmd = sysadmin_mod._DISCOVER_UNITS_CMD()
     assert "--address=unix:path=/run/forge-dbus-proxy/bus" in cmd
 
@@ -506,9 +548,13 @@ def test_parse_busctl_units_extracts_names_from_real_shape():
     """Parses the exact busctl --json=short shape confirmed against
     real production output: {"type": "a(ssssssouso)", "data": [[10-field tuples]]},
     unit name at index 0 of each tuple."""
-    raw = _fake_busctl_units_json(["cups.service", "forge.service", "searxng-something.service"])
+    raw = _fake_busctl_units_json(
+        ["cups.service", "forge.service", "searxng-something.service"]
+    )
     assert sysadmin_mod._parse_busctl_units(raw) == [
-        "cups.service", "forge.service", "searxng-something.service",
+        "cups.service",
+        "forge.service",
+        "searxng-something.service",
     ]
 
 
@@ -546,7 +592,10 @@ def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
     steps = subtrace.pop()
     labels = [s["label"] for s in steps]
     assert labels == ["discover", "collect", "synthesize"]
-    assert "searxng.service" in steps[0]["detail"] and "forge.service" in steps[0]["detail"]
+    assert (
+        "searxng.service" in steps[0]["detail"]
+        and "forge.service" in steps[0]["detail"]
+    )
     assert "test-container" in steps[0]["detail"]
     assert "journalctl -u searxng.service" in steps[1]["detail"]
     assert "caractères" in steps[2]["detail"]
@@ -594,15 +643,16 @@ def test_sysadmin_rejects_verbatim_example_leak(monkeypatch):
         sysadmin_mod,
         "call_llm",
         lambda p: (
-            'Le service searxng redémarre en boucle car le port 8888 '
-            'est déjà occupé au démarrage d\'après les lignes "address '
+            "Le service searxng redémarre en boucle car le port 8888 "
+            "est déjà occupé au démarrage d'après les lignes \"address "
             'already in use". Je te propose de vérifier quel processus '
             "occupe ce port avant de relancer le service."
         ),
     )
 
     state = build_sysadmin().run(
-        "", initial_context={"target_hint": "forge-llm", "question": "logs de forge-llm ?"}
+        "",
+        initial_context={"target_hint": "forge-llm", "question": "logs de forge-llm ?"},
     )
 
     assert "[error]" in state.final_output

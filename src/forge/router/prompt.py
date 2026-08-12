@@ -137,7 +137,7 @@ TOOL_DESCRIPTIONS = {
         "optional. Discovers running systemd units and podman "
         "containers, reads their logs (journalctl / podman logs), and "
         "returns ONE diagnosis with a proposed fix -- this is a "
-        'single call that does everything internally, never respond '
+        "single call that does everything internally, never respond "
         'with "done":false after it. This tool NEVER restarts, stops, '
         "or changes anything -- read-only always, a human applies any "
         "fix by hand. Use this when the user reports a problem with a "

@@ -56,7 +56,9 @@ def test_dispatch_sub_steps_do_not_leak_to_next_tool(monkeypatch):
     publish anything must never inherit a previous tool's steps."""
     from forge import subtrace
 
-    subtrace.publish([{"label": "stale", "detail": "leftover", "ok": True, "duration_ms": 1}])
+    subtrace.publish(
+        [{"label": "stale", "detail": "leftover", "ok": True, "duration_ms": 1}]
+    )
 
     monkeypatch.setattr(
         orch_mod,
