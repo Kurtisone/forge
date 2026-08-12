@@ -20,9 +20,15 @@ refuses to start unless API_ALLOW_UNAUTHENTICATED=true says the open
 posture is intentional. See check_auth_configuration() below.
 
 Rate limiting: in-memory sliding window, per client IP, on every
-endpoint except / and /health. RATE_LIMIT_REQUESTS per
-RATE_LIMIT_WINDOW_SECONDS (default: 30 per 60s). Set
-RATE_LIMIT_ENABLED=false to disable.
+endpoint except /. RATE_LIMIT_REQUESTS per RATE_LIMIT_WINDOW_SECONDS
+(default: 30 per 60s). Set RATE_LIMIT_ENABLED=false to disable.
+/health stays unauthenticated (healthchecks and the UI status line
+have no token yet) but is metered like the rest: each hit costs an
+outbound call to llama.cpp.
+
+Interactive docs (/docs, /redoc, /openapi.json) are off unless
+API_DOCS_ENABLED=true. FastAPI mounts them itself, so they cannot be
+put behind require_token.
 
 Run:
   uvicorn forge.api:app --host 0.0.0.0 --port 8000
@@ -45,6 +51,7 @@ from pydantic import BaseModel
 from forge import rag, ratelimit, trace
 from forge.config import (
     API_ALLOW_UNAUTHENTICATED,
+    API_DOCS_ENABLED,
     API_TOKEN,
     FORGE_PROVIDER,
     LLAMA_CPP_URL,
@@ -90,7 +97,20 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Forge", version="3.3.0", docs_url="/docs", lifespan=lifespan)
+# docs_url/redoc_url/openapi_url are None unless API_DOCS_ENABLED says
+# otherwise (audit M-3). These three routes are mounted by FastAPI
+# itself, so they can't take Depends(require_token) the way this app's
+# own routes do -- there is no version of them that is behind the
+# token. Off by default; API_DOCS_ENABLED=true turns them back on for
+# development.
+app = FastAPI(
+    title="Forge",
+    version="3.3.0",
+    docs_url="/docs" if API_DOCS_ENABLED else None,
+    redoc_url="/redoc" if API_DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if API_DOCS_ENABLED else None,
+    lifespan=lifespan,
+)
 _executor = ThreadPoolExecutor(max_workers=2)
 _orchestrator = Orchestrator()
 
@@ -232,7 +252,14 @@ def _graph_registry() -> dict:
 # ─── Endpoints ─────────────────────────────────────────────────────
 
 
-@app.get("/health")
+# Rate-limited but deliberately still unauthenticated (audit M-3):
+# it's what a container healthcheck and the UI's own status line call
+# before there's a token to send. The limit is the point -- every hit
+# makes an outbound HTTP call to llama.cpp to read the loaded model
+# name, so an unmetered /health turns one cheap request from an
+# anonymous caller into load on the inference server. That's an
+# amplifier, not just a chatty endpoint.
+@app.get("/health", dependencies=[Depends(rate_limit)])
 async def health():
     model = LLM_MODEL
     if FORGE_PROVIDER == "llama_cpp":
