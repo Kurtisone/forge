@@ -151,17 +151,35 @@ def _collect_cmd(kind: str, name: str) -> list[str]:
     collect_node has verified it against discover_node's own output --
     see collect_node's docstring. `kind` selects journalctl-by-unit,
     podman-logs, or journalctl-kernel; the journal dir / podman URL
-    flags are added only when the matching proxy is configured."""
+    flags are added only when the matching proxy is configured.
+
+    The name is passed as `--unit=<name>` and after a `--` separator
+    respectively (audit M-4), never as a bare argument following a
+    short flag. `-u foo` and `foo` are both positions where a value
+    starting with `-` is read as an option instead: `-u --output=cat`
+    or a container literally named `--help` would be interpreted by
+    journalctl/podman rather than treated as a name. The attached form
+    and the end-of-options marker remove that reading entirely.
+
+    This is the second lock on a door that collect_node already
+    bolted: a name only reaches here if it appeared verbatim in
+    discovery output, and unit/container names don't normally start
+    with a dash. What it defends is the case where discovery output is
+    no longer trustworthy -- a hostile container name, or a proxy
+    returning something the host didn't say -- which is exactly the
+    assumption the validation rests on and therefore the one worth not
+    resting the whole thing on.
+    """
     if kind == "unit":
         cmd = ["journalctl"]
         if SYSADMIN_JOURNAL_DIR:
             cmd += ["-D", SYSADMIN_JOURNAL_DIR]
-        return cmd + ["-u", name, "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)]
+        return cmd + [f"--unit={name}", "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)]
     if kind == "container":
         cmd = ["podman"]
         if SYSADMIN_PODMAN_URL:
             cmd += ["--url", SYSADMIN_PODMAN_URL]
-        return cmd + ["logs", "--tail", str(SYSADMIN_MAX_LOG_LINES), name]
+        return cmd + ["logs", "--tail", str(SYSADMIN_MAX_LOG_LINES), "--", name]
     if kind == "kernel":
         cmd = ["journalctl"]
         if SYSADMIN_JOURNAL_DIR:
