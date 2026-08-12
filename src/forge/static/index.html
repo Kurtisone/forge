@@ -532,11 +532,23 @@ function formatContent(text) {
   return working.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => blocks[Number(i)])
 }
 
+// Only these schemes may ever become an href. escapeHtml() now closes
+// the attribute-escape route, but a *syntactically valid* href is
+// still dangerous on its own: `[clique ici](javascript:alert)` needs
+// no quote at all, it just needs to be rendered as a link. Anything
+// not matching is downgraded to plain text rather than dropped, so a
+// legitimate-but-unusual URL is still readable instead of vanishing.
+const _SAFE_LINK_SCHEME = /^(https?:\/\/|mailto:|\/|#)/i
+
 function inlineMarkdown(s) {
   return s
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+      const href = url.trim()
+      if (!_SAFE_LINK_SCHEME.test(href)) return `${label} (${href})`
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    })
 }
 
 // ```diff blocks: colored like `git diff` instead of plain text, so a
@@ -552,8 +564,24 @@ function renderDiff(code) {
   return `<pre class="diff">${lines.join('\n')}</pre>`
 }
 
+// Quotes matter as much as angle brackets here: this output lands in
+// ATTRIBUTE position in several places (inlineMarkdown's <a href="...">
+// above, the trace/drawer template literals below), so escaping only
+// &/</> leaves a straight attribute escape open. Concretely, before
+// this: `[x](" autofocus onfocus="location=name)` rendered as
+// <a href="" autofocus onfocus="location=name" ...> and executed with
+// no interaction at all -- and the text reaching formatContent()
+// includes tool output (web_fetch/research page content, files:read,
+// sysadmin logs), so a hostile page was enough to reach it. The API
+// token lives in localStorage, so that XSS was a token theft, not a
+// cosmetic bug.
 function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function showThinking() {

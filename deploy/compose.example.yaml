@@ -1,0 +1,96 @@
+# Exemple de stack Forge complète — à COPIER et adapter, pas à lancer tel quel.
+#
+#   cp deploy/compose.example.yaml compose.yaml   # à la racine du repo
+#   # puis adapter les chemins ${HOME}/... et décommenter les montages
+#   # sysadmin une fois les proxies hôte en place (voir deploy/README.md)
+#
+#   podman compose build forge
+#   podman compose up -d
+#
+# Pourquoi cet exemple vit DANS le dépôt, à la racine :
+#   `build: context: .` ne pointe correctement vers le Containerfile que
+#   si le compose est lu depuis la racine du repo. Un compose gardé hors
+#   dépôt avec un `context:` relatif fragile est précisément ce qui a fait
+#   servir une image `forge-core` gelée (ancien code) pendant tout un cycle
+#   de patch — `podman compose build` répondait "No services to build"
+#   faute de clé `build:`, donc l'image n'était jamais reconstruite.
+#
+# Seul `forge` a une clé `build:` : c'est le seul service dont le source
+# vit dans ce dépôt (le Containerfile à la racine). `forge-embedding` et
+# `forge-llm` sont des images llama.cpp construites séparément, et
+# `searxng` est upstream — elles restent en `image:` sans build.
+
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "8888:8080"
+    volumes:
+      # SearXNG a besoin de "json" dans search.formats (voir config.py,
+      # section web_search) — désactivé par défaut en amont.
+      - ${HOME}/searxng-config/settings.yml:/etc/searxng/settings.yml:ro
+
+  forge-embedding:
+    image: forge-embedding # image llama.cpp embedding, construite séparément
+    container_name: forge-embedding
+    restart: unless-stopped
+    ports:
+      - "8082:8081"
+    volumes:
+      - ${HOME}/path/to/forge-embedding/models/:/models:Z
+
+  forge-llm:
+    image: forge-llm # image llama.cpp, construite séparément
+    container_name: forge-llm
+    restart: unless-stopped
+    devices:
+      - /dev/dri:/dev/dri # accès GPU (iGPU du Steam Deck)
+    annotations:
+      run.oci.keep_original_groups: "1"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${HOME}/path/to/forge-llm/models:/models
+    command:
+      - -m
+      - /models/VOTRE-MODELE.Q4_K_M.gguf
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - -c
+      - "8192"
+      - -ngl
+      - "28"
+      - -t
+      - "8"
+
+  forge:
+    # La clé build est ce qui manquait : sans elle, compose ne reconstruit
+    # jamais l'image et `build` répond "No services to build".
+    build:
+      context: .
+      containerfile: Containerfile
+    image: forge-core
+    container_name: forge
+    restart: unless-stopped
+    annotations:
+      run.oci.keep_original_groups: "1"
+    ports:
+      - "8000:8000"
+    env_file:
+      # Copier depuis .env.example ; jamais commité. Doit contenir
+      # API_TOKEN (sinon Forge refuse de démarrer — voir audit C-1).
+      - .env.local
+    volumes:
+      - ./data:/app/data
+      # Montages sysadmin (v3.11) — à décommenter UNE FOIS les proxies
+      # hôte en place (journal en lecture seule, proxy D-Bus filtré,
+      # proxy podman read-only). Détails et mise en place complète :
+      # deploy/README.md. Les laisser actifs sans les proxies fait
+      # échouer le démarrage du container sur des chemins absents.
+      # - /var/log/journal:/host-journal:ro
+      # - ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro
+      # - ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro

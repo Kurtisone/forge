@@ -1,32 +1,65 @@
 """
-Sandboxed shell tool.
+Allowlisted shell tool.
 
-Executes commands in a subprocess confined to WORKSPACE_DIR.
-Three layers of protection:
+Executes commands in a subprocess. Two real protections, and one
+convenience that is often mistaken for a third:
 
 1. Allowlist: only commands in SHELL_ALLOWED_COMMANDS are accepted.
+   This is the ONLY thing standing between router output and
+   arbitrary execution, and it is worth exactly as much as the
+   binaries on the list -- only parts[0] is checked, never the
+   arguments, so a single interpreter on the list (python3, find,
+   pip, xargs, ...) makes the whole allowlist decorative. See
+   _SHELL_ALLOWLIST_DEFEATING in config.py; a warning is logged at
+   import when one is configured.
 2. Timeout: execution is hard-killed after SHELL_TIMEOUT seconds.
-3. Working directory: all commands run with cwd=WORKSPACE_DIR so
-   relative paths cannot escape to the host filesystem.
+3. NOT a sandbox: commands run with cwd=WORKSPACE_DIR. This makes
+   relative paths land in the workspace, which is convenient, but it
+   confines nothing at all -- `cat /etc/passwd` and `grep -r . /`
+   work exactly as they would anywhere else. An earlier version of
+   this docstring claimed the cwd stopped commands escaping to the
+   host filesystem; it does not, and reading it that way is how an
+   allowlist gets widened "safely".
 
 The environment passed to the subprocess is minimal (PATH, HOME,
-PYTHONPATH) — no credentials, no tokens, no host env variables.
+PYTHONPATH) -- no credentials, no tokens, no host env variables.
+Note HOME still points at the real home directory, so a command able
+to read files can read ~/.ssh: another reason the allowlist matters
+more than the cwd.
 
 To activate: ENABLED_TOOLS=chat,code,shell in .env.local
-To customise: SHELL_ALLOWED_COMMANDS=ls,cat,python3
+To customise: SHELL_ALLOWED_COMMANDS=ls,cat,grep
 
 Interface: run(content: str) -> str
-  content is a plain command string: "ls -la" / "python3 script.py"
+  content is a plain command string: "ls -la" / "grep -n foo bar.py"
 """
 
 import shlex
 import subprocess
 from pathlib import Path
 
-from forge.config import SHELL_ALLOWED_COMMANDS, SHELL_TIMEOUT, WORKSPACE_DIR
+from forge.config import (
+    _SHELL_ALLOWLIST_DEFEATING,
+    SHELL_ALLOWED_COMMANDS,
+    SHELL_TIMEOUT,
+    WORKSPACE_DIR,
+)
 from forge.logger import log
 
 _MAX_OUTPUT_CHARS = 8_000
+
+# Logged once, at import, rather than on every run: this is a
+# configuration fact, not a per-call event, and burying it in the
+# output of each command is how people learn to ignore it.
+_defeating = sorted(SHELL_ALLOWED_COMMANDS & _SHELL_ALLOWLIST_DEFEATING)
+if _defeating:
+    log.warning(
+        "shell: SHELL_ALLOWED_COMMANDS contains %s -- each of these can execute "
+        "arbitrary commands via its own arguments, so the allowlist no longer "
+        "restricts anything. Intentional on a trusted local box; never on an "
+        "instance reachable from the network.",
+        ", ".join(_defeating),
+    )
 
 
 def _safe_cwd() -> Path:

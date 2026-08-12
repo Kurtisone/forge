@@ -15,8 +15,9 @@ Endpoints:
 
 Auth: set API_TOKEN in the environment to require
 `Authorization: Bearer <token>` on every endpoint except / and
-/health. Unset (default) means the API stays open, unchanged from
-before this was added.
+/health. Leaving it unset no longer silently opens the API -- the app
+refuses to start unless API_ALLOW_UNAUTHENTICATED=true says the open
+posture is intentional. See check_auth_configuration() below.
 
 Rate limiting: in-memory sliding window, per client IP, on every
 endpoint except / and /health. RATE_LIMIT_REQUESTS per
@@ -33,6 +34,7 @@ in a thread-pool executor so FastAPI's event loop is never blocked.
 import asyncio
 import hmac
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -41,10 +43,54 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from forge import rag, ratelimit, trace
-from forge.config import API_TOKEN, FORGE_PROVIDER, LLAMA_CPP_URL, LLM_MODEL
+from forge.config import (
+    API_ALLOW_UNAUTHENTICATED,
+    API_TOKEN,
+    FORGE_PROVIDER,
+    LLAMA_CPP_URL,
+    LLM_MODEL,
+)
 from forge.orchestrator import Orchestrator
 
-app = FastAPI(title="Forge", version="3.3.0", docs_url="/docs")
+
+class InsecureConfiguration(RuntimeError):
+    """Raised at startup when the API would come up unauthenticated
+    without anyone having asked for that in writing."""
+
+
+def check_auth_configuration() -> None:
+    """
+    Refuse to start with no API_TOKEN unless API_ALLOW_UNAUTHENTICATED
+    is explicitly set.
+
+    /chat dispatches whatever is in ENABLED_TOOLS -- shell, files, test,
+    sysadmin -- and the container's CMD binds 0.0.0.0. So "no token" is
+    not a mild default: it's arbitrary tool dispatch for anyone who can
+    reach the port. Failing loudly at startup is the only version of
+    this warning that can't be scrolled past.
+
+    Reads the module globals rather than the config constants directly
+    so tests (and anything embedding the app) can patch them at the
+    same boundary the auth dependency already uses.
+    """
+    if API_TOKEN or API_ALLOW_UNAUTHENTICATED:
+        return
+    raise InsecureConfiguration(
+        "refusing to start: API_TOKEN is unset, so /chat, /run and every "
+        "other endpoint would accept unauthenticated requests -- including "
+        "tool dispatch. Set API_TOKEN in .env.local, or set "
+        "API_ALLOW_UNAUTHENTICATED=true if this instance really is "
+        "local-only and you want it open on purpose."
+    )
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    check_auth_configuration()
+    yield
+
+
+app = FastAPI(title="Forge", version="3.3.0", docs_url="/docs", lifespan=lifespan)
 _executor = ThreadPoolExecutor(max_workers=2)
 _orchestrator = Orchestrator()
 
@@ -434,11 +480,40 @@ async def compact():
 # ─── UI ────────────────────────────────────────────────────────────
 
 
+# Third layer under the two fixes in static/index.html (quote escaping
+# + link-scheme validation): defense in depth, not a replacement for
+# them. 'unsafe-inline' is unavoidable for now -- the UI is a single
+# self-contained file with inline <script>/<style> and onclick=
+# attributes, deliberately (no CDN, must work offline). So this does
+# NOT stop an inline XSS from running. What it does stop is the part
+# that actually hurts: connect-src 'self' means injected script can't
+# POST the localStorage API token to an attacker's host, and
+# default-src 'self' blocks pulling a payload from anywhere external.
+# Splitting the JS into its own static file would let 'unsafe-inline'
+# go away entirely -- worth doing, but a bigger change than this fix.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'"
+)
+_UI_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def ui():
     static = Path(__file__).parent / "static" / "index.html"
     if static.exists():
-        return HTMLResponse(static.read_text(encoding="utf-8"))
+        return HTMLResponse(static.read_text(encoding="utf-8"), headers=_UI_HEADERS)
     return HTMLResponse(
-        "<h1>Forge UI not found</h1><p>Run from the installed package.</p>"
+        "<h1>Forge UI not found</h1><p>Run from the installed package.</p>",
+        headers=_UI_HEADERS,
     )
