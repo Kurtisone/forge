@@ -39,13 +39,36 @@ def test_shell_empty_command(tmp_path, monkeypatch):
     assert "[error]" in r
 
 
-def test_shell_python(tmp_path, monkeypatch):
+def test_shell_python_is_not_allowed_by_default():
+    """
+    python3 used to ship in the default allowlist, which made the whole
+    allowlist decorative -- `python3 -c "..."` runs anything. The
+    default is now interpreter-free (audit C-2).
+    """
+    assert "python3" not in cfg.SHELL_ALLOWED_COMMANDS
+    assert "pip" not in cfg.SHELL_ALLOWED_COMMANDS
+    assert "find" not in cfg.SHELL_ALLOWED_COMMANDS
+
+
+def test_shell_python_still_works_when_explicitly_allowed(tmp_path, monkeypatch):
+    """
+    Removing it from the default must not remove the capability: an
+    operator who puts python3 back gets python3. The point of C-2 is
+    that this becomes a written-down choice, not the out-of-the-box
+    state.
+    """
     monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
-    monkeypatch.setattr(cfg, "SHELL_ALLOWED_COMMANDS", {"python3"})
     monkeypatch.setattr(cfg, "SHELL_TIMEOUT", 10)
     monkeypatch.setattr(shell_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(shell_mod, "SHELL_ALLOWED_COMMANDS", {"python3"})
+    monkeypatch.setattr(shell_mod, "SHELL_TIMEOUT", 10)
     r = shell_mod.run('python3 -c "print(1+1)"')
     assert "2" in r
+
+
+def test_allowlist_defeating_set_covers_the_obvious_interpreters():
+    for name in ("python3", "pip", "find", "sh", "bash", "xargs", "env"):
+        assert name in cfg._SHELL_ALLOWLIST_DEFEATING
 
 
 # ── git ────────────────────────────────────────────────────────────

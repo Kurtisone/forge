@@ -110,11 +110,55 @@ WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "data/workspace")
 
 # --- Shell tool -------------------------------------------------------------
 SHELL_TIMEOUT = int(os.getenv("SHELL_TIMEOUT", "30"))
-_default_shell_cmds = "ls,cat,head,tail,wc,grep,find,python3,pip,pytest"
+# The default no longer includes python3, pip or find. Each of those is
+# an interpreter in its own right, so allowlisting it allowlists
+# everything:
+#   python3 -c "import os; os.system(...)"
+#   pip install <url>            (runs setup.py, plus network egress)
+#   find . -exec <anything> {} \;
+# The allowlist only checks parts[0], never the arguments -- an
+# allowlist containing an interpreter is not an allowlist.
+#
+# _SHELL_ALLOWLIST_DEFEATING below is the same idea generalised: adding
+# any of those to SHELL_ALLOWED_COMMANDS is a decision to disable this
+# protection, which is legitimate on a trusted local box and should be
+# a deliberate act, not a default. tools/shell.py logs a warning at
+# import when one is present, so the choice is visible in the logs.
+_default_shell_cmds = "ls,cat,head,tail,wc,grep"
 SHELL_ALLOWED_COMMANDS: set[str] = {
     c.strip()
     for c in os.getenv("SHELL_ALLOWED_COMMANDS", _default_shell_cmds).split(",")
     if c.strip()
+}
+# Not exhaustive and can't be: this is a "you are switching the
+# allowlist off" tripwire, not a blocklist. Anything that can execute
+# an arbitrary argument belongs here.
+_SHELL_ALLOWLIST_DEFEATING: set[str] = {
+    "awk",
+    "bash",
+    "env",
+    "find",
+    "gawk",
+    "git",
+    "less",
+    "man",
+    "more",
+    "nano",
+    "nc",
+    "perl",
+    "pip",
+    "pip3",
+    "python",
+    "python3",
+    "ruby",
+    "sed",
+    "sh",
+    "ssh",
+    "tar",
+    "vi",
+    "vim",
+    "xargs",
+    "zsh",
 }
 
 # --- Test/lint tool ----------------------------------------------------------
