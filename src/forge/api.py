@@ -434,11 +434,40 @@ async def compact():
 # ─── UI ────────────────────────────────────────────────────────────
 
 
+# Third layer under the two fixes in static/index.html (quote escaping
+# + link-scheme validation): defense in depth, not a replacement for
+# them. 'unsafe-inline' is unavoidable for now -- the UI is a single
+# self-contained file with inline <script>/<style> and onclick=
+# attributes, deliberately (no CDN, must work offline). So this does
+# NOT stop an inline XSS from running. What it does stop is the part
+# that actually hurts: connect-src 'self' means injected script can't
+# POST the localStorage API token to an attacker's host, and
+# default-src 'self' blocks pulling a payload from anywhere external.
+# Splitting the JS into its own static file would let 'unsafe-inline'
+# go away entirely -- worth doing, but a bigger change than this fix.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'"
+)
+_UI_HEADERS = {
+    "Content-Security-Policy": _CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def ui():
     static = Path(__file__).parent / "static" / "index.html"
     if static.exists():
-        return HTMLResponse(static.read_text(encoding="utf-8"))
+        return HTMLResponse(static.read_text(encoding="utf-8"), headers=_UI_HEADERS)
     return HTMLResponse(
-        "<h1>Forge UI not found</h1><p>Run from the installed package.</p>"
+        "<h1>Forge UI not found</h1><p>Run from the installed package.</p>",
+        headers=_UI_HEADERS,
     )
