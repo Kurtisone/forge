@@ -1,4 +1,51 @@
-requests
-fastapi
-uvicorn[standard]
-sqlite-vec
+# Runtime dependencies, fully pinned (audit E-4).
+#
+# Why pinned, transitive deps included: the Containerfile runs
+# `pip install -r requirements.txt` on every image build. Unpinned,
+# that means "whatever PyPI serves today" -- two builds of the same
+# commit can produce different images, and a compromised release of
+# any transitive dependency (starlette, urllib3, h11...) lands in the
+# image silently, with nothing in the diff to notice. Pinning makes a
+# dependency change a reviewable commit instead of a side effect of
+# rebuilding.
+#
+# What this does NOT buy: protection against a package being replaced
+# at the same version. PyPI forbids re-uploading a version, so that's
+# largely covered upstream, but a compromised mirror or index could
+# still serve something else. `pip install --require-hashes` closes
+# that too, at the cost of a hash per artifact and a lock that has to
+# be regenerated per platform. Not done here -- noted so the choice is
+# visible rather than assumed.
+#
+# Regenerate after changing a direct dependency:
+#   python3 -m venv /tmp/pin && /tmp/pin/bin/pip install <direct deps>
+#   /tmp/pin/bin/pip freeze | sort
+# then paste the result below, keeping the two sections apart.
+
+# --- Direct -------------------------------------------------------
+fastapi==0.141.1
+requests==2.34.2
+sqlite-vec==0.1.9
+uvicorn[standard]==0.52.1
+
+# --- Transitive (pulled by the above; listed so builds are exact) --
+PyYAML==6.0.3
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+certifi==2026.7.22
+charset-normalizer==3.5.0
+click==8.4.2
+h11==0.16.0
+httptools==0.8.0
+idna==3.18
+pydantic==2.13.4
+pydantic_core==2.46.4
+python-dotenv==1.2.2
+starlette==1.6.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.7.0
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==17.0.1
