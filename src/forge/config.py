@@ -227,3 +227,56 @@ RESEARCH_FETCH_TOP_N = int(os.getenv("RESEARCH_FETCH_TOP_N", "3"))
 RESEARCH_FETCH_CHARS_PER_RESULT = int(
     os.getenv("RESEARCH_FETCH_CHARS_PER_RESULT", "1500")
 )
+
+# --- Sysadmin graph (discover -> collect -> synthesize) ---------------------
+# Deliberately read-only, always: no command in graphs/sysadmin.py can
+# mutate anything (no systemctl restart/stop, no podman stop/rm) -- this
+# mirrors the tools/git.py decision to keep that tool strictly read-only
+# too, with any write action requiring an explicit human-confirmed flow
+# outside the router's reach. Not configurable here on purpose, unlike
+# SHELL_ALLOWED_COMMANDS: sysadmin's command set is fixed in code, not
+# environment-extensible, so enabling this tool can never accidentally
+# grant more than "read logs, discover what's running."
+SYSADMIN_DISCOVERY_TIMEOUT = int(os.getenv("SYSADMIN_DISCOVERY_TIMEOUT", "10"))
+SYSADMIN_COLLECT_TIMEOUT = int(os.getenv("SYSADMIN_COLLECT_TIMEOUT", "15"))
+# 200 was the original default and blew the 4096-token context on its
+# own (200 journalctl lines ~= 4000+ tokens before the rest of the
+# prompt) -- see the SYSADMIN_LOG_CHARS_BUDGET note below for the
+# actual fix; this default is now just a sane collection size, not
+# the thing keeping the prompt in budget.
+SYSADMIN_MAX_LOG_LINES = int(os.getenv("SYSADMIN_MAX_LOG_LINES", "40"))
+# Hard character cap on the log block actually inserted into the LLM
+# prompt, independent of line count -- same reasoning as
+# RESEARCH_FETCH_CHARS_PER_RESULT in graphs/research.py. Truncates
+# keeping the END of the log (most recent events), not the start:
+# journalctl/podman logs already return the tail via -n/--tail, so
+# the most relevant lines are at the end of that output.
+SYSADMIN_LOG_CHARS_BUDGET = int(os.getenv("SYSADMIN_LOG_CHARS_BUDGET", "2000"))
+
+# --- Read-only access to the HOST's journalctl/systemctl/podman ------------
+# Forge's own container has no business holding real systemd/podman
+# privilege (mutation) -- see deploy/README.md for the full design.
+# Empty (default) means "talk to whatever is reachable normally",
+# which inside Forge's own minimal container image is nothing at all
+# (no journalctl/systemctl/podman binaries, no bus, no socket) --
+# each of these three only does anything once the matching deploy/
+# artifact is wired up:
+#
+# - SYSADMIN_JOURNAL_DIR: host's /var/log/journal bind-mounted
+#   read-only into the container (e.g. "/host-journal"). journalctl
+#   reads journal files directly -- no daemon, no socket -- so this
+#   one needs nothing beyond the RO bind mount + the binary itself.
+# - SYSADMIN_DBUS_ADDRESS: address of the FILTERED bus exposed by
+#   deploy/forge-dbus-proxy.sh (xdg-dbus-proxy), never the host's real
+#   system bus directly -- the proxy allows only read-only systemd
+#   method calls (ListUnits/GetUnit), denies everything else
+#   (StartUnit/StopUnit/...) at the bus level itself, before Forge's
+#   own code is ever in a position to decide anything.
+# - SYSADMIN_PODMAN_URL: address of deploy/podman_ro_proxy.py, never
+#   the host's real podman.sock directly -- that proxy allows only
+#   GET /containers/json and GET /containers/{id}/logs, rejecting
+#   every other verb/path (start/stop/rm/exec/...) before it reaches
+#   the real socket.
+SYSADMIN_JOURNAL_DIR = os.getenv("SYSADMIN_JOURNAL_DIR", "")
+SYSADMIN_DBUS_ADDRESS = os.getenv("SYSADMIN_DBUS_ADDRESS", "")
+SYSADMIN_PODMAN_URL = os.getenv("SYSADMIN_PODMAN_URL", "")

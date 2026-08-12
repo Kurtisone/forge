@@ -1,0 +1,105 @@
+---
+# Starting point for integrating sysadmin's host-access proxies into
+# your own NiPoGi playbook -- not a complete role, since it doesn't
+# know your playbook's existing structure (inventory, host_vars,
+# where Forge itself gets deployed). Adapt the paths/vars below.
+#
+# This mirrors deploy/setup-sysadmin-host-access.sh exactly, just as
+# idempotent Ansible tasks instead of a shell script -- useful once
+# you're provisioning the NiPoGi from scratch rather than doing it by
+# hand like on the Deck.
+#
+# Usage (adjust `hosts:` and `forge_repo_dir` for your inventory):
+#   ansible-playbook -i inventory deploy/ansible/sysadmin-proxies.yml
+
+- name: Set up sysadmin's read-only host-access proxies
+  hosts: nipogi
+  become: false   # everything here is user-scope (systemd --user), deliberately not root
+  vars:
+    forge_repo_dir: "{{ ansible_env.HOME }}/Forge"
+
+  tasks:
+    - name: Check xdg-dbus-proxy is installed
+      ansible.builtin.command: which xdg-dbus-proxy
+      register: xdg_dbus_proxy_check
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with guidance if xdg-dbus-proxy is missing
+      ansible.builtin.fail:
+        msg: >
+          xdg-dbus-proxy not found. Install it via your distro's normal
+          package manager (it's a standard Flatpak dependency, not
+          Forge-specific) -- see deploy/README.md for platform notes
+          (e.g. SteamOS needs Distrobox/toolbox, not a raw pacman -S).
+      when: xdg_dbus_proxy_check.rc != 0
+
+    - name: Enable podman.socket (REST API, not just the CLI)
+      ansible.builtin.systemd:
+        name: podman.socket
+        scope: user
+        enabled: true
+        state: started
+
+    - name: Ensure ~/.config/systemd/user exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.config/systemd/user"
+        state: directory
+        mode: "0755"
+
+    - name: Install forge-dbus-proxy.service
+      ansible.builtin.copy:
+        src: systemd/forge-dbus-proxy.service
+        dest: "{{ ansible_env.HOME }}/.config/systemd/user/forge-dbus-proxy.service"
+        mode: "0644"
+      notify: reload systemd user daemon
+
+    - name: Install forge-podman-ro-proxy.service
+      ansible.builtin.copy:
+        src: systemd/forge-podman-ro-proxy.service
+        dest: "{{ ansible_env.HOME }}/.config/systemd/user/forge-podman-ro-proxy.service"
+        mode: "0644"
+      notify: reload systemd user daemon
+
+    # The unit files ship with a __FORGE_REPO_DIR__ placeholder rather
+    # than a hardcoded path -- a hardcoded guess (e.g. ~/Forge) breaks
+    # silently the moment the clone lives anywhere else. This mirrors
+    # exactly what setup-sysadmin-host-access.sh does with `sed` for
+    # the manual path, just as an Ansible task here.
+    - name: Substitute the real repo path into both unit files
+      ansible.builtin.replace:
+        path: "{{ ansible_env.HOME }}/.config/systemd/user/{{ item }}"
+        regexp: "__FORGE_REPO_DIR__"
+        replace: "{{ forge_repo_dir }}"
+      loop:
+        - forge-dbus-proxy.service
+        - forge-podman-ro-proxy.service
+      notify: reload systemd user daemon
+
+    - name: Flush handlers before enabling (daemon-reload must happen first)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start forge-dbus-proxy.service
+      ansible.builtin.systemd:
+        name: forge-dbus-proxy.service
+        scope: user
+        enabled: true
+        state: started
+
+    - name: Enable and start forge-podman-ro-proxy.service
+      ansible.builtin.systemd:
+        name: forge-podman-ro-proxy.service
+        scope: user
+        enabled: true
+        state: started
+
+    # journalctl needs no service, just the bind mount at container
+    # run time (-v /var/log/journal:/host-journal:ro) plus
+    # SYSADMIN_JOURNAL_DIR=/host-journal in .env.local -- nothing to
+    # provision here, it's a Forge container run-flag, not a host service.
+
+  handlers:
+    - name: reload systemd user daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+        scope: user

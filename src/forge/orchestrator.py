@@ -19,7 +19,7 @@ Rules enforced here, by construction:
    step and trace.save() writes it to disk when TRACE_ENABLED=true.
 """
 
-from forge import memory, trace
+from forge import memory, subtrace, trace
 from forge.config import MAX_STEPS, MEMORY_ENABLED
 from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
 from forge.llm import call_llm
@@ -174,25 +174,30 @@ class Orchestrator:
         handler = get_tool(tool)
         if handler is None:
             log.warning("no handler for tool %r, returning content as-is", tool)
+            subtrace.clear()  # discard any stale publish, same as every other exit path
             return ToolResult(tool=tool, output=content, ok=True)
 
         log.event("tool.dispatch", tool=tool)
+        subtrace.clear()  # start every dispatch on a clean slate -- see subtrace.clear()
         try:
             output = handler(content)
             output = self._validate_tool_output(tool, output)
         except ToolExecutionError as e:
             log.error("tool %r violated its contract: %s", tool, e)
+            subtrace.pop()  # discard: a failed call's partial steps aren't useful
             return ToolResult(
                 tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
             )
         except Exception as e:  # noqa: BLE001
             log.error("tool %r raised: %s", tool, e)
+            subtrace.pop()
             return ToolResult(
                 tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
             )
 
+        sub_steps = subtrace.pop()
         log.event("tool.result", tool=tool, length=len(output))
-        return ToolResult(tool=tool, output=output, ok=True)
+        return ToolResult(tool=tool, output=output, ok=True, sub_steps=sub_steps)
 
     def _validate_tool_output(self, tool: str, output) -> str:
         if not isinstance(output, str):

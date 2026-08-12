@@ -37,6 +37,7 @@ def _build_record(state) -> dict:
                 "tool_ok": ts.tool_ok,
                 "tool_error": ts.tool_error,
                 "duration_ms": ts.duration_ms,
+                "sub_steps": ts.sub_steps,
             }
         )
     return {

@@ -22,6 +22,54 @@ def test_chat_round_trip(monkeypatch):
     assert result.steps == 1
 
 
+def test_dispatch_attaches_sub_steps_published_by_graph_based_tools(monkeypatch):
+    """Graph-based tools (review/research/sysadmin) can publish their
+    internal node steps via forge.subtrace right before returning --
+    see that module's docstring. The orchestrator must pick them up
+    and attach them to the step's TraceStep without changing the
+    str-only tool contract for every other tool."""
+    from forge import subtrace
+
+    def fake_tool(content):
+        subtrace.publish(
+            [{"label": "discover", "detail": "1 unit", "ok": True, "duration_ms": 5}]
+        )
+        return "diagnosis text"
+
+    monkeypatch.setattr(orch_mod, "get_tool", lambda name: fake_tool)
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "sysadmin", "content": "{}"}),
+    )
+
+    result = Orchestrator().run("le service plante")
+
+    assert result.ok
+    assert result.trace[0].sub_steps == [
+        {"label": "discover", "detail": "1 unit", "ok": True, "duration_ms": 5}
+    ]
+
+
+def test_dispatch_sub_steps_do_not_leak_to_next_tool(monkeypatch):
+    """subtrace.pop() must clear the channel -- a tool that doesn't
+    publish anything must never inherit a previous tool's steps."""
+    from forge import subtrace
+
+    subtrace.publish(
+        [{"label": "stale", "detail": "leftover", "ok": True, "duration_ms": 1}]
+    )
+
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": "hi"}),
+    )
+    result = Orchestrator().run("hello")
+
+    assert result.trace[0].sub_steps is None
+
+
 def test_end_to_end_router_reaches_shell_when_enabled(monkeypatch, tmp_path):
     """
     Full stack, not mocked at the parser boundary this time: with
