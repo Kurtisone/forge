@@ -51,6 +51,21 @@ def test_no_range_specifiers_alongside_the_pin(filename):
     assert not loose, f"{filename} mixes range specifiers into pins: {loose}"
 
 
+def test_containerfile_has_exactly_one_from_line():
+    """deploy/pin-base-image.sh --write rewrites the FROM line with a
+    single regex substitution and refuses to guess if it matches
+    anything other than once. A second FROM (a multi-stage build, say)
+    would make the pinning script silently pin the wrong stage, so
+    that assumption is held here rather than discovered later."""
+    lines = (_ROOT / "Containerfile").read_text(encoding="utf-8").splitlines()
+    from_lines = [line for line in lines if line.startswith("FROM ")]
+    assert len(from_lines) == 1, (
+        f"expected one FROM line, found {len(from_lines)}: {from_lines}. "
+        "If this became a multi-stage build, teach pin-base-image.sh "
+        "which stage to pin before adding the stage."
+    )
+
+
 def test_the_files_are_not_empty():
     """Guards the guard: a truncated or renamed file would make both
     tests above pass on an empty list."""

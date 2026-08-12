@@ -1,3 +1,19 @@
+# Audit E-4: this tag is mutable. `python:3.12` is rebuilt for every
+# CPython patch release and every Debian security update, so two
+# builds of the same Forge commit can land on two different base
+# images -- the same drift the requirements.txt pins just closed, one
+# layer down. Pin it to a digest with:
+#
+#     ./deploy/pin-base-image.sh --write
+#
+# which rewrites this line to FROM ...python:3.12@sha256:<digest> and
+# leaves a one-line diff to commit. Re-run it to bump, deliberately,
+# with the move visible in git history instead of happening silently
+# on the next rebuild.
+#
+# Left as a tag here rather than a digest baked in blind: a digest is
+# only meaningful if it's one you resolved yourself, on your own
+# build host, from the registry you actually pull from.
 FROM python:3.12
 
 WORKDIR /app
