@@ -161,6 +161,15 @@ SHOW_DEBUG = _bool("SHOW_DEBUG")
 # -- /chat, /review, /run, /traces and /tools currently have zero
 # protection otherwise.
 API_TOKEN = os.getenv("API_TOKEN", "")
+# Forge refuses to start with no API_TOKEN unless this is set to true.
+# The old behaviour was "open by default, documented as risky" -- but a
+# documented unsafe default is still an unsafe default, and this one is
+# the kind you notice the day you add a published port to a compose
+# file, not before. Flipping it means the risky configuration has to be
+# written down in .env.local, where it's visible, instead of being what
+# happens when you write nothing at all. Local-only development is a
+# perfectly good reason to set it; forgetting isn't.
+API_ALLOW_UNAUTHENTICATED = _bool("API_ALLOW_UNAUTHENTICATED", "false")
 
 # --- API rate limiting ----------------------------------------------------
 # In-memory sliding window, per client IP, single-process only (see
