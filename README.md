@@ -67,6 +67,7 @@ flowchart TD
     D --> T4["shell<br/>(sandboxed)"]
     D --> T5["git<br/>(read-only)"]
     D --> T6["memory<br/>(remember / recall)"]
+    D --> T7["sysadmin<br/>(read-only, v3.11)"]
 
     subgraph Providers["LLM providers (llm.py)"]
         direction LR
@@ -95,6 +96,25 @@ flowchart TD
     RE -.->|HTTP| EMB
     style RAG stroke-dasharray: 4 3
     style EMB stroke-dasharray: 4 3
+
+    subgraph Sysadmin["sysadmin graph (v3.11) — discover → collect → synthesize"]
+        direction LR
+        SD[discover] --> SC[collect] --> SS[synthesize]
+    end
+    T7 -.-> Sysadmin
+    Sysadmin -.->|forge.subtrace| TR
+    style Sysadmin stroke-dasharray: 4 3
+
+    subgraph HostProxies["Host access — read-only, always (deploy/)"]
+        direction LR
+        DBUS["xdg-dbus-proxy<br/>(filter: ListUnits/GetUnit only)"]
+        PODP["podman_ro_proxy.py<br/>(GET containers/json + logs only)"]
+        JRNL["journalctl<br/>(bind mount, no daemon)"]
+    end
+    Sysadmin -.->|busctl| DBUS
+    Sysadmin -.->|podman logs/ps| PODP
+    Sysadmin -.-> JRNL
+    style HostProxies stroke-dasharray: 4 3
 ```
 
 GitHub renders this diagram automatically; if you're reading this elsewhere, the ASCII
@@ -115,8 +135,11 @@ src/forge/
 ├── graphs/
 │   ├── default.py       # router → dispatch → fallback (drop-in for Orchestrator)
 │   ├── review.py        # read_file → [run_tests] → llm_review (optional test_path adds the middle step)
-│   └── research.py      # search → fetch top N → synthesize, one deterministic call (v3.10)
-├── text_cleaning.py     # shared plain-text response cleaning (review.py + research.py)
+│   ├── research.py      # search → fetch top N → synthesize, one deterministic call (v3.10)
+│   └── sysadmin.py      # discover → collect → synthesize, read-only always (v3.11)
+├── text_cleaning.py     # shared plain-text response cleaning (review.py + research.py + sysadmin.py)
+├── subtrace.py          # contextvar side-channel: graph-based tools publish internal
+│                         # node steps for the UI without widening the str-only tool contract (v3.11)
 │
 ├── router/
 │   ├── prompt.py        # router prompt template — isolated; nothing else builds prompts
@@ -134,7 +157,8 @@ src/forge/
 │   ├── review.py        # dispatchable wrapper around graphs/review.py (v3.10)
 │   ├── web_fetch.py      # fetch a known URL, SSRF-guarded (v3.10)
 │   ├── web_search.py    # SearXNG-backed search, links/snippets only (v3.10)
-│   └── research.py      # dispatchable wrapper around graphs/research.py (v3.10)
+│   ├── research.py      # dispatchable wrapper around graphs/research.py (v3.10)
+│   └── sysadmin.py      # dispatchable wrapper around graphs/sysadmin.py (v3.11)
 │
 ├── memory.py            # JSON-backed rolling conversation history + key/value facts
 ├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
@@ -147,6 +171,11 @@ src/forge/
     ├── ollama.py
     └── openrouter.py
 ```
+
+`deploy/` (repo root, outside `src/forge/`) holds the read-only host-access
+pieces `sysadmin` needs to reach real `journalctl`/`systemctl`/`podman` state
+(v3.11) — see [`deploy/README.md`](deploy/README.md) for the full design and
+[the section below](#usage) for the setup command.
 
 Data flow per turn (orchestrator):
 ```
@@ -614,7 +643,8 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.7** | done | Vector memory / RAG: SQLite-vec, `/remember` + `/search`, `!remember`/`!recall` REPL commands, a router-dispatchable `memory` tool, Qwen3-Embedding-0.6B |
 | **v3.8** | done | Prompt-cache reliability: pinned llama-server slot, `MEMORY_MAX_HISTORY` raised to stop a sliding window from fighting KV-cache reuse — root-caused a remaining cache-reuse gap to the served model's own hybrid architecture, not Forge |
 | **v3.9** | done | Context compaction + drawer: `rag_pointer`/`llm_summary` strategies, pin/unpin, `/history` `/drawer` `/compact` endpoints, `!compact` REPL command, files write-diff |
-| **v3.10** | current | Hardening + new tools: dedicated `test` tool, `web_fetch` (SSRF-guarded), `web_search` + `research` (self-hosted SearXNG), review graph gains an optional test-run step and chat-dispatch; router disambiguation fixes (files vs review, tool descriptions/examples for every new tool) found through real usage |
+| **v3.10** | done | Hardening + new tools: dedicated `test` tool, `web_fetch` (SSRF-guarded), `web_search` + `research` (self-hosted SearXNG), review graph gains an optional test-run step and chat-dispatch; router disambiguation fixes (files vs review, tool descriptions/examples for every new tool) found through real usage |
+| **v3.11** | current | Sysadmin: `discover → collect → synthesize` graph diagnosing real service/system problems from logs, read-only always (no restart/stop path exists in the code); UI gains expandable per-step detail (`forge.subtrace`) for every graph-based tool; read-only host access via three independent proxies (`xdg-dbus-proxy` for systemd, a hand-rolled GET-only proxy for podman.sock, a plain bind mount for the journal) rather than raw socket access — real production debugging found and fixed a prompt-injection-shaped example-leak, a context-overflow crash, and `systemctl`'s undocumented refusal to honor `DBUS_SYSTEM_BUS_ADDRESS` (switched discovery to `busctl`). `journalctl -u` on root-owned system services remains a known follow-up |
 
 ---
 
