@@ -1,5 +1,7 @@
 """Tests for forge.tools.shell and forge.tools.git."""
 
+from pathlib import Path
+
 import forge.config as cfg
 import forge.tools.git as git_mod
 import forge.tools.shell as shell_mod
@@ -98,3 +100,39 @@ def test_git_status_runs():
 def test_git_log_runs():
     r = git_mod.run("log")
     assert isinstance(r, str) and len(r) > 0
+
+
+def test_git_stash_is_rejected():
+    """
+    `git stash` (bare) is `git stash push`: it removes uncommitted
+    changes from the working tree. It sat in a list labelled
+    "read-only" (audit E-3).
+    """
+    r = git_mod.run("stash")
+    assert "not allowed" in r
+
+
+def test_git_stash_clear_is_rejected():
+    r = git_mod.run("stash clear")
+    assert "not allowed" in r
+
+
+def test_git_rejects_output_argument():
+    r = git_mod.run("log --output=/tmp/forge-git-should-not-exist")
+    assert "[error]" in r
+    assert not Path("/tmp/forge-git-should-not-exist").exists()
+
+
+def test_git_rejects_exec_argument():
+    r = git_mod.run("log --exec=/bin/sh")
+    assert "[error]" in r
+
+
+def test_git_subprocess_env_carries_no_host_secrets(monkeypatch):
+    """
+    git.py used to pass no env at all, so the subprocess inherited
+    everything the API process held -- API_TOKEN included.
+    """
+    assert "API_TOKEN" not in git_mod._ENV
+    assert "OPENROUTER_API_KEY" not in git_mod._ENV
+    assert git_mod._ENV["GIT_TERMINAL_PROMPT"] == "0"
