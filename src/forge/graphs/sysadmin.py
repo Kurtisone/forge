@@ -8,7 +8,7 @@ decision (call "sysadmin"), the graph itself decides what to run next
 
 Security model (read-only, always):
   - discover_node runs two fixed, parameter-free commands
-    (systemctl list-units, podman ps) -- nothing here can be
+    (a busctl ListUnits call, podman ps) -- nothing here can be
     influenced by user input, so there is no injection surface at
     this step.
   - collect_node only ever runs a command built from a fixed template
@@ -192,7 +192,7 @@ def _subprocess_env() -> dict[str, str]:
     """Same minimal-env posture as tools/shell.py: no host env
     variables reach the subprocess except what's explicitly listed.
     DBUS_SYSTEM_BUS_ADDRESS is added only when SYSADMIN_DBUS_ADDRESS
-    is configured, pointing systemctl at the filtered proxy socket
+    is configured, pointing busctl at the filtered proxy socket
     from deploy/forge-dbus-proxy.sh -- never the real system bus."""
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "TERM": "dumb"}
     if SYSADMIN_DBUS_ADDRESS:
@@ -243,7 +243,7 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
     Never shell=True, never a hand-built string -- same posture as
     tools/shell.py's allowlisted subprocess.run(parts, ...). Uses
     _subprocess_env() so DBUS_SYSTEM_BUS_ADDRESS (when configured)
-    points systemctl at the filtered proxy, not the host bus."""
+    points busctl at the filtered proxy, not the host bus."""
     try:
         result = subprocess.run(
             cmd,
@@ -266,16 +266,19 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
 
     if result.returncode != 0:
         # The command RAN (no Python-level exception above) but the
-        # target itself failed -- e.g. systemctl unable to reach the
-        # bus, podman unable to reach its socket. This must carry the
-        # same "[error]" prefix as the exception-based cases above:
+        # target itself failed -- e.g. busctl unable to reach the bus,
+        # podman unable to reach its socket. This must carry the same
+        # "[error]" prefix as the exception-based cases above:
         # without it, a real production case slipped straight through
-        # as if it were valid data -- systemctl's two-line failure
-        # message ("System has not been booted with systemd...\n
-        # Failed to connect to bus...") got parsed as two fake unit
-        # names ("System", "Failed") by _discover_node, and podman's
-        # connection-refused text got parsed as a fake container name
-        # the same way. Caught in production on 2026-08-11.
+        # as if it were valid data. The case that taught this was
+        # systemctl, back when discovery still used it: its two-line
+        # failure message ("System has not been booted with
+        # systemd...\nFailed to connect to bus...") got parsed as two
+        # fake unit names ("System", "Failed") by _discover_node, and
+        # podman's connection-refused text got parsed as a fake
+        # container name the same way. Caught in production on
+        # 2026-08-11. The systemctl path is gone; the failure mode it
+        # exposed is not, which is why the guard stays.
         return f"[error] {cmd[0]} exited {result.returncode}: {joined}"
 
     return joined

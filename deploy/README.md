@@ -191,27 +191,18 @@ podman exec forge id
 # 3. The writable path is actually writable.
 podman exec forge touch /app/data/.write-test && echo OK
 
-# 4. sd_booted()'s directory exists (no warning on startup).
-podman logs forge | head
-#    a "forge: /run/systemd/system is missing" line means case 3
-#    below applies
-
-# 5. Both proxies still reachable.
+# 4. Both proxies still reachable. Use a *root-owned* unit here:
+#    it's the one subject to the wheel ACL on system.journal, so it
+#    tests group access rather than just "no entries".
 podman exec forge podman --url unix:///run/forge-podman-ro-proxy.sock ps
-podman exec forge journalctl -D /host-journal -u forge-dbus-proxy.service -n 5
+podman exec forge journalctl -D /host-journal -u steamos-manager.service -n 5
 ```
 
-### If step 4 warns
-
-`/run/systemd/system` only needs to *exist* -- nothing writes into it.
-The image creates it at build time, which is enough unless podman
-mounts a tmpfs over `/run`, hiding it. In that case add a tmpfs
-directly on the directory, which makes podman create the mountpoint:
-
-```yaml
-    tmpfs:
-      - /run/systemd/system
-```
+Confirmed working on the Deck (2026-08-13): `uid_map` shows
+`1000 0 1`, which is keep-id's signature -- container UID 1000 is the
+host user. Supplementary groups survive the switch, because the
+kernel evaluates the journal ACL against the host-side GIDs, not the
+names visible inside the container.
 
 ### If something breaks and you need the old behaviour now
 

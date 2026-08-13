@@ -60,7 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # true rather than quietly picking a different id.
 RUN groupadd --gid 1000 forge \
     && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin forge \
-    && mkdir -p /run/systemd/system /app/data \
+    && mkdir -p /app/data \
     && chown -R forge:forge /app/data /home/forge \
     && python -m compileall -q /app/src
 
@@ -76,33 +76,13 @@ EXPOSE 8000
 # Default: HTTP API (accessible from browser / other machines)
 # Override for REPL: podman run -it ... forge-core python -m forge.main
 #
-# `mkdir -p /run/systemd/system` -- NOT running real systemd, just
-# satisfying its own sd_booted() check (per systemd's own man page:
-# "Internally, this function checks whether the directory
-# /run/systemd/system/ exists" -- nothing more). Without this,
-# `systemctl` inside sysadmin bails out with "System has not been
-# booted with systemd... Failed to connect to system scope bus...
-# Host is down" *before ever attempting* the bus connection --
-# happens regardless of DBUS_SYSTEM_BUS_ADDRESS being set correctly,
-# confirmed in production on 2026-08-11 (the filtered D-Bus proxy
-# worked fine when tested directly with busctl; systemctl inside the
-# container still refused).
+# Plain exec form: uvicorn is PID 1 and receives SIGTERM directly from
+# `podman stop`, with no shell in between.
 #
-# The mkdir is now best-effort rather than a hard `&&`. Only the
-# directory's *existence* is checked by sd_booted() -- nothing writes
-# into it -- so there are three cases and the old form only handled
-# one:
-#   - /run is part of the image: the build-time mkdir above already
-#     did it, and this is a no-op.
-#   - /run is a tmpfs and we can write to it: this creates it, as
-#     before.
-#   - /run is a tmpfs owned by root and we are not: mkdir fails, and
-#     as a non-root process there is nothing to be done about it here.
-#     Failing the whole container start over that would take the API
-#     down for a sysadmin feature; instead it says so, once, on
-#     stderr, where the symptom would otherwise surface much later as
-#     a confusing systemctl error. Fix is a tmpfs mount on
-#     /run/systemd/system -- see deploy/README.md.
-# `exec` keeps uvicorn as PID 1 so it still receives SIGTERM directly
-# from `podman stop`.
-CMD ["sh", "-c", "mkdir -p /run/systemd/system 2>/dev/null || true; [ -d /run/systemd/system ] || echo 'forge: /run/systemd/system is missing and could not be created -- systemctl inside sysadmin will refuse to run; see deploy/README.md (Running non-root)' >&2; exec uvicorn forge.api:app --host 0.0.0.0 --port 8000"]
+# This used to be wrapped in `sh -c "mkdir -p /run/systemd/system &&
+# ..."`, to satisfy sd_booted() before `systemctl` would attempt a bus
+# connection. Nothing calls systemctl any more -- graphs/sysadmin.py
+# discovers units with `busctl --json=short`, which has no such check
+# -- so the directory served no purpose and the mkdir was doing
+# nothing but adding a shell and a failure mode.
+CMD ["uvicorn", "forge.api:app", "--host", "0.0.0.0", "--port", "8000"]
