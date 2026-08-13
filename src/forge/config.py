@@ -321,6 +321,16 @@ RESEARCH_FETCH_CHARS_PER_RESULT = int(
     os.getenv("RESEARCH_FETCH_CHARS_PER_RESULT", "1500")
 )
 
+# --- Recall graph (recall -> synthesize) -------------------------------------
+# Same reasoning and same fix as the research graph above, applied to
+# memory: chaining memory:recall into a synthesis step via the
+# router's "done": false steering hint reliably failed live (see
+# graphs/recall.py's module docstring) -- the router repeated the
+# identical recall call instead of phrasing an answer from it. A
+# recall answer is one or two facts restated as a sentence, not a
+# multi-source summary, so its cap is far smaller than research's.
+RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
+
 # --- Sysadmin graph (discover -> collect -> synthesize) ---------------------
 # Deliberately read-only, always: no command in graphs/sysadmin.py can
 # mutate anything (no systemctl restart/stop, no podman stop/rm) -- this
