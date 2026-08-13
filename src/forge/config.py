@@ -241,6 +241,18 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://127.0.0.1:8082/embedding")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 EMBEDDING_TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT", "30"))
+# An embedding server has to hold the whole input in one physical
+# batch (pooling is non-causal, unlike generation), so llama-server
+# rejects anything longer than --ubatch-size with a 400, not a
+# truncated result. Its default is 512 tokens. rag.py splits longer
+# text into chunks of at most this many characters, embeds each, and
+# averages -- ~1500 chars stays under 512 tokens even for dense French
+# or code. Raise it if you also raise -b/-ub on the embedding server.
+EMBEDDING_MAX_CHARS = int(os.getenv("EMBEDDING_MAX_CHARS", "1500"))
+# Ceiling on chunks per call, so one oversized input can't turn into
+# hundreds of sequential HTTP requests. Beyond this the tail is
+# dropped, with a warning.
+EMBEDDING_MAX_CHUNKS = int(os.getenv("EMBEDDING_MAX_CHUNKS", "16"))
 RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")
 
 # --- Web fetch tool ----------------------------------------------------------
