@@ -73,6 +73,15 @@ MEMORY_FILE = os.getenv("MEMORY_FILE", "data/memory.json")
 # constant; long-term recall is RAG's job (rag.py / v3.7), this is
 # only the short-term conversational window shown to the router.
 MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "100"))
+# How far below the cap to trim when the hard cap does fire. Trimming
+# to exactly MEMORY_MAX_HISTORY means the very next turn is over the
+# cap again, so the oldest message is evicted every single turn -- the
+# prompt prefix then shifts every turn and llama-server re-processes
+# the whole thing, which is the FIFO problem v3.8 diagnosed, arriving
+# through the back door. Cutting deeper trades a little more lost
+# context for one expensive re-prefill every SLACK/2 exchanges instead
+# of one per turn.
+MEMORY_HARD_CAP_SLACK = int(os.getenv("MEMORY_HARD_CAP_SLACK", "20"))
 
 # --- Context compaction / drawer (v3.9) ------------------------------------
 # v3.8 raised MEMORY_MAX_HISTORY so FIFO eviction became rare instead
@@ -241,7 +250,26 @@ RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
 EMBEDDING_URL = os.getenv("EMBEDDING_URL", "http://127.0.0.1:8082/embedding")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 EMBEDDING_TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT", "30"))
+# An embedding server has to hold the whole input in one physical
+# batch (pooling is non-causal, unlike generation), so llama-server
+# rejects anything longer than --ubatch-size with a 400, not a
+# truncated result. Its default is 512 tokens. rag.py splits longer
+# text into chunks of at most this many characters, embeds each, and
+# averages -- ~1500 chars stays under 512 tokens even for dense French
+# or code. Raise it if you also raise -b/-ub on the embedding server.
+EMBEDDING_MAX_CHARS = int(os.getenv("EMBEDDING_MAX_CHARS", "1500"))
+# Ceiling on chunks per call, so one oversized input can't turn into
+# hundreds of sequential HTTP requests. Beyond this the tail is
+# dropped, with a warning.
+EMBEDDING_MAX_CHUNKS = int(os.getenv("EMBEDDING_MAX_CHUNKS", "16"))
 RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")
+# Per-hit ceiling on what the memory tool feeds back into the router
+# prompt. A "fact" entry is one line, but a "history_summary" written
+# by compaction holds a whole evicted conversation block, so five hits
+# could be several thousand characters of mostly-irrelevant transcript
+# -- burying the one line that answered the question and paying for it
+# twice, in prompt tokens and in prefill time.
+MEMORY_RECALL_MAX_CHARS = int(os.getenv("MEMORY_RECALL_MAX_CHARS", "500"))
 
 # --- Web fetch tool ----------------------------------------------------------
 # WEB_FETCH_ALLOWED_DOMAINS is empty by default (any public domain is
@@ -292,6 +320,16 @@ RESEARCH_FETCH_TOP_N = int(os.getenv("RESEARCH_FETCH_TOP_N", "3"))
 RESEARCH_FETCH_CHARS_PER_RESULT = int(
     os.getenv("RESEARCH_FETCH_CHARS_PER_RESULT", "1500")
 )
+
+# --- Recall graph (recall -> synthesize) -------------------------------------
+# Same reasoning and same fix as the research graph above, applied to
+# memory: chaining memory:recall into a synthesis step via the
+# router's "done": false steering hint reliably failed live (see
+# graphs/recall.py's module docstring) -- the router repeated the
+# identical recall call instead of phrasing an answer from it. A
+# recall answer is one or two facts restated as a sentence, not a
+# multi-source summary, so its cap is far smaller than research's.
+RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 
 # --- Sysadmin graph (discover -> collect -> synthesize) ---------------------
 # Deliberately read-only, always: no command in graphs/sysadmin.py can

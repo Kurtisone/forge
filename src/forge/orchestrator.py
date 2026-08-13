@@ -50,6 +50,7 @@ class Orchestrator:
                 decision = self._route(state)
             except ProviderError as e:
                 log.error("provider failure: %s", e)
+                ts.abandon(f"provider failure: {e}")
                 state.ok = False
                 state.error = str(e)
                 state.final_output = "The model backend is unavailable."
@@ -63,25 +64,34 @@ class Orchestrator:
             # --- Loop guard ----------------------------------------------
             call_signature = (decision.tool, decision.content)
             if call_signature in state.seen_calls:
-                if decision.tool in ("memory", "web_search"):
+                if decision.tool == "web_search":
                     # A repeated call on the second step is a known,
                     # non-fatal failure mode with small local models: the
                     # steering hint in router/prompt.py asks them to
-                    # switch to chat (or web_fetch, for web_search) on
-                    # the second step, but in practice they sometimes
-                    # repeat the same tool call instead -- confirmed live
-                    # for web_search with two different hint phrasings
-                    # (prose-only, then an explicit worked JSON example)
-                    # and with prompt caching disabled to rule out a
-                    # cache-reuse bug, so this isn't a prompt-wording or
-                    # infra problem, it's a genuine self-correction limit
-                    # of this model class. state already holds the
-                    # previous (successful) result at this point --
-                    # degrade to that instead of surfacing an internal
-                    # loop-guard message. Every other tool still
-                    # hard-fails below: a repeat there is a genuine
+                    # switch to chat or web_fetch on the second step, but
+                    # in practice they sometimes repeat the same tool
+                    # call instead -- confirmed live with two different
+                    # hint phrasings (prose-only, then an explicit worked
+                    # JSON example) and with prompt caching disabled to
+                    # rule out a cache-reuse bug, so this isn't a
+                    # prompt-wording or infra problem, it's a genuine
+                    # self-correction limit of this model class. state
+                    # already holds the previous (successful) result at
+                    # this point -- degrade to that instead of surfacing
+                    # an internal loop-guard message. Every other tool
+                    # still hard-fails below: a repeat there is a genuine
                     # signal worth surfacing, not something to paper
                     # over.
+                    #
+                    # memory used to need this same fallback, for the
+                    # same underlying failure: routing memory:recall
+                    # with "done": false and asking the router to
+                    # phrase a real answer on the next step. That
+                    # chaining is what looped, not memory itself -- see
+                    # graphs/recall.py's docstring. "recall" is now one
+                    # deterministic call that never re-enters this loop,
+                    # so the tool that used to trip this branch can no
+                    # longer reach it.
                     log.warning(
                         "%s tool repeated identical call (%r) -- "
                         "falling back to its previous result instead of "
@@ -89,12 +99,16 @@ class Orchestrator:
                         decision.tool,
                         decision.content,
                     )
+                    ts.abandon(
+                        "loop guard: repeated call, fell back to previous result"
+                    )
                     return self._finish(state, remember=True)
 
                 err = LoopGuardError(
                     f"repeated call to tool={decision.tool!r} with identical content"
                 )
                 log.error(str(err))
+                ts.abandon(str(err))
                 state.ok = False
                 state.error = str(err)
                 state.final_output = (

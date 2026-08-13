@@ -61,21 +61,29 @@ TOOL_DESCRIPTIONS = {
         "history, status, or diffs."
     ),
     "memory": (
-        "content is a JSON string describing ONE memory operation: "
-        '{"action":"remember","kind":"decision" or "todo" or "fact","content":"...","project":"..."} '
-        'to store something, or {"action":"recall","query":"..."} to search '
-        'past entries by meaning. Use kind="decision" for a choice that was '
-        'made, kind="todo" for something still to do, kind="fact" for a '
-        "plain piece of information worth keeping (equipment, setup, "
-        "preferences, anything the user states about themselves or their "
-        'environment) -- when unsure, use "fact". "project" is optional. '
-        "Only use this tool when the user explicitly asks you to "
-        "remember/save something or to recall/look up something they said "
-        "before -- never as a side effect of an unrelated answer. "
-        'For "recall", ALWAYS also add "done": false to this JSON -- the '
-        "raw search results are not a real answer, you need one more step "
-        'to phrase them as a natural reply to the user. For "remember", '
-        '"done": false is optional; a short confirmation is usually enough.'
+        "content is a JSON string describing ONE memory operation to "
+        'store: {"action":"remember","kind":"decision" or "todo" or '
+        '"fact","content":"...","project":"..."}. Use kind="decision" '
+        'for a choice that was made, kind="todo" for something still '
+        'to do, kind="fact" for a plain piece of information worth '
+        "keeping (equipment, setup, preferences, anything the user "
+        "states about themselves or their environment) -- when "
+        'unsure, use "fact". "project" is optional. Only use this '
+        "tool when the user explicitly asks you to remember/save "
+        "something -- never as a side effect of an unrelated answer. "
+        'To look something up, use "recall" instead, not this tool.'
+    ),
+    "recall": (
+        "content is a question in plain text (not JSON), e.g. "
+        '"Tu peux me lister mon matériel ?" or "Qu\'est-ce qu\'on avait '
+        'décidé pour le RAG ?". Searches memory and returns ONE '
+        "synthesized answer -- this is a single call that does "
+        'everything internally, never respond with "done":false '
+        "after it and never call it twice in a row. Use this whenever "
+        "the user asks you to recall/look up/remind them of something "
+        'they said before ("tu te souviens", "qu\'est-ce que j\'avais '
+        'dit sur", "rappelle-moi"). Prefer this over "memory" for '
+        "anything that isn't storing a new decision/todo/fact."
     ),
     "review": (
         "content is a JSON string describing a file review: "
@@ -245,16 +253,17 @@ _TOOL_EXAMPLES = {
                 '\\"kind\\":\\"fact\\",\\"content\\":\\"Possède un Steam Deck\\"}"}'
             ),
         ),
-        # Third example, same reasoning: recall's raw output is a bullet
-        # list, not a sentence -- "done": false is what turns it into a
-        # real answer on the next step, and a small model needs to see
-        # the field used, not just read about it in prose.
+    ],
+    "recall": [
+        # This exact question used to be memory's third example, routed
+        # as memory:recall with "done":false -- that pattern reliably
+        # failed live (see graphs/recall.py's docstring), the same
+        # failure already fixed for web_search by making research a
+        # single deterministic call. No "done":false here, same
+        # reasoning as research: recall does everything internally.
         (
             "Tu peux me lister mon matériel ?",
-            (
-                '{"tool":"memory","content":"{\\"action\\":\\"recall\\",'
-                '\\"query\\":\\"matériel équipement\\"}","done":false}'
-            ),
+            '{"tool":"recall","content":"Tu peux me lister mon matériel ?"}',
         ),
     ],
     "review": [
@@ -487,12 +496,10 @@ def _format_step_context(step_context: list[dict] | None) -> str:
     # block is the "new" tail that's expected to change every step and
     # isn't meant to be cache-reused across turns.
     lines = ["\nResult from a tool you already called earlier in this turn:"]
-    last_was_memory_result = False
     last_was_files_read = False
     last_was_web_search = False
     for turn in step_context:
         content = turn.get("content", "")
-        last_was_memory_result = content.startswith("[memory]")
         last_was_web_search = content.startswith("[web_search]")
         # A files read: the "[files] " prefix, but not a write
         # confirmation/error, which both start with "[ok]"/"[error]"
@@ -515,33 +522,25 @@ def _format_step_context(step_context: list[dict] | None) -> str:
             content = content[:cap] + "…"
         lines.append(f"- {content}")
 
-    # Steering hint, added only right after a memory-tool result: in
+    # Steering hint, added only right after a files-read result: in
     # practice a small local model asked to route again after seeing
-    # its own tool output tends to just call the same tool again
-    # instead of answering with it -- observed as a real loop-guard
-    # failure in testing, not a hypothetical. This is a best-effort
-    # nudge, not a guarantee; the loop guard in orchestrator.py is the
-    # actual safety net if the model still repeats the call.
+    # its own tool output tends to just answer with the content as
+    # plain chat, or call "read" again, instead of writing the actual
+    # change -- observed as a real loop-guard failure in testing, not
+    # a hypothetical. This is a best-effort nudge, not a guarantee;
+    # the loop guard in orchestrator.py is the actual safety net if
+    # the model still repeats the call.
     #
-    # The concrete before/after example below was added after a
-    # second round of live testing: the abstract instruction alone
-    # ("in your own words") got the model to correctly switch to
-    # "tool":"chat" and stop calling memory again, but it then just
-    # copied the raw "- [kind] ..." bullet verbatim as its "answer"
-    # instead of actually rephrasing it. A small local model follows a
-    # worked example far more reliably than a stated rule.
-    if last_was_memory_result:
-        lines.append(
-            'The last "[memory]" line above already contains the answer. '
-            'Respond now with "tool":"chat" and write ONE natural sentence '
-            "answering the user -- Do NOT call the memory tool again, and "
-            'do NOT copy the "- [kind] ..." bullet format verbatim as your '
-            'answer. Example: if that line says "- [fact] Possède un Steam '
-            'Deck", a good answer is "Tu as un Steam Deck !", not the '
-            "bullet line itself."
-        )
-    elif last_was_files_read:
-        # Same reasoning as the memory hint above: a small local model
+    # (memory used to have a matching hint here, for the same reason:
+    # a small local model asked to route again right after seeing its
+    # own memory:recall result tended to either repeat the call or
+    # copy the raw bullet list verbatim instead of answering. Two
+    # rounds of hint tuning didn't fix it reliably -- see
+    # graphs/recall.py's docstring for the actual fix: memory:recall
+    # no longer routes through here at all, "recall" is now one
+    # deterministic call that never needs a second routing decision.)
+    if last_was_files_read:
+        # Same reasoning as the hint above: a small local model
         # asked to route again right after reading a file tends to
         # either answer with the content as plain chat (never actually
         # modifying the real file) or just call "read" again. This

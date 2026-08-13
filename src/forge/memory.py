@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 
 from forge import compaction
-from forge.config import MEMORY_FILE, MEMORY_MAX_HISTORY
+from forge.config import MEMORY_FILE, MEMORY_HARD_CAP_SLACK, MEMORY_MAX_HISTORY
 from forge.logger import log
 
 _DEFAULT = {"history": [], "facts": [], "next_id": 1}
@@ -113,6 +113,16 @@ def _apply_retention(history: list[dict]) -> list[dict]:
     just being dropped. MEMORY_MAX_HISTORY below stays as a hard-cap
     safety net -- drop-oldest, pinned exempt -- for when compaction is
     disabled or its strategy fails; history must never grow unbounded.
+
+    When it does fire, it trims to MEMORY_HARD_CAP_SLACK *below* the
+    cap rather than to the cap exactly. Landing on the cap put the
+    next turn back over it immediately, so one message was evicted
+    every turn from then on: a sliding window, shifting the router
+    prompt's prefix every turn and forcing llama-server to re-process
+    all of it. That is precisely the FIFO/KV-cache conflict v3.8
+    diagnosed and raised MEMORY_MAX_HISTORY to avoid -- the safety net
+    was quietly reintroducing it. Cutting deeper costs a bit more
+    context at once and buys a stable prefix for many turns after.
     """
     try:
         history = compaction.maybe_compact(history)
@@ -124,8 +134,19 @@ def _apply_retention(history: list[dict]) -> list[dict]:
 
     pinned = [m for m in history if m.get("pinned")]
     unpinned = [m for m in history if not m.get("pinned")]
-    budget = max(MEMORY_MAX_HISTORY - len(pinned), 0)
-    return [*pinned, *unpinned[-budget:]] if budget else pinned
+    target = max(MEMORY_MAX_HISTORY - MEMORY_HARD_CAP_SLACK, 1)
+    budget = max(target - len(pinned), 0)
+    kept = [*pinned, *unpinned[-budget:]] if budget else pinned
+
+    log.warning(
+        "hard cap: history trimmed from %d to %d messages (%d dropped) -- "
+        "compaction is disabled or failing, and the router prompt prefix "
+        "just changed, so expect one slow turn",
+        len(history),
+        len(kept),
+        len(history) - len(kept),
+    )
+    return kept
 
 
 def add_message(role: str, content: str) -> None:

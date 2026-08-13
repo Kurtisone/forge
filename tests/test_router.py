@@ -211,34 +211,42 @@ def test_prompt_includes_memory_description_when_enabled():
     assert "explicitly asks" in prompt
 
 
-def test_prompt_memory_recall_example_demonstrates_done_false():
-    """The recall example must show "done": false -- that's what
-    teaches a small local model to chain a rephrasing step instead of
-    returning the raw bullet-list search results as the final answer."""
+def test_prompt_recall_examples_never_use_done_false():
+    """
+    Regression guard for the same bug research already guards against
+    (test_prompt_research_examples_never_use_done_false): recall must
+    NEVER be shown chained with "done": false in a worked example --
+    that's the exact router-chaining bug graphs/recall.py exists to
+    avoid (see its docstring).
+    """
     prompt = build_router_prompt(
-        "list my hardware", available_tools=["chat", "code", "memory"]
+        "list my hardware", available_tools=["chat", "code", "recall"]
     )
-    assert '"action\\":\\"recall\\"' in prompt
-    assert '"done":false' in prompt
+    for line in prompt.splitlines():
+        if '"tool":"recall"' in line:
+            assert '"done"' not in line, f"recall example must not use done: {line}"
 
 
-def test_prompt_memory_recall_example_json_is_well_formed():
+def test_prompt_recall_example_json_is_well_formed():
     import json
     import re
 
     prompt = build_router_prompt(
-        "list my hardware", available_tools=["chat", "code", "memory"]
+        "list my hardware", available_tools=["chat", "code", "recall"]
     )
-    match = re.search(
-        r'\{"tool":"memory","content":"\{\\"action\\":\\"recall\\".*?"done":false\}',
-        prompt,
-    )
+    match = re.search(r'\{"tool":"recall","content":"[^"]*"\}', prompt)
     assert match, "recall example not found in prompt"
     outer = json.loads(match.group(0))
-    assert outer["tool"] == "memory"
-    assert outer["done"] is False
-    inner = json.loads(outer["content"])
-    assert inner["action"] == "recall"
+    assert outer["tool"] == "recall"
+    assert isinstance(outer["content"], str) and outer["content"]
+
+
+def test_prompt_recall_description_points_away_from_memory():
+    prompt = build_router_prompt(
+        "hi", available_tools=["chat", "code", "memory", "recall"]
+    )
+    assert '"recall"' in prompt
+    assert "single call" in prompt.split('"recall": (')[-1].split('"sysadmin"')[0]
 
 
 def test_prompt_with_only_chat_and_code_omits_memory():
@@ -270,60 +278,43 @@ def test_prompt_still_fills_in_user_input_and_history():
     assert "earlier message" in prompt
 
 
-def test_prompt_steers_toward_chat_after_a_memory_result():
-    """The real failure this guards against: a small local model asked
-    to route again right after its own [memory] tool output tends to
-    call memory a second time instead of answering -- this hint pushes
-    explicitly toward "tool":"chat" instead."""
+def test_prompt_no_longer_steers_after_a_memory_result():
+    """
+    A [memory] step_context entry used to trigger a steering hint
+    pushing the router back toward "tool":"chat" -- that whole
+    mechanism is gone, because the router never routes memory:recall
+    with "done":false anymore (see graphs/recall.py's docstring). A
+    [memory] result in step_context today can only be a "remember"
+    confirmation, which needs no steering at all.
+    """
     prompt = build_router_prompt(
         "Tu peux me lister mon matériel ?",
         history=[
             {"role": "user", "content": "Tu peux me lister mon matériel ?"},
         ],
         step_context=[
-            {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
+            {"role": "assistant", "content": "[memory] Remembered (#1)."},
         ],
         available_tools=["chat", "code", "memory"],
     )
-    assert "Do NOT call the memory tool again" in prompt
-    assert '"tool":"chat"' in prompt.split("already contains the answer")[-1]
+    assert "Do NOT call the memory tool again" not in prompt
+    assert "already contains the answer" not in prompt
 
 
-def test_prompt_memory_hint_includes_a_concrete_rephrasing_example():
-    """Second round of live testing: the abstract "in your own words"
-    instruction got the model to stop repeating the memory call, but
-    it then just copied the raw bullet line verbatim instead of
-    actually rephrasing it. A worked before/after example is what
-    small local models actually follow -- assert it's really there,
-    not just the abstract rule."""
+def test_prompt_files_steering_hint_still_works():
+    """The files-read steering hint is the one real hint left in this
+    block now that memory's is gone -- guard that removing memory's
+    branch didn't also break the one still needed."""
     prompt = build_router_prompt(
-        "Tu peux me lister mon matériel ?",
-        history=[
-            {"role": "user", "content": "Tu peux me lister mon matériel ?"},
-        ],
+        "ajoute une fonction",
+        history=[{"role": "user", "content": "ajoute une fonction"}],
         step_context=[
-            {"role": "assistant", "content": "[memory] - [fact] Possède un Steam Deck"},
+            {"role": "assistant", "content": "[files] def f(): pass"},
         ],
-        available_tools=["chat", "code", "memory"],
+        available_tools=["chat", "code", "files"],
     )
-    assert "do NOT copy the" in prompt
-    assert "bullet format verbatim" in prompt
-    assert "Tu as un Steam Deck !" in prompt  # the worked example itself
-
-
-def test_prompt_omits_memory_steering_hint_for_non_memory_step_context():
-    prompt = build_router_prompt(
-        "what's next?",
-        history=[{"role": "user", "content": "run some code"}],
-        step_context=[{"role": "assistant", "content": "[code] print(1)"}],
-        available_tools=["chat", "code", "memory"],
-    )
-    assert "Do NOT call the memory tool again" not in prompt
-
-
-def test_prompt_omits_memory_steering_hint_with_no_step_context():
-    prompt = build_router_prompt("hello", available_tools=["chat", "code", "memory"])
-    assert "Do NOT call the memory tool again" not in prompt
+    assert '"action":"write"' in prompt
+    assert "CURRENT, real content" in prompt
 
 
 def test_unknown_tool_without_a_description_gets_generic_wording():

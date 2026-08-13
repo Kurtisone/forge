@@ -582,17 +582,17 @@ def test_memory_recall_done_false_has_no_effect_at_max_steps_one(monkeypatch, tm
     assert result.output == "- [fact] Possède un Steam Deck"
 
 
-def test_memory_repeated_recall_degrades_gracefully_instead_of_erroring(
-    monkeypatch, tmp_path
-):
+def test_memory_repeated_call_now_hard_fails_like_any_other_tool(monkeypatch, tmp_path):
     """
-    Reproduces a real failure from live testing: the small local model
-    sometimes calls memory/recall again on the second step instead of
-    switching to chat, tripping the generic loop guard. For the memory
-    tool specifically this must fall back to the already-good previous
-    result (same as MAX_STEPS=1 would have given) rather than surface
-    the internal "Stopped: the router tried to repeat the same step."
-    message to the user.
+    This used to be memory's own loop-guard fallback test: the router
+    routed a natural-language recall as memory:recall + "done": false,
+    which sometimes looped, so memory got the same graceful-degrade
+    fallback as web_search. That chaining is gone (see
+    graphs/recall.py's docstring) -- "recall" is a single deterministic
+    call the router only ever makes once, and plain "memory" (remember
+    only, now) has no reason to legitimately repeat. A repeat is back
+    to being a genuine signal worth surfacing, like every tool except
+    web_search always was.
     """
     from forge import rag
     from forge.tools import memory as memory_tool
@@ -602,27 +602,71 @@ def test_memory_repeated_recall_degrades_gracefully_instead_of_erroring(
     monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
     monkeypatch.setitem(TOOLS, "memory", memory_tool.run)
 
+    remember_call = json.dumps(
+        {
+            "tool": "memory",
+            "content": json.dumps(
+                {"action": "remember", "kind": "fact", "content": "Possède un Deck"}
+            ),
+            # "done": false forces a second step so the repeat actually
+            # happens within one run -- remember normally completes in
+            # one step (done defaults True), so this is a deliberately
+            # artificial trigger, only to exercise the loop guard path.
+            "done": False,
+        }
+    )
+    monkeypatch.setattr(orch_mod, "call_llm", lambda p: remember_call)
+
+    result = Orchestrator(max_steps=2).run("mémorise deux fois la même chose")
+
+    assert not result.ok
+    assert "Stopped" in result.output
+
+
+def test_recall_is_a_single_dispatch_that_never_reaches_the_loop_guard(
+    monkeypatch, tmp_path
+):
+    """
+    Companion to graphs/test_recall.py, at the orchestrator boundary:
+    the router makes exactly ONE decision ("recall"), and the graph
+    handles recall -> synthesize internally without ever routing back
+    through the orchestrator's loop. There is nothing here to trip
+    the loop guard on, unlike the old memory:recall + "done": false
+    dance this replaces.
+    """
+    from forge import rag
+    from forge.graphs import recall as recall_graph
+    from forge.tools import recall as recall_tool
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    monkeypatch.setitem(TOOLS, "recall", recall_tool.run)
+
     conn = rag.get_connection()
     rag.remember(conn, kind="fact", content="Possède un Steam Deck", project=None)
     conn.close()
 
-    recall_call = json.dumps(
-        {
-            "tool": "memory",
-            "content": json.dumps({"action": "recall", "query": "matériel"}),
-            "done": False,
-        }
+    route_call = json.dumps(
+        {"tool": "recall", "content": "Tu peux me lister mon matériel ?"}
     )
-    # Always returns the identical call -> the loop guard trips on step 2.
-    monkeypatch.setattr(orch_mod, "call_llm", lambda p: recall_call)
+    calls = []
+
+    def fake_call_llm(prompt):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return route_call  # the orchestrator's routing call
+        return "Tu as un Steam Deck."  # the graph's internal synthesis call
+
+    monkeypatch.setattr(orch_mod, "call_llm", fake_call_llm)
+    monkeypatch.setattr(recall_graph, "call_llm", fake_call_llm)
 
     result = Orchestrator(max_steps=2).run("Tu peux me lister mon matériel ?")
 
     assert result.ok
-    assert result.error is None
-    assert result.tool == "memory"
-    assert result.output == "- [fact] Possède un Steam Deck"
-    assert "Stopped" not in result.output
+    assert result.tool == "recall"
+    assert result.output == "Tu as un Steam Deck."
+    assert len(result.trace) == 1  # one routing decision, not two
 
 
 def test_web_search_repeated_call_degrades_gracefully_instead_of_erroring(

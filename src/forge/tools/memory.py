@@ -21,6 +21,25 @@ also optional (top_k defaults to 5). "kind" on remember defaults to
 isn't a decision or a todo, and a small local model asked to route a
 plain statement won't reliably invent a kind for it either.
 
+Recall output is formatted for a prompt, not for a log: entries are
+ranked so deliberately-recorded ones come before archived transcript,
+and each is clipped to MEMORY_RECALL_MAX_CHARS. What this tool returns
+is pasted straight into the next routing decision, so its size is paid
+for twice -- in context window and in prefill time.
+
+The router no longer dispatches a bare "recall" action itself for a
+natural-language question: chaining recall into a synthesis step via
+"done": false reliably failed live with the local model, the exact
+same failure already root-caused for web_search (see
+graphs/research.py's docstring) -- a repeated identical call instead
+of following the steering hint. graphs/recall.py (dispatchable as the
+"recall" tool) now runs recall -> synthesize as one deterministic
+sequence instead. This module's "recall" action stays available
+directly -- graphs/recall.py calls search() below rather than
+duplicating the RAG query, and a raw bullet list is still occasionally
+the right answer (e.g. from Python/tests, or a future non-chat caller
+that wants the list itself, not a sentence about it).
+
 To activate this tool add it to ENABLED_TOOLS in .env.local:
     ENABLED_TOOLS=chat,code,memory
 """
@@ -28,9 +47,16 @@ To activate this tool add it to ENABLED_TOOLS in .env.local:
 import json
 
 from forge import rag
+from forge.config import MEMORY_RECALL_MAX_CHARS
 from forge.logger import log
 
 _VALID_KINDS = ("decision", "todo", "fact")
+
+# Kinds this tool can retrieve but never writes: compaction.py stores
+# evicted history under "history_summary" by calling rag.remember()
+# directly, bypassing _VALID_KINDS. Recall has to know about it anyway
+# -- it comes back in search results and dominates them by sheer size.
+_ARCHIVE_KINDS = ("history_summary",)
 
 
 def _remember(instruction: dict) -> str:
@@ -57,6 +83,43 @@ def _remember(instruction: dict) -> str:
     return f"Remembered (#{entry_id})."
 
 
+def search(
+    query: str,
+    top_k: int = 5,
+    kind: str | None = None,
+    project: str | None = None,
+) -> list[dict]:
+    """
+    Query the RAG store and return raw hits as a list of
+    {"kind", "content", "project", ...} dicts, ranked and clipped by
+    nothing -- that formatting belongs to a caller. Raises
+    rag.EmbeddingError on failure. This is the structured form used by
+    graphs/recall.py; _recall() below formats the same data as a
+    display string for direct chat/router dispatch (same split as
+    web_search.search() / run()).
+    """
+    conn = rag.get_connection()
+    try:
+        return rag.search(conn, query=query, top_k=top_k, kind=kind, project=project)
+    finally:
+        conn.close()
+
+
+def format_results(results: list[dict]) -> str:
+    """
+    Format raw search() hits as the ranked, clipped bullet list this
+    tool has always returned for a direct "recall" action -- and that
+    graphs/recall.py also feeds into its synthesis prompt, so the two
+    callers can't drift into two different notions of what a memory
+    hit looks like.
+    """
+    lines = []
+    for r in _rank(results):
+        proj = f"/{r['project']}" if r["project"] else ""
+        lines.append(f"- [{r['kind']}{proj}] {_clip(r['content'])}")
+    return "\n".join(lines)
+
+
 def _recall(instruction: dict) -> str:
     query = instruction.get("query", "").strip()
     if not query:
@@ -66,28 +129,43 @@ def _recall(instruction: dict) -> str:
     kind = instruction.get("kind") or None
     project = instruction.get("project") or None
 
-    conn = rag.get_connection()
     try:
-        try:
-            results = rag.search(
-                conn, query=query, top_k=top_k, kind=kind, project=project
-            )
-        except rag.EmbeddingError as e:
-            log.error("memory tool: recall failed: %s", e)
-            return f"[error] recall failed: embedding server unreachable ({e})"
-    finally:
-        conn.close()
+        results = search(query, top_k=top_k, kind=kind, project=project)
+    except rag.EmbeddingError as e:
+        log.error("memory tool: recall failed: %s", e)
+        return f"[error] recall failed: embedding server unreachable ({e})"
 
     log.event("memory.recall", query=query, hits=len(results))
 
     if not results:
         return "No matching memory found."
 
-    lines = []
-    for r in results:
-        proj = f"/{r['project']}" if r["project"] else ""
-        lines.append(f"- [{r['kind']}{proj}] {r['content']}")
-    return "\n".join(lines)
+    return format_results(results)
+
+
+def _rank(results: list[dict]) -> list[dict]:
+    """
+    Put deliberately-recorded entries ahead of archived transcript.
+
+    rag.search() orders purely by vector distance, which treats a
+    one-line fact and a whole compacted conversation as equal
+    candidates. They aren't: a "fact" was written because someone
+    decided it was worth keeping, while a "history_summary" is bulk
+    archive that compaction dumped in verbatim. Asked "list my
+    hardware", the search returned both and the two useful lines
+    landed at the bottom of several thousand characters of unrelated
+    chat.
+
+    This is a stable sort, so distance order still decides within each
+    group -- only the two groups are separated.
+    """
+    return sorted(results, key=lambda r: r["kind"] in _ARCHIVE_KINDS)
+
+
+def _clip(content: str) -> str:
+    if len(content) <= MEMORY_RECALL_MAX_CHARS:
+        return content
+    return content[:MEMORY_RECALL_MAX_CHARS].rstrip() + " […]"
 
 
 def run(content: str) -> str:

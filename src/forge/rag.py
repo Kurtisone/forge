@@ -15,6 +15,7 @@ data/forge_rag.db) with two tables --
                    virtual table).
 """
 
+import math
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,7 +23,14 @@ from pathlib import Path
 import requests
 import sqlite_vec
 
-from forge.config import EMBEDDING_DIM, EMBEDDING_TIMEOUT, EMBEDDING_URL, RAG_DB_FILE
+from forge.config import (
+    EMBEDDING_DIM,
+    EMBEDDING_MAX_CHARS,
+    EMBEDDING_MAX_CHUNKS,
+    EMBEDDING_TIMEOUT,
+    EMBEDDING_URL,
+    RAG_DB_FILE,
+)
 from forge.logger import log
 
 _SCHEMA = """
@@ -65,7 +73,35 @@ class EmbeddingError(Exception):
     """Raised when the embedding server is unreachable or returns bad data."""
 
 
-def _embed(text: str) -> list[float]:
+def _split_for_embedding(text: str) -> list[str]:
+    """
+    Cut text into chunks of at most EMBEDDING_MAX_CHARS, preferring
+    line boundaries so a compacted conversation splits between
+    messages rather than mid-word. A single line longer than the limit
+    is hard-split, since nothing better is available.
+    """
+    chunks: list[str] = []
+    current = ""
+
+    for line in text.splitlines(keepends=True):
+        while len(line) > EMBEDDING_MAX_CHARS:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:EMBEDDING_MAX_CHARS])
+            line = line[EMBEDDING_MAX_CHARS:]
+        if len(current) + len(line) > EMBEDDING_MAX_CHARS:
+            chunks.append(current)
+            current = line
+        else:
+            current += line
+
+    if current:
+        chunks.append(current)
+    return chunks or [text]
+
+
+def _embed_one(text: str) -> list[float]:
     try:
         resp = requests.post(
             EMBEDDING_URL, json={"input": text}, timeout=EMBEDDING_TIMEOUT
@@ -75,6 +111,47 @@ def _embed(text: str) -> list[float]:
     except (requests.RequestException, KeyError, IndexError) as e:
         log.error("embedding request failed (%s): %s", EMBEDDING_URL, e)
         raise EmbeddingError(str(e)) from e
+
+
+def _embed(text: str) -> list[float]:
+    """
+    Embed arbitrarily long text as a single vector.
+
+    The naive version posted the whole string in one request, which
+    worked for every caller except the one that mattered: compaction
+    (compaction.py) embeds an entire block of evicted conversation at
+    once. llama-server needs the full input in one physical batch, so
+    past --ubatch-size it answers 400 Bad Request rather than
+    truncating -- which made compaction fail permanently, fall back to
+    the drop-oldest hard cap, and take KV-cache reuse down with it.
+    Short queries (recall) kept working, so the failure looked like an
+    unreachable server instead of an oversized request.
+
+    Chunks are averaged and re-normalised to unit length. llama-server
+    L2-normalises what it returns, so a single-chunk vector is already
+    unit length; normalising the mean keeps long and short entries
+    comparable under the same distance metric.
+    """
+    chunks = _split_for_embedding(text)
+
+    if len(chunks) == 1:
+        return _embed_one(chunks[0])
+
+    if len(chunks) > EMBEDDING_MAX_CHUNKS:
+        log.warning(
+            "embedding input split into %d chunks, keeping the first %d "
+            "(raise EMBEDDING_MAX_CHUNKS, or compact more often)",
+            len(chunks),
+            EMBEDDING_MAX_CHUNKS,
+        )
+        chunks = chunks[:EMBEDDING_MAX_CHUNKS]
+
+    log.event("rag.embed_chunked", chunks=len(chunks), chars=len(text))
+    vectors = [_embed_one(chunk) for chunk in chunks]
+
+    mean = [sum(values) / len(vectors) for values in zip(*vectors, strict=True)]
+    norm = math.sqrt(sum(v * v for v in mean))
+    return [v / norm for v in mean] if norm else mean
 
 
 def remember(
