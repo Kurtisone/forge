@@ -172,3 +172,48 @@ def test_run_always_returns_non_empty_str():
         out = memory_tool.run(payload)
         assert isinstance(out, str)
         assert out.strip()
+
+
+# ── search() (structured form used by graphs/recall.py) ────────────────
+
+
+def test_search_returns_raw_dicts():
+    memory_tool.run(
+        json.dumps({"action": "remember", "kind": "fact", "content": "Possède un Deck"})
+    )
+
+    results = memory_tool.search("Deck")
+
+    assert isinstance(results, list)
+    assert results[0]["kind"] == "fact"
+    assert results[0]["content"] == "Possède un Deck"
+
+
+def test_search_is_unranked_unclipped():
+    """
+    Ranking (fact before history_summary) and clipping belong to
+    format_results(), the formatter -- search() itself hands back
+    rag.search()'s raw order and full content, so graphs/recall.py's
+    prompt-building and this module's own _recall() can each decide
+    how to present it without duplicating the RAG query.
+    """
+    conn = rag.get_connection()
+    rag.remember(conn, kind="history_summary", content="archive", project=None)
+    rag.remember(conn, kind="fact", content="fait", project=None)
+    conn.close()
+
+    results = memory_tool.search("q")
+
+    # Both kinds present, un-clipped content, no reordering applied.
+    kinds = {r["kind"] for r in results}
+    assert kinds == {"history_summary", "fact"}
+
+
+def test_search_raises_on_embedding_failure(monkeypatch):
+    def raise_error(text):
+        raise rag.EmbeddingError("400 Bad Request")
+
+    monkeypatch.setattr(rag, "_embed", raise_error)
+
+    with pytest.raises(rag.EmbeddingError):
+        memory_tool.search("q")
