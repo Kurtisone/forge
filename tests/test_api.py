@@ -180,14 +180,40 @@ def test_rate_limit_disabled_allows_unlimited_requests(monkeypatch):
         assert client.post("/chat", json={"message": "hi"}).status_code == 200
 
 
-def test_health_is_never_rate_limited(monkeypatch):
+def test_health_is_rate_limited_like_every_other_endpoint(monkeypatch):
+    """Deliberately inverts the earlier test_health_is_never_rate_limited
+    (audit M-3).
+
+    Exempting /health looked free when it was read as "a status string
+    nobody can abuse". It isn't one: with FORGE_PROVIDER=llama_cpp,
+    every hit makes an outbound HTTP call to the inference server to
+    read the loaded model name. Unmetered, that turns one cheap
+    anonymous request into load on the LLM -- an amplifier reachable
+    without a token, which is the combination that matters.
+
+    Still unauthenticated (see the test below) -- metered, not gated.
+    """
     monkeypatch.setattr(api_mod.ratelimit, "RATE_LIMIT_ENABLED", True)
-    monkeypatch.setattr(api_mod.ratelimit, "RATE_LIMIT_REQUESTS", 1)
+    monkeypatch.setattr(api_mod.ratelimit, "RATE_LIMIT_REQUESTS", 2)
     monkeypatch.setattr(api_mod.ratelimit, "RATE_LIMIT_WINDOW_SECONDS", 60)
     monkeypatch.setattr(api_mod, "FORGE_PROVIDER", "ollama")
     client = _client()
-    for _ in range(5):
-        assert client.get("/health").status_code == 200
+
+    assert client.get("/health").status_code == 200
+    assert client.get("/health").status_code == 200
+
+    r = client.get("/health")
+    assert r.status_code == 429
+    assert "Retry-After" in r.headers
+
+
+def test_health_stays_unauthenticated_even_with_a_token_set(monkeypatch):
+    """The rate limit must not have quietly turned into an auth gate:
+    a container healthcheck and the UI's own status line both call
+    /health before they have a token to send."""
+    monkeypatch.setattr(api_mod, "API_TOKEN", "s3cret")
+    monkeypatch.setattr(api_mod, "FORGE_PROVIDER", "ollama")
+    assert _client().get("/health").status_code == 200
 
 
 def test_different_clients_have_independent_limits(monkeypatch):

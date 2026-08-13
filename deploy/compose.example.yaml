@@ -76,6 +76,17 @@ services:
     image: forge-core
     container_name: forge
     restart: unless-stopped
+    # L'image tourne en UID 1000 (utilisateur `forge`), pas root.
+    # keep-id est la moitie obligatoire cote runtime : sans elle,
+    # l'UID 1000 du container est mappe sur un subuid et perd l'acces
+    # aux sockets des proxies (0660, propriete de l'utilisateur hote)
+    # ET a ./data. Voir deploy/README.md, section "Running non-root".
+    # Si l'UID hote n'est pas 1000 : keep-id:uid=1000,gid=1000.
+    # Echappatoire immediate si quelque chose casse, sans rebuild :
+    # decommenter `user: "0:0"` ci-dessous, qui restaure l'ancien
+    # comportement root.
+    userns_mode: "keep-id"
+    # user: "0:0"
     annotations:
       run.oci.keep_original_groups: "1"
     ports:

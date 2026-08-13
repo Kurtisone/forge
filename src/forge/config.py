@@ -215,6 +215,18 @@ API_TOKEN = os.getenv("API_TOKEN", "")
 # perfectly good reason to set it; forgetting isn't.
 API_ALLOW_UNAUTHENTICATED = _bool("API_ALLOW_UNAUTHENTICATED", "false")
 
+# Interactive docs (/docs, /redoc, /openapi.json). FastAPI mounts all
+# three by default and none of them can carry a Depends(require_token)
+# -- they're wired up by the framework, not by this app's routes. So
+# on an instance reachable by anything other than you, they publish a
+# complete, machine-readable map of every endpoint, its parameters and
+# its schemas to an unauthenticated caller. That's not a
+# vulnerability by itself; it's the reconnaissance step made free, and
+# it's free for an attacker who has learned nothing else about the
+# instance. Off by default, on where it's useful (audit M-3): set
+# API_DOCS_ENABLED=true while developing against the API.
+API_DOCS_ENABLED = _bool("API_DOCS_ENABLED", "false")
+
 # --- API rate limiting ----------------------------------------------------
 # In-memory sliding window, per client IP, single-process only (see
 # forge/ratelimit.py). Defaults are generous for interactive/UI use

@@ -48,8 +48,9 @@ def _fake_run_fixed(cmd, timeout):
         return _fake_busctl_units_json(["searxng.service", "forge.service"])
     if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
         return "test-container"
-    if cmd[0] == "journalctl" and "-u" in cmd:
-        return f"log line for unit {cmd[cmd.index('-u') + 1]}"
+    unit_flags = [arg for arg in cmd if arg.startswith("--unit=")]
+    if cmd[0] == "journalctl" and unit_flags:
+        return f"log line for unit {unit_flags[0].removeprefix('--unit=')}"
     if cmd[0] == "podman":
         return f"log line for container {cmd[-1]}"
     if cmd[0] == "journalctl" and "-k" in cmd:
@@ -671,3 +672,46 @@ def test_sysadmin_cleans_json_wrapped_response_like_review(monkeypatch):
     )
 
     assert state.final_output == '{"tool":"chat","content":"query"}'
+
+
+# ─── Argument shape (audit M-4) ─────────────────────────────────────
+
+
+def test_collect_cmd_attaches_the_unit_name_to_its_flag():
+    """`-u foo` puts the name in a position where a leading dash is
+    read as an option: `-u --output=cat` would be journalctl's flag,
+    not a unit name. The attached `--unit=<name>` form has no such
+    position -- everything after the `=` is the value, dash or not."""
+    cmd = sysadmin_mod._collect_cmd("unit", "--output=cat")
+    assert "--unit=--output=cat" in cmd
+    assert "-u" not in cmd
+    # And nothing that looks like a loose option was introduced.
+    assert "--output=cat" not in cmd
+
+
+def test_collect_cmd_puts_a_container_name_after_the_options_marker():
+    """podman takes the container as a positional argument, so a name
+    starting with a dash is parsed as a flag. `--` ends option parsing:
+    whatever follows is a name, even if it's spelled `--help`."""
+    cmd = sysadmin_mod._collect_cmd("container", "--help")
+    assert cmd[-2:] == ["--", "--help"]
+
+
+def test_ordinary_names_are_unaffected():
+    """The hardening must not change what the normal path actually
+    runs -- these two commands are what production executes."""
+    unit_cmd = sysadmin_mod._collect_cmd("unit", "searxng.service")
+    assert "--unit=searxng.service" in unit_cmd
+    assert unit_cmd[0] == "journalctl"
+
+    container_cmd = sysadmin_mod._collect_cmd("container", "forge")
+    assert container_cmd[0] == "podman"
+    assert container_cmd[-1] == "forge"
+
+
+def test_kernel_collection_takes_no_name_at_all():
+    """The kernel branch never interpolates anything, which is why it
+    is the safe fallback for an unrecognised target_hint."""
+    cmd = sysadmin_mod._collect_cmd("kernel", "ignored")
+    assert "ignored" not in cmd
+    assert "-k" in cmd

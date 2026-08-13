@@ -100,6 +100,7 @@ logging to the user session journal, not root services like
 
 ```bash
 podman run -d --name forge \
+  --userns=keep-id \
   --group-add keep-groups \
   --env-file .env.local \
   -v $(pwd)/data:/app/data \
@@ -122,6 +123,7 @@ services:
     image: forge-core
     container_name: forge
     restart: unless-stopped
+    userns_mode: "keep-id"
     annotations:
       run.oci.keep_original_groups: "1"
     ports:
@@ -140,6 +142,73 @@ rootless setup; the paths on the right of each `:` are what
 `SYSADMIN_JOURNAL_DIR`/`SYSADMIN_DBUS_ADDRESS`/`SYSADMIN_PODMAN_URL`
 in `.env.local` above actually refer to, since those are seen from
 *inside* the container.)
+
+## Running non-root (and why `--userns=keep-id` is not optional)
+
+The image sets `USER forge` (UID/GID 1000) so the serving process
+can't rewrite `/app/src/forge/` or anything else in the container.
+That half is in the Containerfile. The other half is at runtime, and
+**an image built non-root without `--userns=keep-id` is a broken
+container, not a hardened one.**
+
+Why: under rootless podman the container's UID 0 is already mapped to
+your host UID. That mapping is what lets the container read the two
+proxy sockets (mode 0660, owned by your host user) and write to
+`./data`. A container UID of 1000 maps by default to a *subuid*
+instead -- a stranger to all of those -- so `sysadmin` loses both
+proxies and Forge loses its writable directory. `--userns=keep-id`
+maps your host UID to the same UID inside, putting `forge` back where
+container-root used to be.
+
+Check your host UID first:
+
+```bash
+id -u        # expected: 1000
+```
+
+If it isn't 1000, use the explicit form -- `--userns=keep-id:uid=1000,gid=1000`
+on the CLI, or `userns_mode: "keep-id:uid=1000,gid=1000"` in compose
+-- which pins the mapping to the image's user regardless of the host
+id.
+
+### What to verify after switching
+
+Each of these has a distinct failure mode, so run them in order and
+stop at the first surprise:
+
+```bash
+# 1. Non-root, and mapped to your host user.
+podman exec forge id
+#    expect: uid=1000(forge) gid=1000(forge)
+
+# 2. Supplementary groups survived the user namespace.
+#    This is the one to watch: --group-add keep-groups and
+#    --userns=keep-id are two different mechanisms touching the same
+#    thing, and keep-groups is what journalctl -u depends on.
+podman exec forge id
+#    expect: extra groups listed, not just 1000(forge)
+
+# 3. The writable path is actually writable.
+podman exec forge touch /app/data/.write-test && echo OK
+
+# 4. Both proxies still reachable. Use a *root-owned* unit here:
+#    it's the one subject to the wheel ACL on system.journal, so it
+#    tests group access rather than just "no entries".
+podman exec forge podman --url unix:///run/forge-podman-ro-proxy.sock ps
+podman exec forge journalctl -D /host-journal -u steamos-manager.service -n 5
+```
+
+Confirmed working on the Deck (2026-08-13): `uid_map` shows
+`1000 0 1`, which is keep-id's signature -- container UID 1000 is the
+host user. Supplementary groups survive the switch, because the
+kernel evaluates the journal ACL against the host-side GIDs, not the
+names visible inside the container.
+
+### If something breaks and you need the old behaviour now
+
+`user: "0:0"` in compose (or `--user 0:0` on the CLI) overrides the
+image's `USER` without a rebuild. That is the whole revert: one line,
+no image work, and it restores exactly the previous posture.
 
 ## Group access for `journalctl -u` on root-owned system services
 
