@@ -14,7 +14,7 @@
 # Left as a tag here rather than a digest baked in blind: a digest is
 # only meaningful if it's one you resolved yourself, on your own
 # build host, from the registry you actually pull from.
-FROM python:3.12
+FROM docker.io/library/python@sha256:cfdcc988c45d6a933e0ec3fd9ce46e6f78174d3f082eea8f2f4d6f1f72f32b89
 
 WORKDIR /app
 
