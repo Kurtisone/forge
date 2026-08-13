@@ -17,10 +17,19 @@ Rules enforced here, by construction:
    other than a non-empty str is a ToolExecutionError.
 6. Execution is traceable: AgentState accumulates a TraceStep per
    step and trace.save() writes it to disk when TRACE_ENABLED=true.
+7. No tool escalation after external data: once a step has pulled in
+   content Forge doesn't control, no later step of the same run may
+   dispatch a mutating tool. See _EXTERNAL_INGEST_TOOLS below.
 """
 
+import json
+
 from forge import memory, subtrace, trace
-from forge.config import MAX_STEPS, MEMORY_ENABLED
+from forge.config import (
+    ALLOW_MUTATION_AFTER_EXTERNAL_DATA,
+    MAX_STEPS,
+    MEMORY_ENABLED,
+)
 from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
 from forge.llm import call_llm
 from forge.logger import log
@@ -29,6 +38,70 @@ from forge.tools.registry import get_tool, load_tools
 from forge.types import AgentResult, AgentState, ToolResult
 
 load_tools()
+
+# --- Escalation guard (audit E-2) -------------------------------------
+#
+# Tools whose output is content Forge does not control: a web page, a
+# search result page, a system log. From the second step onward that
+# text sits in the prompt that picks the next tool (see step_context
+# in run() below and router/prompt.py), so it is in a position to
+# suggest one.
+#
+# files:read is deliberately NOT here. It reads inside WORKSPACE_DIR,
+# and the read-then-write chain is a designed flow (v3.9: "remplace X
+# par Y dans hello.go" reads the real file, then writes it back with
+# the change applied). Taking files:read as tainting would break the
+# one legitimate multi-step flow this project actually uses, to
+# defend against a file the user's own workspace put there -- the
+# wrong trade. Nothing stops a hostile page's content being written
+# to the workspace in one turn and read back in another; that is a
+# real limit of a per-run taint and it is stated in SECURITY.md
+# rather than papered over here.
+_EXTERNAL_INGEST_TOOLS = frozenset({"web_fetch", "web_search", "research", "sysadmin"})
+
+# Tools that change something outside the run. "code" is not one: it
+# returns source as text, it doesn't execute or persist anything.
+_MUTATING_TOOLS = frozenset({"shell", "test"})
+
+# files is both, depending on its action -- resolved by _is_mutating().
+_FILES_READONLY_ACTIONS = frozenset({"read", "list"})
+
+if ALLOW_MUTATION_AFTER_EXTERNAL_DATA:
+    # Logged once at import, same reasoning as shell.py's allowlist
+    # tripwire: a configuration fact belongs in the startup log, not
+    # repeated into the output of every run where people learn to
+    # scroll past it.
+    log.warning(
+        "orchestrator: ALLOW_MUTATION_AFTER_EXTERNAL_DATA is set -- a run "
+        "that has fetched a web page or read system logs may go on to "
+        "write files or run commands in a later step. The content of "
+        "that page is part of the prompt choosing that step."
+    )
+
+
+def _is_mutating(tool: str, content: str) -> bool:
+    """
+    Does dispatching this call change anything outside the run?
+
+    Fails closed for files: anything that isn't demonstrably a read or
+    a list counts as a write. A malformed payload is exactly the case
+    where guessing "probably harmless" is worst -- files.py's own
+    parser is more forgiving than this check, and the gap between the
+    two is where an escalation would live.
+    """
+    if tool in _MUTATING_TOOLS:
+        return True
+    if tool != "files":
+        return False
+
+    try:
+        payload = json.loads(content)
+    except (ValueError, TypeError):
+        return True
+    if not isinstance(payload, dict):
+        return True
+    action = str(payload.get("action", "")).strip().lower()
+    return action not in _FILES_READONLY_ACTIONS
 
 
 class Orchestrator:
@@ -118,9 +191,44 @@ class Orchestrator:
                 return self._finish(state, remember=False)
             state.seen_calls.add(call_signature)
 
+            # --- Escalation guard ----------------------------------------
+            # Checked before dispatch, never after: the point is that
+            # the tool must not run, not that its effect gets reported.
+            if (
+                state.external_data_seen
+                and not ALLOW_MUTATION_AFTER_EXTERNAL_DATA
+                and _is_mutating(decision.tool, decision.content)
+            ):
+                note = (
+                    f"escalation guard: tool={decision.tool!r} would mutate "
+                    f"after {state.external_data_source!r} pulled in external "
+                    "data earlier in this run"
+                )
+                log.error(note)
+                ts.abandon(note)
+                state.ok = False
+                state.error = note
+                state.final_output = (
+                    "Stopped: this run already read outside data "
+                    f"(via {state.external_data_source}), so it can no longer "
+                    "write files or run commands. If that was what you "
+                    "wanted, ask again as a separate request."
+                )
+                state.final_tool = decision.tool
+                return self._finish(state, remember=False)
+
             # --- Dispatch ------------------------------------------------
             result = self._dispatch(decision.tool, decision.content)
             ts.finish(result)
+
+            if decision.tool in _EXTERNAL_INGEST_TOOLS:
+                # Marked on dispatch, not on success: a tool that
+                # failed mid-way may still have put part of what it
+                # read into the trace and the logs, and "it errored so
+                # nothing came in" is an assumption about code this
+                # module deliberately doesn't look inside.
+                state.external_data_seen = True
+                state.external_data_source = decision.tool
 
             state.final_output = result.output
             state.final_tool = result.tool

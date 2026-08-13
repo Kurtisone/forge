@@ -138,6 +138,16 @@ class AgentState:
     # prompt, after history, and is discarded once the run finishes.
     step_context: list[dict] = field(default_factory=list)
     seen_calls: set = field(default_factory=set)
+    # Set once a step has dispatched a tool that pulls in content
+    # Forge doesn't control (see orchestrator.py's
+    # _EXTERNAL_INGEST_TOOLS). From that point on, no later step of
+    # THIS run may dispatch a mutating tool -- audit E-2. Per-run on
+    # purpose: a fresh turn starts clean, so a blocked request is
+    # never a dead end, just a refusal to do it in the same breath as
+    # reading a web page. external_data_source keeps which tool it
+    # was, so the refusal can say so instead of being unexplainable.
+    external_data_seen: bool = False
+    external_data_source: str | None = None
     steps_taken: int = 0
     trace: list[TraceStep] = field(default_factory=list)
     final_output: str | None = None

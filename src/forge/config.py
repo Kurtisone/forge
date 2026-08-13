@@ -57,6 +57,25 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 # see Orchestrator.run() -- so this ceiling exists to make sure that,
 # whatever a model decides, a run can't loop forever.
 MAX_STEPS = int(os.getenv("MAX_STEPS", "1"))
+# Raising MAX_STEPS above 1 is what opens the indirect prompt-injection
+# surface described in audit E-2: from the second step onward, the
+# previous step's tool output is part of the prompt that decides the
+# next tool call, so the text of a web page or a log influences that
+# decision. The guard in orchestrator.py answers that deterministically
+# -- once a step has pulled in data Forge doesn't control (web_fetch,
+# web_search, research, sysadmin), no later step in the same run may
+# dispatch a mutating tool (shell, test, files:write).
+#
+# Set this to true only if you have a real multi-step flow that needs
+# to write after fetching, and you trust every source it reads. It
+# costs you the one guarantee that doesn't depend on the model
+# behaving: prompt wording has failed three times on this project, a
+# refusal in orchestrator.py cannot be talked out of. A blocked step
+# is not a dead end either -- the same request asked again as a fresh
+# turn starts with a clean slate.
+ALLOW_MUTATION_AFTER_EXTERNAL_DATA = _bool(
+    "ALLOW_MUTATION_AFTER_EXTERNAL_DATA", "false"
+)
 
 # --- Memory --------------------------------------------------------------
 MEMORY_ENABLED = _bool("MEMORY_ENABLED", "true")
