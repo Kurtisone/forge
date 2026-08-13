@@ -73,6 +73,15 @@ MEMORY_FILE = os.getenv("MEMORY_FILE", "data/memory.json")
 # constant; long-term recall is RAG's job (rag.py / v3.7), this is
 # only the short-term conversational window shown to the router.
 MEMORY_MAX_HISTORY = int(os.getenv("MEMORY_MAX_HISTORY", "100"))
+# How far below the cap to trim when the hard cap does fire. Trimming
+# to exactly MEMORY_MAX_HISTORY means the very next turn is over the
+# cap again, so the oldest message is evicted every single turn -- the
+# prompt prefix then shifts every turn and llama-server re-processes
+# the whole thing, which is the FIFO problem v3.8 diagnosed, arriving
+# through the back door. Cutting deeper trades a little more lost
+# context for one expensive re-prefill every SLACK/2 exchanges instead
+# of one per turn.
+MEMORY_HARD_CAP_SLACK = int(os.getenv("MEMORY_HARD_CAP_SLACK", "20"))
 
 # --- Context compaction / drawer (v3.9) ------------------------------------
 # v3.8 raised MEMORY_MAX_HISTORY so FIFO eviction became rare instead
