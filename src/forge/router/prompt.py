@@ -47,7 +47,7 @@ TOOL_DESCRIPTIONS = {
     ),
     "code": "content is the code itself, nothing else.",
     "files": (
-        "content is a JSON string describing ONE file operation: "
+        "content is a JSON object describing ONE file operation: "
         '{"action":"read","path":"..."} or '
         '{"action":"write","path":"...","content":"..."} or '
         '{"action":"list","path":"..."}. Use "read" when the user just '
@@ -68,7 +68,7 @@ TOOL_DESCRIPTIONS = {
         "history, status, or diffs."
     ),
     "memory": (
-        "content is a JSON string describing ONE memory operation to "
+        "content is a JSON object describing ONE memory operation to "
         'store: {"action":"remember","kind":"decision" or "todo" or '
         '"fact","content":"...","project":"..."}. Use kind="decision" '
         'for a choice that was made, kind="todo" for something still '
@@ -93,7 +93,7 @@ TOOL_DESCRIPTIONS = {
         "anything that isn't storing a new decision/todo/fact."
     ),
     "review": (
-        "content is a JSON string describing a file review: "
+        "content is a JSON object describing a file review: "
         '{"file_path":"...","question":"...","test_path":"..."}. '
         '"question" and "test_path" are optional. Set "test_path" when the '
         "user also wants that file's tests run first, so the review can "
@@ -147,7 +147,7 @@ TOOL_DESCRIPTIONS = {
         "model (repeated the same search instead of answering)."
     ),
     "sysadmin": (
-        "content is a JSON string: "
+        "content is a JSON object: "
         '{"target_hint":"...","question":"..."}. Both fields are '
         "optional. Discovers running systemd units and podman "
         "containers, reads their logs (journalctl / podman logs), and "
@@ -188,7 +188,7 @@ _TOOL_EXAMPLES = {
     "files": [
         (
             "Read src/forge/main.py",
-            '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"src/forge/main.py\\"}"}',
+            '{"tool":"files","content":{"action":"read","path":"src/forge/main.py"}}',
         ),
         # Deliberate second example: without one, the model only ever
         # sees "read" and defaults to answering with code as plain
@@ -198,11 +198,19 @@ _TOOL_EXAMPLES = {
         # you created" failed with file-not-found because nothing had
         # ever been written). A small local model needs to see the
         # write shape, not just read about it in the description.
+        #
+        # This example is deliberately multi-line: hello.py used to be
+        # the ONLY write that worked, and only by accident -- a single
+        # print() line has no brace to confuse the old scanner and no
+        # newline to escape. Showing a body with both is what teaches
+        # the shape that actually failed live.
         (
             "Crée un fichier hello.py qui affiche Hello World",
             (
-                '{"tool":"files","content":"{\\"action\\":\\"write\\",'
-                '\\"path\\":\\"hello.py\\",\\"content\\":\\"print(\'Hello, World!\')\\"}"}'
+                '{"tool":"files","content":{"action":"write",'
+                '"path":"hello.py","content":"def main():\\n'
+                "    print('Hello, World!')\\n\\n"
+                'main()\\n"}}'
             ),
         ),
         # Third example: editing an EXISTING named file needs its
@@ -218,8 +226,8 @@ _TOOL_EXAMPLES = {
         (
             "Dans hello.go, remplace Hello World par Bienvenue",
             (
-                '{"tool":"files","content":"{\\"action\\":\\"read\\",'
-                '\\"path\\":\\"hello.go\\"}","done":false}'
+                '{"tool":"files","content":{"action":"read",'
+                '"path":"hello.go"},"done":false}'
             ),
         ),
         # Fourth example: disambiguates from "review" below. A bare
@@ -232,7 +240,7 @@ _TOOL_EXAMPLES = {
         # tools based on whether feedback is requested.
         (
             "Relis hello.go",
-            '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"hello.go\\"}"}',
+            '{"tool":"files","content":{"action":"read","path":"hello.go"}}',
         ),
     ],
     "shell": [
@@ -245,8 +253,8 @@ _TOOL_EXAMPLES = {
         (
             "Remember: we decided to use SQLite-vec for the RAG",
             (
-                '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
-                '\\"kind\\":\\"decision\\",\\"content\\":\\"Use SQLite-vec for the RAG\\"}"}'
+                '{"tool":"memory","content":{"action":"remember",'
+                '"kind":"decision","content":"Use SQLite-vec for the RAG"}}'
             ),
         ),
         # Deliberate second example (every other tool gets exactly one):
@@ -256,8 +264,8 @@ _TOOL_EXAMPLES = {
         (
             "Mémorise, je possède un Steam Deck",
             (
-                '{"tool":"memory","content":"{\\"action\\":\\"remember\\",'
-                '\\"kind\\":\\"fact\\",\\"content\\":\\"Possède un Steam Deck\\"}"}'
+                '{"tool":"memory","content":{"action":"remember",'
+                '"kind":"fact","content":"Possède un Steam Deck"}}'
             ),
         ),
     ],
@@ -284,10 +292,7 @@ _TOOL_EXAMPLES = {
         # between the two tools depending on unrelated history).
         (
             "Peux-tu relire src/forge/graph.py et me donner ton avis ?",
-            (
-                '{"tool":"review","content":"{\\"file_path\\":'
-                '\\"src/forge/graph.py\\"}"}'
-            ),
+            '{"tool":"review","content":{"file_path":"src/forge/graph.py"}}',
         ),
         # Second example: with test_path set, the review graph runs
         # that file's tests first and uses the output as evidence --
@@ -296,9 +301,9 @@ _TOOL_EXAMPLES = {
         (
             "Relis src/forge/graph.py et lance ses tests dans tests/test_graph.py",
             (
-                '{"tool":"review","content":"{\\"file_path\\":'
-                '\\"src/forge/graph.py\\",\\"test_path\\":'
-                '\\"tests/test_graph.py\\"}"}'
+                '{"tool":"review","content":{"file_path":'
+                '"src/forge/graph.py","test_path":'
+                '"tests/test_graph.py"}}'
             ),
         ),
     ],
@@ -342,9 +347,9 @@ _TOOL_EXAMPLES = {
         (
             "Le service searxng plante en boucle, tu peux regarder ?",
             (
-                '{"tool":"sysadmin","content":"{\\"target_hint\\":'
-                '\\"searxng\\",\\"question\\":\\"pourquoi le service '
-                'redémarre en boucle ?\\"}"}'
+                '{"tool":"sysadmin","content":{"target_hint":'
+                '"searxng","question":"pourquoi le service '
+                'redémarre en boucle ?"}}'
             ),
         ),
         # Contrast: vague problem, no named service -- still sysadmin,
@@ -353,8 +358,8 @@ _TOOL_EXAMPLES = {
         (
             "Mon Steam Deck rame depuis ce matin, tu peux regarder ?",
             (
-                '{"tool":"sysadmin","content":"{\\"question\\":'
-                '\\"pourquoi le système est lent depuis ce matin ?\\"}"}'
+                '{"tool":"sysadmin","content":{"question":'
+                '"pourquoi le système est lent depuis ce matin ?"}}'
             ),
         ),
         # Contrast: reading a specific log FILE by path is "files",
@@ -362,7 +367,7 @@ _TOOL_EXAMPLES = {
         # sysadmin, same distinction already drawn for review vs files.
         (
             "Peux-tu lire le fichier /var/log/forge/debug.log ?",
-            '{"tool":"files","content":"{\\"action\\":\\"read\\",\\"path\\":\\"/var/log/forge/debug.log\\"}"}',
+            '{"tool":"files","content":{"action":"read","path":"/var/log/forge/debug.log"}}',
         ),
     ],
 }
@@ -401,7 +406,8 @@ def _build_template(tools: list[str]) -> str:
         "Format:\n"
         "{\n"
         f'  "tool": {_tool_enum(tools)},\n'
-        '  "content": "non-empty string"\n'
+        '  "content": "non-empty string", or a JSON object for the\n'
+        "             tools whose content is described as one below\n"
         "}\n\n"
         'Optional: add "done": false to this JSON if you need another step\n'
         "after this one to fully answer (rare — only for multi-step tasks).\n"
@@ -413,6 +419,8 @@ def _build_template(tools: list[str]) -> str:
         "- NEVER return empty string\n"
         "- NEVER return null\n"
         "- NEVER return partial JSON\n"
+        "- When content is a JSON object, write the object itself — never\n"
+        "  a string containing escaped JSON\n"
         "- NEVER add text outside the JSON object\n"
         "- Stop generating immediately after the closing brace\n"
         "- Use the conversation history below only as context; do not repeat it\n\n"

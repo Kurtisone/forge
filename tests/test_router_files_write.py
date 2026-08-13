@@ -19,6 +19,7 @@ import json
 
 import forge.tools.registry as registry_mod
 from forge.router.parser import _all_json_objects, parse_router_output
+from forge.router.prompt import build_router_prompt
 
 # Real file bodies whose braces do NOT balance on their own, which is
 # the normal case for a snippet, not an exotic one.
@@ -177,3 +178,69 @@ def test_string_content_shape_still_accepted(monkeypatch):
     decision = parse_router_output(_router_output(BALANCED_BODIES["go"], "hello.go"))
     assert decision.tool == "files"
     assert json.loads(decision.content)["path"] == "hello.go"
+
+
+# ── 3. the prompt and the parser agree ──────────────────────────────
+
+_JSON_PAYLOAD_TOOLS = ("files", "memory", "review", "sysadmin")
+
+_ALL_TOOLS = [
+    "chat",
+    "code",
+    "files",
+    "shell",
+    "git",
+    "memory",
+    "recall",
+    "review",
+    "research",
+    "web_fetch",
+    "web_search",
+    "sysadmin",
+]
+
+
+def _example_lines(prompt: str) -> list[str]:
+    return [
+        line.strip()
+        for line in prompt.splitlines()
+        if line.strip().startswith("{") and '"tool":"' in line
+    ]
+
+
+def test_every_worked_example_parses_into_the_tool_it_names(monkeypatch):
+    """The examples ARE the contract for a small local model: whatever
+    shape they demonstrate is what it will imitate. If one drifts out
+    of what the parser accepts, the model is being taught to fail."""
+    monkeypatch.setattr(registry_mod, "available_tools", lambda: list(_ALL_TOOLS))
+    prompt = build_router_prompt("x", available_tools=_ALL_TOOLS)
+    lines = _example_lines(prompt)
+    assert len(lines) >= 15
+    for line in lines:
+        expected = json.loads(line)["tool"]
+        decision = parse_router_output(line)
+        assert decision.tool == expected, line
+        assert decision.is_fallback is False, line
+
+
+def test_json_payload_examples_never_re_encode_their_payload(monkeypatch):
+    """Guards the regression directly: a payload demonstrated as an
+    escaped string teaches the double escaping the model cannot hold
+    on multi-line content."""
+    prompt = build_router_prompt("x", available_tools=_ALL_TOOLS)
+    for line in _example_lines(prompt):
+        obj = json.loads(line)
+        if obj["tool"] in _JSON_PAYLOAD_TOOLS:
+            assert isinstance(obj["content"], dict), line
+
+
+def test_json_payload_examples_reach_their_tool_as_parseable_json(monkeypatch):
+    """The re-encoding has to land as something the tool's own
+    json.loads accepts -- str(dict) would have produced Python repr
+    with single quotes and broken every one of them."""
+    monkeypatch.setattr(registry_mod, "available_tools", lambda: list(_ALL_TOOLS))
+    prompt = build_router_prompt("x", available_tools=_ALL_TOOLS)
+    for line in _example_lines(prompt):
+        obj = json.loads(line)
+        if obj["tool"] in _JSON_PAYLOAD_TOOLS:
+            assert json.loads(parse_router_output(line).content) == obj["content"]
