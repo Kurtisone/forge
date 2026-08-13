@@ -263,6 +263,13 @@ EMBEDDING_MAX_CHARS = int(os.getenv("EMBEDDING_MAX_CHARS", "1500"))
 # dropped, with a warning.
 EMBEDDING_MAX_CHUNKS = int(os.getenv("EMBEDDING_MAX_CHUNKS", "16"))
 RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")
+# Per-hit ceiling on what the memory tool feeds back into the router
+# prompt. A "fact" entry is one line, but a "history_summary" written
+# by compaction holds a whole evicted conversation block, so five hits
+# could be several thousand characters of mostly-irrelevant transcript
+# -- burying the one line that answered the question and paying for it
+# twice, in prompt tokens and in prefill time.
+MEMORY_RECALL_MAX_CHARS = int(os.getenv("MEMORY_RECALL_MAX_CHARS", "500"))
 
 # --- Web fetch tool ----------------------------------------------------------
 # WEB_FETCH_ALLOWED_DOMAINS is empty by default (any public domain is

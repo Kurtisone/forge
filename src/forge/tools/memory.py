@@ -21,6 +21,12 @@ also optional (top_k defaults to 5). "kind" on remember defaults to
 isn't a decision or a todo, and a small local model asked to route a
 plain statement won't reliably invent a kind for it either.
 
+Recall output is formatted for a prompt, not for a log: entries are
+ranked so deliberately-recorded ones come before archived transcript,
+and each is clipped to MEMORY_RECALL_MAX_CHARS. What this tool returns
+is pasted straight into the next routing decision, so its size is paid
+for twice -- in context window and in prefill time.
+
 To activate this tool add it to ENABLED_TOOLS in .env.local:
     ENABLED_TOOLS=chat,code,memory
 """
@@ -28,9 +34,16 @@ To activate this tool add it to ENABLED_TOOLS in .env.local:
 import json
 
 from forge import rag
+from forge.config import MEMORY_RECALL_MAX_CHARS
 from forge.logger import log
 
 _VALID_KINDS = ("decision", "todo", "fact")
+
+# Kinds this tool can retrieve but never writes: compaction.py stores
+# evicted history under "history_summary" by calling rag.remember()
+# directly, bypassing _VALID_KINDS. Recall has to know about it anyway
+# -- it comes back in search results and dominates them by sheer size.
+_ARCHIVE_KINDS = ("history_summary",)
 
 
 def _remember(instruction: dict) -> str:
@@ -84,10 +97,35 @@ def _recall(instruction: dict) -> str:
         return "No matching memory found."
 
     lines = []
-    for r in results:
+    for r in _rank(results):
         proj = f"/{r['project']}" if r["project"] else ""
-        lines.append(f"- [{r['kind']}{proj}] {r['content']}")
+        lines.append(f"- [{r['kind']}{proj}] {_clip(r['content'])}")
     return "\n".join(lines)
+
+
+def _rank(results: list[dict]) -> list[dict]:
+    """
+    Put deliberately-recorded entries ahead of archived transcript.
+
+    rag.search() orders purely by vector distance, which treats a
+    one-line fact and a whole compacted conversation as equal
+    candidates. They aren't: a "fact" was written because someone
+    decided it was worth keeping, while a "history_summary" is bulk
+    archive that compaction dumped in verbatim. Asked "list my
+    hardware", the search returned both and the two useful lines
+    landed at the bottom of several thousand characters of unrelated
+    chat.
+
+    This is a stable sort, so distance order still decides within each
+    group -- only the two groups are separated.
+    """
+    return sorted(results, key=lambda r: r["kind"] in _ARCHIVE_KINDS)
+
+
+def _clip(content: str) -> str:
+    if len(content) <= MEMORY_RECALL_MAX_CHARS:
+        return content
+    return content[:MEMORY_RECALL_MAX_CHARS].rstrip() + " […]"
 
 
 def run(content: str) -> str:
