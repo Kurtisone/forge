@@ -102,3 +102,104 @@ def test_test_tool_shell_allowlist_is_independent(tmp_path, monkeypatch):
 
     r = test_mod.run("cat somefile.txt")
     assert "not in the allowlist" in r
+
+
+# ── audit E-1: argument confinement ──────────────────────────────────
+#
+# These bound WHERE the code the runner executes can come from. They
+# do not make this tool safe -- running pytest is running workspace
+# code, by design. See tools/test.py's docstring and SECURITY.md.
+
+
+def _workspace(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "TEST_ALLOWED_COMMANDS", {"pytest", "ruff"})
+    monkeypatch.setattr(cfg, "TEST_TIMEOUT", 30)
+    monkeypatch.setattr(test_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(test_mod, "TEST_ALLOWED_COMMANDS", {"pytest", "ruff"})
+    monkeypatch.setattr(test_mod, "TEST_TIMEOUT", 30)
+
+
+def test_absolute_path_argument_is_refused(tmp_path, monkeypatch):
+    _workspace(tmp_path, monkeypatch)
+    r = test_mod.run("ruff check /etc")
+    assert "points outside the workspace" in r
+
+
+def test_parent_traversal_argument_is_refused(tmp_path, monkeypatch):
+    _workspace(tmp_path, monkeypatch)
+    r = test_mod.run("pytest ../../tests")
+    assert "points outside the workspace" in r
+
+
+def test_a_flag_value_that_looks_absolute_is_still_refused(tmp_path, monkeypatch):
+    """
+    `-p /somewhere/plugin` is how pytest is told to import a plugin
+    module. The flag itself is skipped, its value is not -- that value
+    is exactly the path this check exists for.
+    """
+    _workspace(tmp_path, monkeypatch)
+    r = test_mod.run("pytest -p /tmp/evil_plugin")
+    assert "points outside the workspace" in r
+
+
+def test_flags_are_not_treated_as_paths(tmp_path, monkeypatch):
+    """A refusal on "--tb=short" would make the tool useless."""
+    _workspace(tmp_path, monkeypatch)
+    (tmp_path / "test_sample.py").write_text("def test_ok():\n    assert True\n")
+    r = test_mod.run("pytest --tb=short -q test_sample.py")
+    assert "1 passed" in r
+
+
+def test_a_subdirectory_argument_is_allowed(tmp_path, monkeypatch):
+    _workspace(tmp_path, monkeypatch)
+    sub = tmp_path / "suite"
+    sub.mkdir()
+    (sub / "test_sample.py").write_text("def test_ok():\n    assert True\n")
+    r = test_mod.run("pytest suite")
+    assert "1 passed" in r
+
+
+def test_traversal_that_comes_back_inside_is_allowed(tmp_path, monkeypatch):
+    """
+    ".." is not banned as a string -- what matters is where the path
+    lands. Rejecting the substring would be a different rule, and a
+    worse one: it refuses legitimate paths while a symlink still
+    walks straight past it.
+    """
+    _workspace(tmp_path, monkeypatch)
+    sub = tmp_path / "suite"
+    sub.mkdir()
+    (sub / "test_sample.py").write_text("def test_ok():\n    assert True\n")
+    r = test_mod.run("pytest suite/../suite/test_sample.py")
+    assert "1 passed" in r
+
+
+def test_enabling_files_and_test_together_warns_at_import(caplog):
+    """
+    Audit E-1. The two tools together are equivalent to `shell`, and
+    nothing in either tool's own allowlist says so. The warning is the
+    only place that configuration fact is stated at runtime, so it is
+    worth a test even though shell.py's equivalent tripwire has none.
+
+    Logged at import rather than per run, deliberately: a fact about
+    how the instance is configured belongs in the startup log, not
+    repeated into output people learn to scroll past.
+    """
+    import importlib
+
+    original = cfg.ENABLED_TOOLS
+    try:
+        cfg.ENABLED_TOOLS = {"chat", "code", "files", "test"}
+        with caplog.at_level("WARNING"):
+            importlib.reload(test_mod)
+        assert "equivalent to 'shell'" in caplog.text
+
+        caplog.clear()
+        cfg.ENABLED_TOOLS = {"chat", "code", "test"}
+        with caplog.at_level("WARNING"):
+            importlib.reload(test_mod)
+        assert "equivalent to 'shell'" not in caplog.text
+    finally:
+        cfg.ENABLED_TOOLS = original
+        importlib.reload(test_mod)
