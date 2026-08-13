@@ -82,6 +82,46 @@ def _strip_leaked_role_prefix(text: str) -> str:
     return _LEAKED_ROLE_PREFIX.sub("", text, count=1)
 
 
+def _matching_brace(text: str, start: int) -> int | None:
+    """
+    Index of the "}" closing the "{" at *start*, or None if it never
+    closes.
+
+    Braces inside JSON string literals are skipped, which is the whole
+    point of this function existing rather than a plain counter: a
+    router object's "content" carries a nested JSON payload whose own
+    "content" is arbitrary file text, and real file text has braces
+    that don't balance (a Go/C/Rust/JS snippet cut mid-function, a
+    stray "}" in a comment, a Python dict literal). A blind counter
+    hit zero early -- or never -- and threw away a perfectly valid
+    router decision, sending files:write to the plain-text fallback.
+    "print('...')" happened to survive only because it has no brace
+    at all.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for j in range(start, len(text)):
+        ch = text[j]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+    return None
+
+
 def _all_json_objects(text: str) -> list[dict]:
     """
     Return all complete, parseable {"tool":..., "content":...} objects
@@ -93,24 +133,24 @@ def _all_json_objects(text: str) -> list[dict]:
         start = text.find("{", i)
         if start == -1:
             break
-        depth = 0
-        for j in range(start, len(text)):
-            if text[j] == "{":
-                depth += 1
-            elif text[j] == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = text[start : j + 1]
-                    try:
-                        obj = json.loads(candidate)
-                        if isinstance(obj, dict) and "tool" in obj:
-                            results.append(obj)
-                    except json.JSONDecodeError:
-                        pass
-                    i = j + 1
-                    break
-        else:
-            break
+        end = _matching_brace(text, start)
+        if end is None:
+            # This "{" never closes -- a truncated object, or a brace
+            # inside prose the model wrote around its JSON. Resume the
+            # search one char later instead of giving up on the rest of
+            # the text: a later object can still be complete, and with
+            # depth counting it would otherwise be unreachable (its
+            # closing brace only ever brings depth 2 -> 1, never 0).
+            i = start + 1
+            continue
+        candidate = text[start : end + 1]
+        try:
+            obj = json.loads(candidate)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict) and "tool" in obj:
+            results.append(obj)
+        i = end + 1
     return results
 
 
