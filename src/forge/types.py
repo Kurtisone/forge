@@ -80,6 +80,23 @@ class TraceStep:
         self.duration_ms = int((time.monotonic() - self.started_at) * 1000)
         self.sub_steps = result.sub_steps
 
+    def abandon(self, note: str) -> None:
+        """
+        Close a step that routed but never dispatched: the provider
+        failed, or the loop guard stopped the run between the routing
+        call and the tool call.
+
+        Such a step is not free -- it paid for a full routing call,
+        which on a local model is the most expensive thing in the run.
+        Leaving duration_ms at None dropped it from the trace's total
+        (see trace.py), so a fallback run reported roughly half the
+        time it actually took, and the UI rendered the missing value
+        as a literal "nullms".
+        """
+        self.tool_ok = None
+        self.tool_error = note
+        self.duration_ms = int((time.monotonic() - self.started_at) * 1000)
+
     def to_dict(self) -> dict:
         return {
             "step": self.step,
@@ -105,6 +122,11 @@ class AgentState:
 
     user_input: str
     max_steps: int
+    # Wall-clock start of the whole run. trace.py reports total_ms from
+    # this rather than by summing per-step durations: a step that never
+    # reaches finish() contributes 0 to a sum, so any early exit
+    # silently under-reported the run.
+    started_at: float = field(default_factory=time.monotonic)
     history: list[dict] = field(default_factory=list)
     # Transient tool-result context for a multi-step run, kept separate
     # from `history`. `history` must always mirror exactly what's

@@ -623,6 +623,12 @@ def test_memory_repeated_recall_degrades_gracefully_instead_of_erroring(
     assert result.tool == "memory"
     assert result.output == "- [fact] Possède un Steam Deck"
     assert "Stopped" not in result.output
+    # The second step routed (a full, expensive LLM call) and only then
+    # tripped the guard. It must still be timed, or the trace reports
+    # roughly half of what the run actually cost.
+    assert len(result.trace) == 2
+    assert result.trace[1].duration_ms is not None
+    assert "loop guard" in result.trace[1].tool_error
 
 
 def test_web_search_repeated_call_degrades_gracefully_instead_of_erroring(

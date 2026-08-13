@@ -778,7 +778,7 @@ async function loadTraces() {
         const hasSub = Array.isArray(s.sub_steps) && s.sub_steps.length > 0
         stepsHtml += `<span class="step-pill ${s.tool_ok ? 'ok' : 'err'} ${hasSub ? 'expandable' : ''}"` +
           (hasSub ? ` onclick="toggleSubSteps('${subId}', this)"` : '') + `>` +
-          `${s.router_tool || '?'} ${s.duration_ms}ms` +
+          `${s.router_tool || '?'} ${s.duration_ms != null ? s.duration_ms + 'ms' : '—'}` +
           (hasSub ? '<span class="caret">▸</span>' : '') +
           `</span>`
         if (hasSub) {

@@ -26,7 +26,15 @@ from forge.logger import log
 
 
 def _build_record(state) -> dict:
-    """Build a serializable trace record from an AgentState."""
+    """Build a serializable trace record from an AgentState.
+
+    total_ms is wall clock from the start of run(), not the sum of the
+    per-step durations. Summing looked equivalent and wasn't: a step
+    that exits before dispatch (provider error, loop guard) has no
+    duration to contribute, so its routing call -- often the single
+    most expensive part of the run on a local model -- vanished from
+    the total. A run that took 140s reported 69s.
+    """
     steps = []
     for ts in state.trace:
         steps.append(
@@ -48,8 +56,15 @@ def _build_record(state) -> dict:
         "final_tool": state.final_tool,
         "ok": state.ok,
         "error": state.error,
-        "total_ms": sum((s.get("duration_ms") or 0) for s in steps),
+        "total_ms": _elapsed_ms(state),
     }
+
+
+def _elapsed_ms(state) -> int:
+    started_at = getattr(state, "started_at", None)
+    if started_at is None:
+        return sum((ts.duration_ms or 0) for ts in state.trace)
+    return int((time.monotonic() - started_at) * 1000)
 
 
 def save(state) -> None:

@@ -50,6 +50,7 @@ class Orchestrator:
                 decision = self._route(state)
             except ProviderError as e:
                 log.error("provider failure: %s", e)
+                ts.abandon(f"provider failure: {e}")
                 state.ok = False
                 state.error = str(e)
                 state.final_output = "The model backend is unavailable."
@@ -89,12 +90,16 @@ class Orchestrator:
                         decision.tool,
                         decision.content,
                     )
+                    ts.abandon(
+                        "loop guard: repeated call, fell back to previous result"
+                    )
                     return self._finish(state, remember=True)
 
                 err = LoopGuardError(
                     f"repeated call to tool={decision.tool!r} with identical content"
                 )
                 log.error(str(err))
+                ts.abandon(str(err))
                 state.ok = False
                 state.error = str(err)
                 state.final_output = (
