@@ -657,6 +657,19 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 
 ---
 
+### Security
+
+Forge dispatches model-chosen tools on your own machine, sometimes
+against data it fetched from elsewhere. [SECURITY.md](SECURITY.md)
+states the threat model it is built for (one operator, one machine,
+private network, public repo), what is enforced deterministically in
+code rather than asked of the model, and the limits that are known and
+accepted -- including the one worth reading before you edit
+`ENABLED_TOOLS`: `files` and `test` together are equivalent to
+`shell`.
+
+---
+
 ### Status
 
 Forge is an experimental local runtime, not a production framework.

@@ -1,19 +1,44 @@
 """
-Sandboxed test/lint tool.
+Test/lint tool. NOT a sandbox -- read the second section.
 
-Runs test and lint commands confined to WORKSPACE_DIR, via a
-dedicated allowlist independent from the general-purpose shell tool
+Runs test and lint commands in WORKSPACE_DIR, via a dedicated
+allowlist independent from the general-purpose shell tool
 (TEST_ALLOWED_COMMANDS, default: pytest,ruff). Deliberately separate
 from tools/shell.py: "run the tests" / "lint this" should be
 first-class router intents with their own narrow, purpose-built
 allowlist, rather than the router constructing a raw shell command
 that happens to also be allowed by SHELL_ALLOWED_COMMANDS.
 
-Same three protection layers as shell.py:
+What this tool actually guarantees:
 1. Allowlist: only runners in TEST_ALLOWED_COMMANDS are accepted.
 2. Timeout: execution is hard-killed after TEST_TIMEOUT seconds.
-3. Working directory: runs with cwd=WORKSPACE_DIR so relative paths
-   cannot escape to the host filesystem.
+3. Path arguments stay inside WORKSPACE_DIR: an absolute path or a
+   `..` climbing out is rejected before anything runs, so this tool
+   can't be used to lint /etc or collect tests from the host.
+4. Minimal subprocess env (PATH, HOME, PYTHONPATH) -- no host
+   credentials or tokens are passed down.
+
+What it does NOT guarantee (audit E-1):
+
+    Running pytest means executing the Python code in the workspace.
+    That is the whole point of a test runner, and there is no version
+    of it that isn't arbitrary code execution. `pytest test_x.py`
+    imports test_x.py and runs whatever is at module level; pytest
+    also auto-loads conftest.py from the rootdir before collecting
+    anything, so even an invocation that names only a specific,
+    innocuous file executes a conftest.py sitting next to it.
+
+    So if `files` and `test` are both enabled, together they are
+    equivalent to `shell`, whatever SHELL_ALLOWED_COMMANDS says:
+    write a file, then run it. The allowlist here restricts which
+    binary starts, not what that binary then executes. Point 3 above
+    bounds WHERE that code can come from -- the workspace -- it does
+    not stop it running.
+
+    Making that safe needs isolation this process doesn't have (a
+    disposable container per run). Until then the honest statement is
+    the one above, and a warning is logged at import when both tools
+    are enabled. See SECURITY.md.
 
 The allowed runner's executable is resolved via shutil.which() against
 the real process PATH, not the minimal one the subprocess itself runs
@@ -39,16 +64,61 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from forge.config import TEST_ALLOWED_COMMANDS, TEST_TIMEOUT, WORKSPACE_DIR
+from forge.config import (
+    ENABLED_TOOLS,
+    TEST_ALLOWED_COMMANDS,
+    TEST_TIMEOUT,
+    WORKSPACE_DIR,
+)
 from forge.logger import log
 
 _MAX_OUTPUT_CHARS = 8_000
+
+# Logged once at import, same reasoning as shell.py's allowlist
+# tripwire: this is a configuration fact, and repeating it into every
+# run's output is how people learn to scroll past it.
+if {"files", "test"} <= ENABLED_TOOLS:
+    log.warning(
+        "test: 'files' and 'test' are both enabled -- together they are "
+        "equivalent to 'shell' regardless of SHELL_ALLOWED_COMMANDS "
+        "(write a file, then run it; pytest executes workspace code by "
+        "design, and auto-loads conftest.py before collection). "
+        "Reasonable on a trusted local box, never on an instance "
+        "reachable from the network. See SECURITY.md."
+    )
 
 
 def _safe_cwd() -> Path:
     cwd = Path(WORKSPACE_DIR).resolve()
     cwd.mkdir(parents=True, exist_ok=True)
     return cwd
+
+
+def _escaping_arg(arg: str, workspace: Path) -> bool:
+    """
+    Would this argument point outside the workspace?
+
+    Flags are skipped: "--tb=short" is not a path, and a value that
+    follows a flag ("-k", "not slow") resolves harmlessly inside the
+    workspace anyway. What this catches is the shape that matters --
+    an absolute path, or a relative one climbing out with "..".
+
+    Note the asymmetry with files.py's _safe_path, which reinterprets
+    a leading "/" as the workspace root rather than rejecting it.
+    That call was made because the router genuinely emits "/hello.go"
+    meaning the workspace file. Here an absolute path is far more
+    likely to be exactly what it looks like -- "ruff check /etc" --
+    and rewriting it silently would turn a refusal into a surprise.
+    """
+    if arg.startswith("-"):
+        return False
+    if Path(arg).is_absolute():
+        return True
+    try:
+        (workspace / arg).resolve().relative_to(workspace)
+    except ValueError:
+        return True
+    return False
 
 
 def run(content: str) -> str:
@@ -70,6 +140,15 @@ def run(content: str) -> str:
             f"Add it to TEST_ALLOWED_COMMANDS in .env.local to enable it."
         )
 
+    workspace = _safe_cwd()
+    for arg in parts[1:]:
+        if _escaping_arg(arg, workspace):
+            return (
+                f"[error] argument {arg!r} points outside the workspace.\n"
+                f"This tool only runs against {str(workspace)!r}; use a "
+                "path relative to it."
+            )
+
     resolved = shutil.which(runner)
     if resolved is None:
         return (
@@ -77,7 +156,7 @@ def run(content: str) -> str:
             f"Is {runner!r} installed in this environment?"
         )
 
-    cwd = _safe_cwd()
+    cwd = workspace
     # Minimal env for the subprocess itself (no leaked host secrets/
     # tokens) -- but the LOOKUP of where the runner actually lives
     # uses the real process PATH via shutil.which() above, not this
