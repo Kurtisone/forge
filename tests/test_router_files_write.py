@@ -86,3 +86,94 @@ def test_last_object_still_wins_over_echoed_earlier_ones():
         '{"tool":"chat","content":"the actual answer"}'
     )
     assert parse_router_output(text).content == "the actual answer"
+
+
+# ── 2. nested object content (no double escaping) ───────────────────
+
+
+def _files_tool(monkeypatch):
+    monkeypatch.setattr(
+        registry_mod, "available_tools", lambda: ["chat", "code", "files"]
+    )
+
+
+def test_object_content_is_re_encoded_for_the_tool(monkeypatch):
+    """The payload arrives as a real object; the tool contract
+    (run(content: str) parsing JSON) is unchanged."""
+    _files_tool(monkeypatch)
+    body = "def main():\n    print('hi')\n"
+    raw = json.dumps(
+        {
+            "tool": "files",
+            "content": {"action": "write", "path": "a.py", "content": body},
+        }
+    )
+    decision = parse_router_output(raw)
+    assert decision.tool == "files"
+    assert isinstance(decision.content, str)
+    assert json.loads(decision.content) == {
+        "action": "write",
+        "path": "a.py",
+        "content": body,
+    }
+
+
+def test_object_content_survives_unbalanced_braces(monkeypatch):
+    """Both halves of the fix have to hold at once: the object shape
+    is worthless if the scanner still loses the enclosing object."""
+    _files_tool(monkeypatch)
+    body = UNBALANCED_BODIES["js_arrow_truncated"]
+    raw = json.dumps(
+        {
+            "tool": "files",
+            "content": {"action": "write", "path": "f.js", "content": body},
+        }
+    )
+    decision = parse_router_output(raw)
+    assert decision.tool == "files"
+    assert json.loads(decision.content)["content"] == body
+
+
+def test_object_content_keeps_non_ascii_readable(monkeypatch):
+    _files_tool(monkeypatch)
+    raw = json.dumps(
+        {
+            "tool": "files",
+            "content": {"action": "write", "path": "n.txt", "content": "é"},
+        },
+        ensure_ascii=False,
+    )
+    assert "é" in parse_router_output(raw).content
+
+
+def test_done_false_still_works_with_object_content(monkeypatch):
+    _files_tool(monkeypatch)
+    raw = json.dumps(
+        {
+            "tool": "files",
+            "content": {"action": "read", "path": "hello.go"},
+            "done": False,
+        }
+    )
+    decision = parse_router_output(raw)
+    assert decision.done is False
+
+
+def test_empty_object_content_falls_through(monkeypatch):
+    """An empty payload is no more usable than an empty string, and
+    must not short-circuit the rest of the extraction cascade."""
+    _files_tool(monkeypatch)
+    text = '{"tool":"files","content":{}}\nBien sûr, voici la réponse.'
+    decision = parse_router_output(text)
+    assert decision.tool == "chat"
+    assert "Bien sûr" in decision.content
+
+
+def test_string_content_shape_still_accepted(monkeypatch):
+    """The object shape is what the prompt now teaches, but the string
+    shape has to keep working: grammar-disabled setups, other
+    providers, and any model that drifts back to it."""
+    _files_tool(monkeypatch)
+    decision = parse_router_output(_router_output(BALANCED_BODIES["go"], "hello.go"))
+    assert decision.tool == "files"
+    assert json.loads(decision.content)["path"] == "hello.go"

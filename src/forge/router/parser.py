@@ -172,8 +172,24 @@ def _validate_json_obj(data: dict, cleaned: str) -> RouterDecision | None:
     if tool not in _valid_tools():
         log.warning("router picked unknown tool %r, falling back to chat", tool)
         tool = "chat"
-    if not content or not str(content).strip():
+    if not content or (isinstance(content, str) and not content.strip()):
         return None  # empty content → try next extraction
+
+    # A tool whose payload is itself JSON (files, memory, review,
+    # sysadmin) may send it as a real nested object rather than a
+    # JSON string, and that's now the shape the prompt teaches. It
+    # removes a whole level of escaping the model demonstrably does
+    # not hold: nesting JSON inside a JSON *string* needs \\n where
+    # the model writes \n, and the inner parse then dies on an
+    # invalid control character -- which is what made files:write
+    # fail for any multi-line file body. Re-encoding here keeps
+    # RouterDecision.content a string and every tool's run(content)
+    # contract untouched: they still receive JSON text to parse, just
+    # text this module produced instead of the model.
+    if isinstance(content, dict | list):
+        content = json.dumps(content, ensure_ascii=False)
+    if not str(content).strip():
+        return None
     # Optional multi-step continuation flag. Absent (the common case,
     # and every fine-tune/model that predates this field) means True:
     # one step, same as before. Only an explicit false continues the

@@ -21,7 +21,21 @@ def _rule_names(grammar: str) -> set[str]:
 def _referenced_names(grammar: str) -> set[str]:
     # crude but sufficient: any bare identifier token in the grammar body
     tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*", grammar)
-    keywords = {"root", "tool", "string", "schar", "hex", "boolean", "ws"}
+    keywords = {
+        "root",
+        "tool",
+        "content",
+        "object",
+        "member",
+        "array",
+        "value",
+        "string",
+        "schar",
+        "hex",
+        "number",
+        "boolean",
+        "ws",
+    }
     return {t for t in tokens if t in keywords}
 
 
@@ -68,6 +82,15 @@ def test_falls_back_to_default_pair_if_registry_returns_empty(monkeypatch):
     grammar = build_router_grammar()
     assert '"\\"chat\\""' in grammar
     assert '"\\"code\\""' in grammar
+
+
+def test_content_accepts_a_string_or_an_object():
+    """Sampling must be able to reach the nested-object shape: it's
+    what removes the double escaping the model can't hold on
+    multi-line file content (see router/parser.py)."""
+    grammar = build_router_grammar(available_tools=["chat", "files"])
+    assert re.search(r"^content\s*::=.*string.*\|.*object", grammar, re.MULTILINE)
+    assert re.search(r"^object\s*::=", grammar, re.MULTILINE)
 
 
 _TOKEN = re.compile(
