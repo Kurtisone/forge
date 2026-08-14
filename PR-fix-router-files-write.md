@@ -5,7 +5,7 @@ du lot 3 sécurité (donc pas des régressions du lot 3). Pris ensemble, ils
 faisaient échouer `files:write` depuis le chat pour à peu près **tout
 contenu de fichier réel**.
 
-Base : `1cdc26d`. **538 tests verts** (baseline 514), `ruff check` +
+Base : `1cdc26d`. **542 tests verts** (baseline 514), `ruff check` +
 `ruff format --check` OK, appliqué et vérifié par `git am` sur un clone
 vierge de `main`.
 
@@ -39,7 +39,30 @@ refermé faisait `break` et rendait *tout objet ultérieur* inatteignable
 (sa fermeture ne ramenait la profondeur que de 2 à 1, jamais à 0) ; on
 reprend maintenant un caractère plus loin.
 
-**`feat(router)` — `content` peut être un objet imbriqué.** Le parseur le
+**`feat(router)` + `fix(router)` — `content` DOIT être un objet pour les
+outils à payload JSON.** Première tentative : `content ::= string | object`
+pour tous les outils. Insuffisant — les deux branches restaient
+atteignables, et contre le prior d'un 9B pour la forme chaîne échappée,
+les exemples few-shot ont perdu. Confirmé au premier `files:write` réel,
+revenu en chaîne échappée et mort sur les guillemets non échappés de
+`import "fmt"`.
+
+Correctif réel : la grammaire conditionne la forme de `content` sur
+l'outil, ce que GBNF permet puisque `tool` est figé avant `content`.
+`root` se scinde en `payload_call` (content = objet, pour
+files/memory/review/sysadmin) et `text_call` (content = chaîne, pour
+chat/code et les autres). Une branche sans outil est omise (alternation
+vide = insatisfiable).
+
+C'est *pourquoi* la contrainte doit vivre dans la grammaire : dans la
+forme chaîne, le corps du fichier exige un double échappement que la
+grammaire ne peut pas vérifier — pour `schar`, tout le payload n'est que
+des caractères. Dans la forme objet, le corps est une chaîne JSON
+ordinaire, donc `schar` (qui exclut `"` nu et les caractères de contrôle)
+impose son échappement pendant le sampling. Le défaut cesse d'être
+rattrapé et devient impossible.
+
+**`feat(router)` — mécanique du ré-encodage.** Le parseur le
 ré-encode en `json.dumps`, donc `RouterDecision.content` reste une chaîne
 et **aucun contrat `run(content: str)` ne change** : les outils parsent
 toujours du texte JSON, produit par Forge au lieu du modèle. La grammaire

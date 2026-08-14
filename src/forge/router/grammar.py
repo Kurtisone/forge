@@ -94,6 +94,14 @@ def _tool_alternation(tools: list[str]) -> str:
 
 
 def _call_rule(name: str, tool_rule: str, content_rule: str) -> str:
+    # Rule names are hyphenated, not underscored, and that is not a
+    # style choice: llama.cpp's grammar lexer builds names out of
+    # is_word_char(), which accepts [a-zA-Z0-9-] and NOT "_". A name
+    # like `payload-call` lexes as the rule `payload` followed by
+    # garbage, and llama-server rejects the whole grammar with
+    # "expecting newline or end at _call" -- a 400 on every completion,
+    # so the router stops working entirely rather than degrading.
+    # See test_rule_names_use_only_characters_llama_cpp_accepts.
     return (
         f'{name} ::= "{{" ws "\\"tool\\"" ws ":" ws {tool_rule} ws "," ws '
         f'"\\"content\\"" ws ":" ws {content_rule} done? ws "}}"'
@@ -122,13 +130,13 @@ def build_router_grammar(available_tools: list[str] | None = None) -> str:
     # GBNF alternation is unsatisfiable, and a "files-only" tool set is
     # a perfectly legal ENABLED_TOOLS value.
     if payload_tools:
-        branches.append("payload_call")
-        rules.append(_call_rule("payload_call", "payload_tool", "object"))
-        rules.append(f"payload_tool ::= {_tool_alternation(payload_tools)}")
+        branches.append("payload-call")
+        rules.append(_call_rule("payload-call", "payload-tool", "object"))
+        rules.append(f"payload-tool ::= {_tool_alternation(payload_tools)}")
     if text_tools:
-        branches.append("text_call")
-        rules.append(_call_rule("text_call", "text_tool", "string"))
-        rules.append(f"text_tool ::= {_tool_alternation(text_tools)}")
+        branches.append("text-call")
+        rules.append(_call_rule("text-call", "text-tool", "string"))
+        rules.append(f"text-tool ::= {_tool_alternation(text_tools)}")
 
     root = "root    ::= " + " | ".join(branches)
     return "\n".join([root, *rules]) + "\n" + _SHARED_RULES
