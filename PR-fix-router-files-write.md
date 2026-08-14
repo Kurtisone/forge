@@ -5,7 +5,7 @@ du lot 3 sécurité (donc pas des régressions du lot 3). Pris ensemble, ils
 faisaient échouer `files:write` depuis le chat pour à peu près **tout
 contenu de fichier réel**.
 
-Base : `1cdc26d`. **542 tests verts** (baseline 514), `ruff check` +
+Base : `1cdc26d`. **543 tests verts** (baseline 514), `ruff check` +
 `ruff format --check` OK, appliqué et vérifié par `git am` sur un clone
 vierge de `main`.
 
@@ -79,6 +79,17 @@ ensemble — deux formes concurrentes côte à côte dans le même prompt, c'est
 la recette d'un routage instable sur un 9B (même leçon que l'ambiguïté
 `review`/`files` de la v3.10). L'exemple `hello.py` devient multi-ligne :
 il ne validait que le seul cas qui n'a jamais posé problème.
+
+**`fix(router)` — noms de règles en tirets.** La grammaire conditionnée
+était structurellement valide, passait tous les tests, et était refusée
+en bloc par llama-server : `expecting newline or end at _call`. llama.cpp
+lexe les noms de règles avec `is_word_char()`, qui accepte `[a-zA-Z0-9-]`
+et **pas** l'underscore — `payload_call` se lit donc comme la règle
+`payload` suivie de déchets. Résultat : 400 sur chaque complétion, le
+routeur ne dégradait pas, il mourait (16 ms, aucun routage). Le vrai
+manque était côté tests : ils n'assertaient que le *texte* généré, ce qui
+est exactement l'angle mort. `is_word_char()` est désormais réimplémenté
+dans la suite et chaque nom de règle vérifié contre lui.
 
 **`fix(tools)` — chargeur JSON tolérant partagé.** La forme chaîne ne
 disparaît pas (grammaire désactivée, provider sans GBNF, dérive du

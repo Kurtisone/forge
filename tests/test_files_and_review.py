@@ -90,17 +90,51 @@ def test_files_write_identical_content_reports_unchanged(tmp_path, monkeypatch):
     assert "```diff" not in r
 
 
-def test_files_write_new_path_has_no_diff(tmp_path, monkeypatch):
-    """A brand-new file has nothing to diff against -- plain confirmation."""
+def test_files_write_new_path_echoes_content_instead_of_a_diff(tmp_path, monkeypatch):
+    """A brand-new file has nothing to diff against, but a bare byte
+    count left the content invisible: after creating a file the user
+    had to go open it by hand, and a follow-up turn had nothing in the
+    conversation to refer back to."""
     monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
     monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
 
     r = files_mod.run(
-        json.dumps({"action": "write", "path": "new.txt", "content": "content"})
+        json.dumps({"action": "write", "path": "new.py", "content": "x = 1\n"})
     )
 
-    assert "[ok] written" in r
     assert "```diff" not in r
+    assert "créé" in r
+    assert "x = 1" in r
+    assert "```python" in r
+
+
+def test_files_write_echo_is_capped(tmp_path, monkeypatch):
+    """A generated file can be large; the echo must not flood the
+    conversation (and the router prompt) with it."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    body = "y = 2\n" * 5000
+    r = files_mod.run(
+        json.dumps({"action": "write", "path": "big.py", "content": body})
+    )
+
+    assert len(r) < len(body)
+    assert "tronqué" in r
+
+
+def test_files_write_existing_path_still_diffs(tmp_path, monkeypatch):
+    """The echo is for creation only -- modification keeps the diff,
+    which is the whole point of not re-showing an unchanged file."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+    (tmp_path / "e.txt").write_text("before\n")
+
+    r = files_mod.run(
+        json.dumps({"action": "write", "path": "e.txt", "content": "after\n"})
+    )
+
+    assert "```diff" in r
 
 
 def test_files_write_over_oversized_existing_file_skips_diff(tmp_path, monkeypatch):
