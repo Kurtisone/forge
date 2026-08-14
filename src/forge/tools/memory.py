@@ -49,6 +49,7 @@ import json
 from forge import rag
 from forge.config import MEMORY_RECALL_MAX_CHARS
 from forge.logger import log
+from forge.tool_payload import loads_payload
 
 _VALID_KINDS = ("decision", "todo", "fact")
 
@@ -177,9 +178,17 @@ def run(content: str) -> str:
         {"action": "recall", "query": "...", "top_k": 5}
     """
     try:
-        instruction = json.loads(content)
+        instruction = loads_payload(content, "memory")
     except (json.JSONDecodeError, TypeError):
         return f"[error] memory tool expects JSON, got: {content[:80]!r}"
+
+    # Same guard files/review/sysadmin already had, and the reason
+    # they had it: valid JSON is not necessarily an object. A bare
+    # '"recall"' or a list parses fine, then .get() raises
+    # AttributeError out of a tool that is supposed to return its
+    # errors as text.
+    if not isinstance(instruction, dict):
+        return f"[error] memory tool expects a JSON object, got: {content[:80]!r}"
 
     action = instruction.get("action", "").strip().lower()
 

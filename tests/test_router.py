@@ -12,9 +12,30 @@ to be reachable either way. What changes is that the router can now
 actually offer an already-opted-in tool during a conversation.
 """
 
+import json
+
 import forge.tools.registry as registry_mod
 from forge.router.parser import _validate_json_obj, parse_router_output
 from forge.router.prompt import build_router_prompt
+
+
+def _example_line(prompt: str, *fragments: str) -> str:
+    """The single worked-example line containing all *fragments*.
+
+    Examples are rendered one per line, so matching on the line is
+    enough -- and keeps these tests off the exact escaping, which is
+    what they kept breaking on.
+    """
+    matches = [
+        line.strip()
+        for line in prompt.splitlines()
+        if line.strip().startswith("{") and all(f in line for f in fragments)
+    ]
+    assert len(matches) == 1, (
+        f"expected one example matching {fragments}, got {matches}"
+    )
+    return matches[0]
+
 
 # ── parser: dynamic tool validation ─────────────────────────────────
 
@@ -113,43 +134,77 @@ def test_prompt_includes_files_write_example():
     prompt = build_router_prompt(
         "crée un fichier", available_tools=["chat", "code", "files"]
     )
-    assert '"action\\":\\"write\\"' in prompt
+    assert '"action":"write"' in prompt
 
 
-def test_prompt_files_write_example_json_is_well_formed():
-    import json
-    import re
-
+def test_prompt_write_example_body_is_multi_line():
+    """hello.py used to be the only write that ever worked, and only
+    by accident: a lone print() has no brace to confuse the parser's
+    brace scanner and no newline to escape. The worked example has to
+    show the shape that actually failed live, or it keeps teaching the
+    one case that was never the problem."""
     prompt = build_router_prompt(
         "crée un fichier", available_tools=["chat", "code", "files"]
     )
-    match = re.search(
-        r'\{"tool":"files","content":"\{\\"action\\":\\"write\\".*?\}"\}',
-        prompt,
+    example = _example_line(prompt, '"tool":"files"', '"action":"write"')
+    body = json.loads(example)["content"]["content"]
+    assert "\n" in body
+
+
+def test_prompt_files_write_example_json_is_well_formed():
+    prompt = build_router_prompt(
+        "crée un fichier", available_tools=["chat", "code", "files"]
     )
-    assert match, "files write example not found in prompt"
-    outer = json.loads(match.group(0))
+    outer = json.loads(_example_line(prompt, '"tool":"files"', '"action":"write"'))
     assert outer["tool"] == "files"
-    inner = json.loads(outer["content"])
+    inner = outer["content"]
+    # A nested object, NOT a string holding re-encoded JSON: that
+    # second level of escaping is exactly what the model failed to
+    # produce on multi-line content.
+    assert isinstance(inner, dict)
     assert inner["action"] == "write"
     assert inner["path"]
     assert inner["content"]
 
 
-def test_prompt_includes_files_read_for_edit_example():
+def test_prompt_teaches_one_step_edit_for_an_existing_file():
     """
-    Regression test: editing an existing file ("remplace X par Y dans
-    hello.go") used to have no worked example at all -- the model
-    would answer from memory/guesswork (observed live: several such
-    requests in a row all returned the ORIGINAL unmodified content,
-    never touching the real file). The read-with-done:false example
-    teaches it to fetch the real content first.
+    Editing an existing file was taught as read(done:false) -> write,
+    which needs the router to chain. It doesn't, reliably: observed
+    live on "Remplace Hello World par Bonjour à tous", the run stopped
+    after the read and answered with the file's ORIGINAL content --
+    the same symptom the read example was originally added to fix, and
+    the same non-chaining that already forced deterministic handling
+    for web_search and memory:recall.
+
+    "edit" collapses it into one dispatch, and never asks the model to
+    reproduce the file it just read.
     """
     prompt = build_router_prompt(
         "modifie ce fichier", available_tools=["chat", "code", "files"]
     )
-    assert '"action\\":\\"read\\"' in prompt
-    assert '"done":false' in prompt
+    example = _example_line(prompt, '"tool":"files"', '"action":"edit"')
+    payload = json.loads(example)["content"]
+    assert payload["find"] and payload["replace"]
+    assert payload["path"]
+
+
+def test_prompt_does_not_teach_chaining_for_a_plain_edit():
+    """The steering hint after a files:read still exists for the cases
+    edit can't cover (adding a function, restructuring). What must NOT
+    come back is a worked example telling the model that a literal
+    replacement starts with a done:false read."""
+    prompt = build_router_prompt(
+        "modifie ce fichier", available_tools=["chat", "code", "files"]
+    )
+    for line in prompt.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("{") and '"tool":"files"' in stripped:
+            obj = json.loads(stripped)
+            if obj["content"].get("action") == "read":
+                assert obj.get("done") is not False, (
+                    "a files:read example still teaches done:false chaining"
+                )
 
 
 def test_prompt_steers_toward_files_write_after_a_files_read():
@@ -423,20 +478,21 @@ def test_prompt_includes_review_test_path_example():
     prompt = build_router_prompt(
         "relis ce fichier et ses tests", available_tools=["chat", "code", "review"]
     )
-    assert '\\"test_path\\"' in prompt
+    assert '"test_path"' in prompt
 
 
 def test_prompt_review_examples_json_is_well_formed():
-    import json
-
     prompt = build_router_prompt(
         "relis ce fichier", available_tools=["chat", "code", "review"]
     )
+    seen = 0
     for line in prompt.splitlines():
         if '"tool":"review"' in line and line.strip().startswith("{"):
             outer = json.loads(line.strip().rstrip(","))
-            inner = json.loads(outer["content"])
-            assert "file_path" in inner
+            assert isinstance(outer["content"], dict)
+            assert "file_path" in outer["content"]
+            seen += 1
+    assert seen == 2
 
 
 def test_prompt_disambiguates_bare_relis_from_review_with_opinion():

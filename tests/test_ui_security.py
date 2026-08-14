@@ -68,3 +68,23 @@ def test_ui_sends_content_security_policy():
 def test_ui_sends_nosniff():
     r = TestClient(api_mod.app).get("/")
     assert r.headers.get("x-content-type-options") == "nosniff"
+
+
+def test_code_fence_language_badge_is_escaped():
+    """The fence tag is rendered as a visible badge (the block was
+    coloured but nothing said whether it was Go or Python). \\w+ can't
+    carry markup today, but the badge must not be the one interpolation
+    in this file that trusts its input -- same rule as the link rule
+    above."""
+    html = _index_source()
+    assert 'class="code-lang"' in html
+    assert "${escapeHtml(lang)}" in html
+    assert "${lang}" not in html
+
+
+def test_diff_blocks_get_the_badge_too():
+    """renderDiff takes the badge rather than building its own, so the
+    two block kinds can't drift apart in how they label themselves."""
+    html = _index_source()
+    assert "function renderDiff(code, badge = '')" in html
+    assert "renderDiff(body, badge)" in html

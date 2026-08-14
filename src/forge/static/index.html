@@ -131,6 +131,25 @@
       padding: 10px 12px;
       overflow-x: auto;
       margin: 6px 0;
+      position: relative;
+    }
+    /* Language badge. Sits inside the block rather than above it so a
+       long code line scrolling horizontally doesn't drag it out of
+       view, and so nothing shifts when a block has no language. */
+    .msg.bot pre .code-lang {
+      position: absolute;
+      top: 0;
+      right: 0;
+      padding: 2px 8px;
+      font-size: .7rem;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: var(--bg);
+      border-left: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      border-radius: 0 6px 0 6px;
+      user-select: none;
     }
     .msg code {
       font-family: var(--mono);
@@ -481,7 +500,15 @@ function formatContent(text) {
   const blocks = []
   let working = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const body = code.replace(/\n$/, '')
-    const html = lang === 'diff' ? renderDiff(body) : `<pre><code>${escapeHtml(body)}</code></pre>`
+    // The fence tag is displayed as-is rather than mapped to a pretty
+    // name: files.py already owns the extension -> tag mapping, and a
+    // second display map here would be one more copy to drift out of
+    // sync (see review.py vs research.py in v3.10). Escaped anyway --
+    // \w+ can't carry markup, but nothing here should depend on that.
+    const badge = lang ? `<span class="code-lang">${escapeHtml(lang)}</span>` : ''
+    const html = lang === 'diff'
+      ? renderDiff(body, badge)
+      : `<pre>${badge}<code>${escapeHtml(body)}</code></pre>`
     blocks.push(html)
     return `\x00BLOCK${blocks.length - 1}\x00`
   })
@@ -553,7 +580,7 @@ function inlineMarkdown(s) {
 
 // ```diff blocks: colored like `git diff` instead of plain text, so a
 // "here's what changed" answer doesn't read as a wall of code.
-function renderDiff(code) {
+function renderDiff(code, badge = '') {
   const lines = code.split('\n').map(l => {
     const esc = escapeHtml(l)
     if (l.startsWith('+')) return `<span class="diff-add">${esc}</span>`
@@ -561,7 +588,7 @@ function renderDiff(code) {
     if (l.startsWith('@@')) return `<span class="diff-hunk">${esc}</span>`
     return `<span class="diff-ctx">${esc}</span>`
   })
-  return `<pre class="diff">${lines.join('\n')}</pre>`
+  return `<pre class="diff">${badge}${lines.join('\n')}</pre>`
 }
 
 // Quotes matter as much as angle brackets here: this output lands in

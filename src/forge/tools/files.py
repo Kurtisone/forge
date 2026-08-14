@@ -12,14 +12,16 @@ Interface (consistent with all Forge tools):
 content is a JSON instruction:
     {"action": "read",  "path": "relative/path.py"}
     {"action": "write", "path": "relative/out.txt", "content": "..."}
+    {"action": "edit",  "path": "a.go", "find": "X", "replace": "Y"}
     {"action": "list",  "path": "optional/subdir"}   # default: root
 
 Writing to a path that already exists returns a real diff (computed
 with difflib, not asked of the model) instead of a bare confirmation
 -- "improve this file" then shows what actually changed, not the
-whole file again. Writing a brand-new path still returns a plain
-"[ok] written N bytes" confirmation, since there's nothing to diff
-against.
+whole file again. Writing a brand-new path has nothing to diff
+against, so it echoes the content back instead -- otherwise creating
+a file ended on a byte count and the content was never shown
+anywhere.
 
 To activate this tool add it to ENABLED_TOOLS in .env.local:
     ENABLED_TOOLS=chat,code,files
@@ -31,6 +33,7 @@ from pathlib import Path
 
 from forge.config import WORKSPACE_DIR
 from forge.logger import log
+from forge.tool_payload import loads_payload
 
 _MAX_READ_BYTES = 64 * 1024  # 64 KB — refuse to read huge files
 
@@ -77,6 +80,86 @@ def _action_read(path_str: str) -> str:
     return content
 
 
+_MAX_ECHO_BYTES = 4000  # cap on content echoed back after a write
+
+# Extension -> markdown fence hint, so the UI's existing highlighting
+# has something to work with. Unknown extensions get a bare fence
+# rather than a guess.
+_FENCE_LANGS = {
+    ".py": "python",
+    ".go": "go",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".rs": "rust",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".sh": "bash",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".md": "markdown",
+    ".html": "html",
+    ".css": "css",
+    ".sql": "sql",
+}
+
+
+def _fenced(path_str: str, content: str) -> str:
+    lang = _FENCE_LANGS.get(Path(path_str).suffix.lower(), "")
+    body = content
+    if len(body) > _MAX_ECHO_BYTES:
+        body = body[:_MAX_ECHO_BYTES] + f"\n… (tronqué, {len(content)} octets au total)"
+    if not body.endswith("\n"):
+        body += "\n"
+    return f"```{lang}\n{body}```"
+
+
+def _action_edit(path_str: str, find: str, replace: str) -> str:
+    """
+    Literal find-and-replace in an existing file.
+
+    This exists because "remplace X par Y" was the one file operation
+    that still needed the router to chain: read with done:false, then
+    write the whole file back. This model does not chain reliably --
+    the same failure already forced deterministic graphs for
+    web_search (v3.10) and memory:recall (fix/memory-recall), and it
+    showed up here too: the run stopped after the read and answered
+    with the file's ORIGINAL content.
+
+    Doing the replacement here rather than asking the model to
+    reproduce the whole file also removes the v3.9 hallucination risk
+    outright -- a 9B asked to echo back a file it just read tends to
+    quietly "fix" it along the way. The model supplies two short
+    strings; the file content never has to survive a round trip
+    through it.
+    """
+    target = _safe_path(path_str)
+    if not target.exists():
+        return f"[error] {path_str} n'existe pas"
+    if not find:
+        return "[error] 'edit' requires a non-empty 'find' field"
+
+    try:
+        if target.stat().st_size > _MAX_READ_BYTES:
+            return f"[error] file too large ({target.stat().st_size} bytes)"
+        old_content = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"[error] cannot read {path_str}: {exc}"
+
+    occurrences = old_content.count(find)
+    if occurrences == 0:
+        # An honest miss, not a silent no-op: the model can then fall
+        # back to read-then-write for a change that isn't literal.
+        return f"[error] texte introuvable dans {path_str} : {find[:60]!r}"
+
+    new_content = old_content.replace(find, replace)
+    target.write_text(new_content, encoding="utf-8")
+    log.event("files.edit", path=path_str, occurrences=occurrences)
+    return _diff_result(path_str, old_content, new_content, occurrences)
+
+
 def _action_write(path_str: str, content: str) -> str:
     target = _safe_path(path_str)
     existed = target.exists()
@@ -96,8 +179,31 @@ def _action_write(path_str: str, content: str) -> str:
     log.event("files.write", path=path_str, bytes=len(content))
 
     if old_content is None:
-        return f"[ok] written {len(content)} bytes to {path_str}"
+        if existed:
+            # The file was there but couldn't be read back for a diff
+            # (too large, or an OS error): a bare confirmation is all
+            # that can honestly be said.
+            return f"[ok] written {len(content)} bytes to {path_str}"
+        # A newly created file has nothing to diff against, which used
+        # to mean the run ended on a byte count and the content was
+        # never shown anywhere -- the file had to be opened by hand to
+        # see what had been written. Echoing it back makes creation as
+        # visible as modification already was, and puts the content in
+        # the conversation where a follow-up ("now change X") can
+        # actually refer to it.
+        return f"[ok] {path_str} créé ({len(content)} octets)\n\n" + _fenced(
+            path_str, content
+        )
 
+    return _diff_result(path_str, old_content, content)
+
+
+def _diff_result(
+    path_str: str,
+    old_content: str,
+    content: str,
+    occurrences: int | None = None,
+) -> str:
     # A real diff, computed here rather than asked of the model: a
     # small local model asked to "improve this file" tends to just
     # regenerate the whole thing as its answer even when only a few
@@ -125,9 +231,10 @@ def _action_write(path_str: str, content: str) -> str:
     diff_text = "".join(
         line if line.endswith("\n") else line + "\n" for line in diff_lines
     )
-    return (
-        f"[ok] {path_str} mis à jour ({len(content)} octets)\n\n```diff\n{diff_text}```"
-    )
+    header = f"[ok] {path_str} mis à jour ({len(content)} octets"
+    if occurrences is not None:
+        header += f", {occurrences} remplacement(s)"
+    return f"{header})\n\n```diff\n{diff_text}```"
 
 
 def _action_list(path_str: str = ".") -> str:
@@ -152,10 +259,11 @@ def run(content: str) -> str:
     Expected shapes:
         {"action": "read",  "path": "src/forge/main.py"}
         {"action": "write", "path": "notes.txt", "content": "..."}
+        {"action": "edit",  "path": "a.go", "find": "X", "replace": "Y"}
         {"action": "list",  "path": "."}
     """
     try:
-        instruction = json.loads(content)
+        instruction = loads_payload(content, "files")
     except (json.JSONDecodeError, TypeError):
         return f"[error] files tool expects JSON, got: {content[:80]!r}"
 
@@ -163,7 +271,7 @@ def run(content: str) -> str:
     path = instruction.get("path", "").strip()
 
     if not action:
-        return "[error] missing 'action' field (read / write / list)"
+        return "[error] missing 'action' field (read / write / edit / list)"
 
     try:
         if action == "read":
@@ -177,10 +285,19 @@ def run(content: str) -> str:
             file_content = instruction.get("content", "")
             return _action_write(path, file_content)
 
+        if action == "edit":
+            if not path:
+                return "[error] 'edit' requires a 'path' field"
+            return _action_edit(
+                path,
+                instruction.get("find", ""),
+                instruction.get("replace", ""),
+            )
+
         if action == "list":
             return _action_list(path or ".")
 
-        return f"[error] unknown action {action!r} (use: read / write / list)"
+        return f"[error] unknown action {action!r} (use: read / write / edit / list)"
 
     except PermissionError as e:
         log.error("files tool: permission denied: %s", e)
