@@ -5,7 +5,7 @@ du lot 3 sécurité (donc pas des régressions du lot 3). Pris ensemble, ils
 faisaient échouer `files:write` depuis le chat pour à peu près **tout
 contenu de fichier réel**.
 
-Base : `1cdc26d`. **543 tests verts** (baseline 514), `ruff check` +
+Base : `1cdc26d`. **551 tests verts** (baseline 514), `ruff check` +
 `ruff format --check` OK, appliqué et vérifié par `git am` sur un clone
 vierge de `main`.
 
@@ -128,11 +128,29 @@ nomme**, et aucun exemple à payload JSON ne doit ré-encoder son payload en
 chaîne. Un futur exemple mal formé casse désormais un test au lieu
 d'apprendre au modèle à échouer.
 
-## Ce qui reste à valider en usage réel
+## Validation en conditions réelles
 
-Rien de tout ceci n'a encore tourné contre le vrai modèle : la partie
-« le 9B produit-il spontanément la forme objet sous grammaire ? » ne se
-prouve qu'en conditions réelles. Test décisif : demander la création d'un
-fichier avec du vrai contenu multi-ligne à accolades (un `.go`, un `.js`),
-et vérifier que le fichier atterrit sur disque sans passer par le fallback
-texte.
+Trois itérations ont été nécessaires, chacune révélant une cause différente :
+
+| run | résultat | cause |
+|---|---|---|
+| `#76cccf2f` | échec | `content ::= string \| object` laissait la forme chaîne atteignable ; le modèle l'a prise et est mort sur `import "fmt"` |
+| `#4862ec0e` | échec | llama-server refusait la grammaire (underscore dans les noms de règles) — 400 sur chaque complétion |
+| `#be63eb8d` | **succès** | `hello.go` écrit, `import "fmt"` intact |
+| `#127a948d` | **succès** | `test.go` créé, contenu affiché dans un bloc de code |
+| `#fa53a1e6` | **succès** | remplacement routé vers `files:edit` en une étape, diff correct |
+
+Le routeur choisit bien `edit` plutôt qu'un `read`, et extrait la chaîne
+littérale depuis une phrase en langage naturel.
+
+## Limite connue, assumée
+
+`edit` couvre le remplacement **littéral**, qui est le cas courant. Une
+modification non littérale — « ajoute une fonction », « restructure ce
+fichier » — dépend toujours du chaînage `read→write`, donc du comportement
+qui a échoué au run `#00b1c5f8`. Le chemin et l'indice de pilotage après un
+`files:read` sont conservés pour ces cas.
+
+Suite logique si ça devient gênant : un graphe `edit` déterministe sur le
+modèle de `research` et `recall` — lire, faire produire au LLM la seule
+portion modifiée, écrire. C'est un chantier séparé, pas un patch.
