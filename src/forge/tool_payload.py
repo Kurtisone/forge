@@ -37,6 +37,14 @@ import json
 
 from forge.logger import log
 
+# The tools whose "content" is itself a JSON payload rather than prose
+# or code. Single source of truth: router/grammar.py conditions the
+# grammar on it (these tools MUST send an object), and the tests check
+# the prompt's worked examples against it. Keeping three copies of
+# this list in sync by hand is exactly how review.py and research.py
+# drifted apart in v3.10.
+JSON_PAYLOAD_TOOLS = frozenset({"files", "memory", "review", "sysadmin"})
+
 
 def loads_payload(content: str, tool: str) -> object:
     """

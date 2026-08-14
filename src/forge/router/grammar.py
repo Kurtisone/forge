@@ -4,7 +4,8 @@ GBNF grammar for llama.cpp's grammar-constrained decoding
 
 Constrains sampling so the model can ONLY produce tokens matching the
 router's exact JSON contract -- {"tool": ..., "content": ..., "done": ...},
-where "content" is a string or a nested JSON object
+where "content" is a nested JSON object for the tools whose payload
+is itself JSON, and a plain string for the rest
 -- at the sampling level, instead of catching malformed output after
 the fact in router/parser.py's fallback chain (repetition loops,
 leaked prompt text, hallucinated new dialogue turns, empty output).
@@ -21,37 +22,45 @@ enforcement); OpenRouter/OpenAI-style APIs have "response_format":
 "tool" to one of a specific set of literal values the way GBNF can.
 """
 
-_TOOL_SENTINEL = "%%TOOL_ALTERNATION%%"
+from forge.tool_payload import JSON_PAYLOAD_TOOLS
 
 # Mirrors router.prompt's own fallback: if ENABLED_TOOLS somehow
 # resolves empty, don't hand llama.cpp a grammar with an empty
 # alternation (which would make "tool" unsatisfiable).
 _FALLBACK_TOOLS = ["chat", "code"]
 
-# A generic "any JSON string" body (schar/hex) plus a "boolean" rule
-# for the optional "done" field.
+# The shape of "content" is conditioned on WHICH tool was picked,
+# which GBNF can express because "tool" is pinned before "content" in
+# every call rule.
 #
-# "content" is a string OR a JSON object. The object alternative is
-# what lets a tool whose payload is itself JSON (files, memory,
-# review, sysadmin) emit it directly instead of re-encoding it as a
-# JSON string: that re-encoding needs double escaping (\\n inside a
-# nested string), the model writes \n, and the inner parse then dies
-# on an invalid control character -- the bug that made files:write
-# fail for any multi-line file body. Sampling can't produce the wrong
-# escaping if the wrong shape is unreachable. router/parser.py
-# re-encodes an object back into RouterDecision.content, so nothing
-# downstream sees a new type.
+# For a tool whose payload is itself JSON (JSON_PAYLOAD_TOOLS),
+# content MUST be a nested object. Offering "string | object" for
+# every tool -- the first attempt at this fix -- did not work: it left
+# the escaped-string shape reachable, and against a 9B's prior for it
+# the worked examples alone lost. Observed live on the first real
+# files:write, which came back as an escaped string and died on
+# `import "fmt"`.
+#
+# That failure is not recoverable after the fact, and this is the
+# reason the constraint has to live in the grammar rather than in the
+# parser. In the string shape the payload sits inside a JSON string,
+# so file content needs DOUBLE escaping (\\n, \\\") -- and the
+# grammar cannot check it, because to schar the whole payload is just
+# characters. Under-escaped quotes then terminate the string early and
+# the result is genuinely ambiguous: no lenient parse recovers it.
+# In the object shape the file body is a plain JSON string, so schar
+# (which excludes bare " and control characters) enforces its escaping
+# at the sampling level. The failure mode stops being caught and
+# starts being impossible.
+#
+# router/parser.py re-encodes an object back into
+# RouterDecision.content, so nothing downstream sees a new type, and
+# it still ACCEPTS the string shape -- providers without GBNF need it.
 #
 # Objects pull in full JSON values (arrays, numbers, null): a payload
 # field could legitimately hold any of them, and the model shouldn't
 # be steered into stringifying a number to satisfy the grammar.
-_TEMPLATE = (
-    r'root    ::= "{" ws "\"tool\"" ws ":" ws tool ws "," ws "\"content\"" '
-    r'ws ":" ws content (ws "," ws "\"done\"" ws ":" ws boolean)? ws "}"'
-    "\n"
-    r"tool    ::= " + _TOOL_SENTINEL + "\n"
-    r"content ::= string | object"
-    "\n"
+_SHARED_RULES = (
     r'object  ::= "{" ws (member (ws "," ws member)*)? ws "}"'
     "\n"
     r'member  ::= string ws ":" ws value'
@@ -70,6 +79,8 @@ _TEMPLATE = (
     "\n"
     r'boolean ::= "true" | "false"'
     "\n"
+    r'done    ::= ws "," ws "\"done\"" ws ":" ws boolean'
+    "\n"
     r"ws      ::= [ \t\n]*"
     "\n"
 )
@@ -80,6 +91,13 @@ def _tool_alternation(tools: list[str]) -> str:
     # quoted tool name, e.g. "\"chat\"" matches the 6-character JSON
     # substring "chat" (with its quotes).
     return " | ".join('"\\"' + t + '\\""' for t in tools)
+
+
+def _call_rule(name: str, tool_rule: str, content_rule: str) -> str:
+    return (
+        f'{name} ::= "{{" ws "\\"tool\\"" ws ":" ws {tool_rule} ws "," ws '
+        f'"\\"content\\"" ws ":" ws {content_rule} done? ws "}}"'
+    )
 
 
 def build_router_grammar(available_tools: list[str] | None = None) -> str:
@@ -95,4 +113,22 @@ def build_router_grammar(available_tools: list[str] | None = None) -> str:
 
         available_tools = registry.available_tools() or list(_FALLBACK_TOOLS)
 
-    return _TEMPLATE.replace(_TOOL_SENTINEL, _tool_alternation(available_tools))
+    payload_tools = [t for t in available_tools if t in JSON_PAYLOAD_TOOLS]
+    text_tools = [t for t in available_tools if t not in JSON_PAYLOAD_TOOLS]
+
+    branches: list[str] = []
+    rules: list[str] = []
+    # A branch is emitted only when it has at least one tool: an empty
+    # GBNF alternation is unsatisfiable, and a "files-only" tool set is
+    # a perfectly legal ENABLED_TOOLS value.
+    if payload_tools:
+        branches.append("payload_call")
+        rules.append(_call_rule("payload_call", "payload_tool", "object"))
+        rules.append(f"payload_tool ::= {_tool_alternation(payload_tools)}")
+    if text_tools:
+        branches.append("text_call")
+        rules.append(_call_rule("text_call", "text_tool", "string"))
+        rules.append(f"text_tool ::= {_tool_alternation(text_tools)}")
+
+    root = "root    ::= " + " | ".join(branches)
+    return "\n".join([root, *rules]) + "\n" + _SHARED_RULES

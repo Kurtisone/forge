@@ -406,7 +406,7 @@ def _build_template(tools: list[str]) -> str:
         "Format:\n"
         "{\n"
         f'  "tool": {_tool_enum(tools)},\n'
-        '  "content": "non-empty string", or a JSON object for the\n'
+        '  "content": "non-empty string" — but a JSON OBJECT for the\n'
         "             tools whose content is described as one below\n"
         "}\n\n"
         'Optional: add "done": false to this JSON if you need another step\n'
@@ -420,7 +420,8 @@ def _build_template(tools: list[str]) -> str:
         "- NEVER return null\n"
         "- NEVER return partial JSON\n"
         "- When content is a JSON object, write the object itself — never\n"
-        "  a string containing escaped JSON\n"
+        '  a string containing escaped JSON. Write {"action":...}, never\n'
+        '  "{\\"action\\":...}"\n'
         "- NEVER add text outside the JSON object\n"
         "- Stop generating immediately after the closing brace\n"
         "- Use the conversation history below only as context; do not repeat it\n\n"
