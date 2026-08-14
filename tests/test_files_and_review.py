@@ -496,3 +496,89 @@ def test_initial_context_reaches_node():
     g.add_node("n", ctx_node)
     s = g.run("hello", initial_context={"greeting": "Bonjour !"})
     assert s.final_output == "Bonjour !"
+
+
+def test_files_edit_replaces_in_one_step(tmp_path, monkeypatch):
+    """The whole point: no read, no chaining, no round trip of the file
+    content through the model."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+    body = 'package main\n\nfunc main() {\n    fmt.Println("Hello World")\n}\n'
+    (tmp_path / "hello.go").write_text(body)
+
+    r = files_mod.run(
+        json.dumps(
+            {
+                "action": "edit",
+                "path": "hello.go",
+                "find": "Hello World",
+                "replace": "Bonjour à tous",
+            }
+        )
+    )
+
+    assert "```diff" in r
+    assert (tmp_path / "hello.go").read_text() == body.replace(
+        "Hello World", "Bonjour à tous"
+    )
+
+
+def test_files_edit_reports_a_miss_instead_of_writing(tmp_path, monkeypatch):
+    """A silent no-op would be worse than an error: the model can fall
+    back to read-then-write for a change that isn't literal."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+    (tmp_path / "a.txt").write_text("original\n")
+
+    r = files_mod.run(
+        json.dumps(
+            {"action": "edit", "path": "a.txt", "find": "absent", "replace": "x"}
+        )
+    )
+
+    assert r.startswith("[error]")
+    assert (tmp_path / "a.txt").read_text() == "original\n"
+
+
+def test_files_edit_replaces_every_occurrence_and_says_how_many(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+    (tmp_path / "b.txt").write_text("a\na\na\n")
+
+    r = files_mod.run(
+        json.dumps({"action": "edit", "path": "b.txt", "find": "a", "replace": "b"})
+    )
+
+    assert "3 remplacement" in r
+    assert (tmp_path / "b.txt").read_text() == "b\nb\nb\n"
+
+
+def test_files_edit_on_a_missing_file_is_an_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    r = files_mod.run(
+        json.dumps({"action": "edit", "path": "nope.txt", "find": "x", "replace": "y"})
+    )
+
+    assert r.startswith("[error]")
+
+
+def test_files_edit_stays_inside_the_workspace(tmp_path, monkeypatch):
+    """Same confinement as read/write -- edit must not be a new way out
+    (the v3.10 escape was exactly this kind of gap)."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(files_mod, "WORKSPACE_DIR", str(tmp_path))
+
+    r = files_mod.run(
+        json.dumps(
+            {
+                "action": "edit",
+                "path": "../../etc/passwd",
+                "find": "root",
+                "replace": "x",
+            }
+        )
+    )
+
+    assert r.startswith("[error]")

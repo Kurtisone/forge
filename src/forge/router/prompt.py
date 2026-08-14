@@ -50,7 +50,11 @@ TOOL_DESCRIPTIONS = {
         "content is a JSON object describing ONE file operation: "
         '{"action":"read","path":"..."} or '
         '{"action":"write","path":"...","content":"..."} or '
-        '{"action":"list","path":"..."}. Use "read" when the user just '
+        '{"action":"edit","path":"...","find":"...","replace":"..."} or '
+        '{"action":"list","path":"..."}. Use "edit" to change part of an '
+        "existing file: it finds the exact text and replaces it in ONE step, "
+        "so the rest of the file never has to be reproduced. "
+        'Use "read" when the user just '
         'wants to see/read a file\'s raw content -- "lis X", "relis X", '
         '"montre-moi X" with no request for an opinion or analysis. Only '
         "use this when the user explicitly asks to read, write, or list a "
@@ -213,21 +217,19 @@ _TOOL_EXAMPLES = {
                 'main()\\n"}}'
             ),
         ),
-        # Third example: editing an EXISTING named file needs its
-        # current content first, or the model just regenerates
-        # something from memory/guesswork instead of the real file
-        # (observed live: several "remplace X par Y dans hello.go"
-        # requests in a row all answered with the ORIGINAL unmodified
-        # content, never touching the actual file). "done": false
-        # chains into a write on the next step -- see
-        # _format_step_context's steering hint right after this,
-        # which is what pushes that second step toward "action":
-        # "write" instead of just answering in chat.
+        # Editing an existing file used to be taught as
+        # read(done:false) -> write, which needs the router to chain.
+        # This model does not chain reliably (same failure as
+        # web_search in v3.10 and memory:recall), and it showed live:
+        # the run stopped after the read and answered with the file's
+        # ORIGINAL content. "edit" does the replacement in one step,
+        # and never asks the model to reproduce the file.
         (
             "Dans hello.go, remplace Hello World par Bienvenue",
             (
-                '{"tool":"files","content":{"action":"read",'
-                '"path":"hello.go"},"done":false}'
+                '{"tool":"files","content":{"action":"edit",'
+                '"path":"hello.go","find":"Hello World",'
+                '"replace":"Bienvenue"}}'
             ),
         ),
         # Fourth example: disambiguates from "review" below. A bare

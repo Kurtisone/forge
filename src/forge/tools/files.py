@@ -12,6 +12,7 @@ Interface (consistent with all Forge tools):
 content is a JSON instruction:
     {"action": "read",  "path": "relative/path.py"}
     {"action": "write", "path": "relative/out.txt", "content": "..."}
+    {"action": "edit",  "path": "a.go", "find": "X", "replace": "Y"}
     {"action": "list",  "path": "optional/subdir"}   # default: root
 
 Writing to a path that already exists returns a real diff (computed
@@ -115,6 +116,50 @@ def _fenced(path_str: str, content: str) -> str:
     return f"```{lang}\n{body}```"
 
 
+def _action_edit(path_str: str, find: str, replace: str) -> str:
+    """
+    Literal find-and-replace in an existing file.
+
+    This exists because "remplace X par Y" was the one file operation
+    that still needed the router to chain: read with done:false, then
+    write the whole file back. This model does not chain reliably --
+    the same failure already forced deterministic graphs for
+    web_search (v3.10) and memory:recall (fix/memory-recall), and it
+    showed up here too: the run stopped after the read and answered
+    with the file's ORIGINAL content.
+
+    Doing the replacement here rather than asking the model to
+    reproduce the whole file also removes the v3.9 hallucination risk
+    outright -- a 9B asked to echo back a file it just read tends to
+    quietly "fix" it along the way. The model supplies two short
+    strings; the file content never has to survive a round trip
+    through it.
+    """
+    target = _safe_path(path_str)
+    if not target.exists():
+        return f"[error] {path_str} n'existe pas"
+    if not find:
+        return "[error] 'edit' requires a non-empty 'find' field"
+
+    try:
+        if target.stat().st_size > _MAX_READ_BYTES:
+            return f"[error] file too large ({target.stat().st_size} bytes)"
+        old_content = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"[error] cannot read {path_str}: {exc}"
+
+    occurrences = old_content.count(find)
+    if occurrences == 0:
+        # An honest miss, not a silent no-op: the model can then fall
+        # back to read-then-write for a change that isn't literal.
+        return f"[error] texte introuvable dans {path_str} : {find[:60]!r}"
+
+    new_content = old_content.replace(find, replace)
+    target.write_text(new_content, encoding="utf-8")
+    log.event("files.edit", path=path_str, occurrences=occurrences)
+    return _diff_result(path_str, old_content, new_content, occurrences)
+
+
 def _action_write(path_str: str, content: str) -> str:
     target = _safe_path(path_str)
     existed = target.exists()
@@ -150,6 +195,15 @@ def _action_write(path_str: str, content: str) -> str:
             path_str, content
         )
 
+    return _diff_result(path_str, old_content, content)
+
+
+def _diff_result(
+    path_str: str,
+    old_content: str,
+    content: str,
+    occurrences: int | None = None,
+) -> str:
     # A real diff, computed here rather than asked of the model: a
     # small local model asked to "improve this file" tends to just
     # regenerate the whole thing as its answer even when only a few
@@ -177,9 +231,10 @@ def _action_write(path_str: str, content: str) -> str:
     diff_text = "".join(
         line if line.endswith("\n") else line + "\n" for line in diff_lines
     )
-    return (
-        f"[ok] {path_str} mis à jour ({len(content)} octets)\n\n```diff\n{diff_text}```"
-    )
+    header = f"[ok] {path_str} mis à jour ({len(content)} octets"
+    if occurrences is not None:
+        header += f", {occurrences} remplacement(s)"
+    return f"{header})\n\n```diff\n{diff_text}```"
 
 
 def _action_list(path_str: str = ".") -> str:
@@ -204,6 +259,7 @@ def run(content: str) -> str:
     Expected shapes:
         {"action": "read",  "path": "src/forge/main.py"}
         {"action": "write", "path": "notes.txt", "content": "..."}
+        {"action": "edit",  "path": "a.go", "find": "X", "replace": "Y"}
         {"action": "list",  "path": "."}
     """
     try:
@@ -215,7 +271,7 @@ def run(content: str) -> str:
     path = instruction.get("path", "").strip()
 
     if not action:
-        return "[error] missing 'action' field (read / write / list)"
+        return "[error] missing 'action' field (read / write / edit / list)"
 
     try:
         if action == "read":
@@ -229,10 +285,19 @@ def run(content: str) -> str:
             file_content = instruction.get("content", "")
             return _action_write(path, file_content)
 
+        if action == "edit":
+            if not path:
+                return "[error] 'edit' requires a 'path' field"
+            return _action_edit(
+                path,
+                instruction.get("find", ""),
+                instruction.get("replace", ""),
+            )
+
         if action == "list":
             return _action_list(path or ".")
 
-        return f"[error] unknown action {action!r} (use: read / write / list)"
+        return f"[error] unknown action {action!r} (use: read / write / edit / list)"
 
     except PermissionError as e:
         log.error("files tool: permission denied: %s", e)

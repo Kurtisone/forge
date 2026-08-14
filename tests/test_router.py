@@ -167,20 +167,44 @@ def test_prompt_files_write_example_json_is_well_formed():
     assert inner["content"]
 
 
-def test_prompt_includes_files_read_for_edit_example():
+def test_prompt_teaches_one_step_edit_for_an_existing_file():
     """
-    Regression test: editing an existing file ("remplace X par Y dans
-    hello.go") used to have no worked example at all -- the model
-    would answer from memory/guesswork (observed live: several such
-    requests in a row all returned the ORIGINAL unmodified content,
-    never touching the real file). The read-with-done:false example
-    teaches it to fetch the real content first.
+    Editing an existing file was taught as read(done:false) -> write,
+    which needs the router to chain. It doesn't, reliably: observed
+    live on "Remplace Hello World par Bonjour à tous", the run stopped
+    after the read and answered with the file's ORIGINAL content --
+    the same symptom the read example was originally added to fix, and
+    the same non-chaining that already forced deterministic handling
+    for web_search and memory:recall.
+
+    "edit" collapses it into one dispatch, and never asks the model to
+    reproduce the file it just read.
     """
     prompt = build_router_prompt(
         "modifie ce fichier", available_tools=["chat", "code", "files"]
     )
-    assert '"action":"read"' in prompt
-    assert '"done":false' in prompt
+    example = _example_line(prompt, '"tool":"files"', '"action":"edit"')
+    payload = json.loads(example)["content"]
+    assert payload["find"] and payload["replace"]
+    assert payload["path"]
+
+
+def test_prompt_does_not_teach_chaining_for_a_plain_edit():
+    """The steering hint after a files:read still exists for the cases
+    edit can't cover (adding a function, restructuring). What must NOT
+    come back is a worked example telling the model that a literal
+    replacement starts with a done:false read."""
+    prompt = build_router_prompt(
+        "modifie ce fichier", available_tools=["chat", "code", "files"]
+    )
+    for line in prompt.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("{") and '"tool":"files"' in stripped:
+            obj = json.loads(stripped)
+            if obj["content"].get("action") == "read":
+                assert obj.get("done") is not False, (
+                    "a files:read example still teaches done:false chaining"
+                )
 
 
 def test_prompt_steers_toward_files_write_after_a_files_read():
