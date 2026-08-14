@@ -39,6 +39,7 @@ from pathlib import Path
 
 from forge.config import WORKSPACE_DIR
 from forge.graphs.review import run as review_run
+from forge.tool_payload import loads_payload
 
 
 def _safe_workspace_path(relative: str) -> Path:
@@ -60,7 +61,7 @@ def _safe_workspace_path(relative: str) -> Path:
 
 def run(content: str) -> str:
     try:
-        payload = json.loads(content)
+        payload = loads_payload(content, "review")
     except (json.JSONDecodeError, TypeError):
         return '[error] review content must be JSON: {"file_path": "..."}'
 

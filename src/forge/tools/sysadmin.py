@@ -32,6 +32,7 @@ To activate: ENABLED_TOOLS=chat,code,sysadmin in .env.local
 import json
 
 from forge.graphs.sysadmin import run as sysadmin_run
+from forge.tool_payload import loads_payload
 
 
 def run(content: str) -> str:
@@ -43,7 +44,7 @@ def run(content: str) -> str:
         payload = {}
     else:
         try:
-            payload = json.loads(content)
+            payload = loads_payload(content, "sysadmin")
         except (json.JSONDecodeError, TypeError):
             return '[error] sysadmin content must be JSON: {"target_hint": "...", "question": "..."}'
 

@@ -31,6 +31,7 @@ from pathlib import Path
 
 from forge.config import WORKSPACE_DIR
 from forge.logger import log
+from forge.tool_payload import loads_payload
 
 _MAX_READ_BYTES = 64 * 1024  # 64 KB — refuse to read huge files
 
@@ -155,7 +156,7 @@ def run(content: str) -> str:
         {"action": "list",  "path": "."}
     """
     try:
-        instruction = json.loads(content)
+        instruction = loads_payload(content, "files")
     except (json.JSONDecodeError, TypeError):
         return f"[error] files tool expects JSON, got: {content[:80]!r}"
 
