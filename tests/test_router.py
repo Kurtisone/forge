@@ -218,6 +218,7 @@ def test_prompt_steers_toward_files_write_after_a_files_read():
             {"role": "assistant", "content": "[files] package main\n\nfunc main() {}"}
         ],
         available_tools=["chat", "code", "files"],
+        last_read_path="main.go",
     )
     assert 'Do NOT call "action":"read" again' in prompt
     assert '"tool":"files"' in prompt.split("CURRENT, real content")[-1]
@@ -367,6 +368,7 @@ def test_prompt_files_steering_hint_still_works():
             {"role": "assistant", "content": "[files] def f(): pass"},
         ],
         available_tools=["chat", "code", "files"],
+        last_read_path="f.py",
     )
     assert '"action":"write"' in prompt
     assert "CURRENT, real content" in prompt

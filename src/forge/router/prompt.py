@@ -458,6 +458,17 @@ _VAGUE_FILE_REFERENCE = (
     "file path (from a {tools} action) and use that exact path. Do NOT "
     "invent file content from memory -- read the file first if you don't "
     "already have its current content in this context.\n"
+    # The half this instruction was missing. It told the model where a
+    # path comes from, and forbade inventing file CONTENT, but said
+    # nothing about what to do when the search above turns up nothing --
+    # so the model filled the gap itself, confidently (bench fixture
+    # c05: "Améliore le fichier" with an empty conversation routed to
+    # review with a fabricated src/forge/main.py). An instruction that
+    # leaves no exit is an instruction the model exits its own way.
+    "If that search finds no real path anywhere in the conversation, do "
+    "NOT invent one and do NOT use a made-up or example path: respond "
+    'with {{"tool":"chat","content":"<ask which file the user means>"}} '
+    "instead.\n"
 )
 
 
@@ -661,7 +672,9 @@ def _neutralize_markers(text: str) -> str:
     return text
 
 
-def _format_step_context(step_context: list[dict] | None) -> str:
+def _format_step_context(
+    step_context: list[dict] | None, last_read_path: str | None = None
+) -> str:
     if not step_context:
         return ""
 
@@ -741,7 +754,7 @@ def _format_step_context(step_context: list[dict] | None) -> str:
     # graphs/recall.py's docstring for the actual fix: memory:recall
     # no longer routes through here at all, "recall" is now one
     # deterministic call that never needs a second routing decision.)
-    if last_was_files_read:
+    if last_was_files_read and last_read_path:
         # Same reasoning as the hint above: a small local model
         # asked to route again right after reading a file tends to
         # either answer with the content as plain chat (never actually
@@ -749,14 +762,38 @@ def _format_step_context(step_context: list[dict] | None) -> str:
         # pushes explicitly toward the write step instead, and
         # reminds it to reuse the file it just read as the base for
         # the edit rather than something recalled from memory/guessed.
+        #
+        # The path is interpolated from the routing decision that
+        # produced this read -- NOT read out of the tool output above,
+        # which is untrusted, and NOT left as a "<placeholder>" for the
+        # model to fill in. The previous version wrote "<same path as
+        # above>" literally and the model copied those exact bytes into
+        # a real write payload (bench fixture f01). A slot the model is
+        # asked to fill is a slot it will invent a value for.
         lines.append(
-            "The file content above is the CURRENT, real content of that "
-            'file. Respond now with "tool":"files" and content = '
-            '{"action":"write","path":"<same path as above>","content":'
+            "The file content above is the CURRENT, real content of "
+            f"{last_read_path}. Respond now with "
+            '"tool":"files" and content = {"action":"write","path":'
+            f'"{last_read_path}","content":'
             '"<the FULL file content above, with the requested change '
             'applied>"}. Do NOT call "action":"read" again, and do NOT '
             "just answer in chat -- the user expects the actual file to "
             "be updated, not a description of what to change."
+        )
+    elif last_was_files_read:
+        # A files-read result reached this prompt with no path from the
+        # routing decision: either no read actually happened this run
+        # (an injected or synthetic step_context -- bench fixture f01),
+        # or the payload was unparseable. Steering toward a write here
+        # would ask the model for a path it does not have, which is
+        # precisely how it ends up inventing one. Say so instead, and
+        # give it somewhere to go.
+        lines.append(
+            "No real file path is known for the content above -- it did "
+            "not come from a file this run actually read. Do NOT write "
+            "to a guessed path and do NOT invent one: respond with "
+            '{"tool":"chat","content":"<ask the user which file you '
+            'mean>"}.'
         )
     elif last_was_web_search:
         # Same loop-guard reasoning as memory/files above -- and the
@@ -798,12 +835,19 @@ def build_router_prompt(
     history: list[dict] | None = None,
     step_context: list[dict] | None = None,
     available_tools: list[str] | None = None,
+    last_read_path: str | None = None,
 ) -> str:
     """
     available_tools defaults to whatever's actually enabled+loaded
     (forge.tools.registry.available_tools()) -- pass it explicitly
     only for tests, or callers that need a fixed tool set regardless
     of runtime config.
+
+    last_read_path is the path of the file the previous step actually
+    read, taken from that step's routing decision. It is the only
+    trusted source for a path here: step_context content is untrusted
+    tool output, and a path the model is asked to supply itself is a
+    path it will invent.
     """
     if available_tools is None:
         from forge.tools import registry
@@ -813,6 +857,9 @@ def build_router_prompt(
     template = _build_template(available_tools)
     return (
         template.replace(_SENTINEL_HISTORY, _format_history(history))
-        .replace(_SENTINEL_STEP_CONTEXT, _format_step_context(step_context))
+        .replace(
+            _SENTINEL_STEP_CONTEXT,
+            _format_step_context(step_context, last_read_path),
+        )
         .replace(_SENTINEL_INPUT, user_input)
     )

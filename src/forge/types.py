@@ -191,6 +191,14 @@ class AgentState:
     # was, so the refusal can say so instead of being unexplainable.
     external_data_seen: bool = False
     external_data_source: str | None = None
+    # Path of the file the most recent files:read actually read, taken
+    # from that step's routing DECISION -- never from the tool output,
+    # which is untrusted. The router prompt's post-read steering hint
+    # interpolates it instead of asking the model to supply the path
+    # itself; a slot the model is asked to fill is a slot it invents a
+    # value for. None means "no read happened this run", and the hint
+    # says so rather than steering toward a write.
+    last_read_path: str | None = None
     steps_taken: int = 0
     trace: list[TraceStep] = field(default_factory=list)
     final_output: str | None = None

@@ -34,6 +34,7 @@ from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
 from forge.llm import call_llm
 from forge.logger import log
 from forge.router import build_router_prompt, parse_router_output
+from forge.tool_payload import loads_payload
 from forge.tools.registry import get_tool, load_tools
 from forge.types import AgentResult, AgentState, ToolResult
 
@@ -58,6 +59,33 @@ load_tools()
 # real limit of a per-run taint and it is stated in SECURITY.md
 # rather than papered over here.
 _EXTERNAL_INGEST_TOOLS = frozenset({"web_fetch", "web_search", "research", "sysadmin"})
+
+
+def _read_path_of(decision) -> str | None:
+    """
+    The path of a files:read, taken from the routing decision.
+
+    Deliberately narrow: only a `read`, only from a decision Forge
+    itself produced and dispatched. The alternative -- parsing the
+    path back out of the tool's own output -- would let file content
+    choose the path the next step writes to, which is the escalation
+    the E-2 guard exists to prevent.
+
+    Returns None on anything unexpected (wrong tool, wrong action,
+    unparseable payload, non-string path). A missing path is handled
+    by the prompt, which then refuses to steer toward a write at all;
+    a wrong one would be silent.
+    """
+    if getattr(decision, "tool", None) != "files":
+        return None
+    try:
+        payload = loads_payload(getattr(decision, "content", "") or "", "files")
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("action") != "read":
+        return None
+    path = payload.get("path")
+    return path if isinstance(path, str) and path else None
 
 # Tools that change something outside the run. "code" is not one: it
 # returns source as text, it doesn't execute or persist anything.
@@ -263,6 +291,7 @@ class Orchestrator:
             state.step_context = state.step_context + [
                 {"role": "assistant", "content": f"[{result.tool}] {result.output}"}
             ]
+            state.last_read_path = _read_path_of(decision) or state.last_read_path
 
         raise LoopGuardError("max_steps exhausted without a result")
 
@@ -287,7 +316,10 @@ class Orchestrator:
 
     def _route(self, state: AgentState):
         prompt = build_router_prompt(
-            state.user_input, history=state.history, step_context=state.step_context
+            state.user_input,
+            history=state.history,
+            step_context=state.step_context,
+            last_read_path=state.last_read_path,
         )
         log.event("router.prompt", chars=len(prompt))
         raw = call_llm(prompt)
