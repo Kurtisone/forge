@@ -430,7 +430,7 @@ def test_history_block_is_stable_regardless_of_step_context():
     # up to where step_context's own block would start.
     history_and_after_no_ctx = no_step_context.split(history_block_marker)[1]
     history_and_after_with_ctx = with_step_context.split(history_block_marker)[1]
-    common_history_text = "they said: Tu peux me lister mon matériel ?"
+    common_history_text = "\nUser: Tu peux me lister mon matériel ?\n"
     assert common_history_text in history_and_after_no_ctx
     assert common_history_text in history_and_after_with_ctx
 

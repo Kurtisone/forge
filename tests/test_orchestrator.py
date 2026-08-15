@@ -174,13 +174,22 @@ def test_leaked_role_prefix_is_stripped(monkeypatch):
     assert result.output == "here is my answer"
 
 
-def test_history_is_passed_as_context_not_dialogue(monkeypatch):
+def test_persisted_user_turn_is_rendered_exactly_like_the_live_turn(monkeypatch):
     """
-    Regression test: the history block used to be formatted as
-    'User: ... / Assistant: ...', which visually matched the live
-    turn prompt and caused local models to continue it as plain
-    dialogue instead of emitting JSON. It must read as reference
-    context instead. (Memory file isolation comes from the autouse
+    End-to-end half of the pure-append invariant, through the real
+    persistence path rather than a hand-built history list: what
+    orchestrator._finish() writes to memory.json must come back out of
+    _format_history() rendered byte-for-byte like the live "User:" line
+    that carried it in the turn before.
+
+    This replaces test_history_is_passed_as_context_not_dialogue, which
+    asserted the opposite ("\nUser: ...\n" must NOT appear) for the
+    bullet-summary format. That format existed because a full
+    'User: ... / Assistant: ...' dialogue made local models continue the
+    conversation in prose instead of emitting JSON. Only the user half
+    is symmetric now; assistant turns still render as a parenthesised
+    aside, so no bare "User:" line in this prompt is ever followed by
+    anything but JSON. (Memory file isolation comes from the autouse
     fixture in conftest.py.)
     """
     captured = {}
@@ -199,8 +208,12 @@ def test_history_is_passed_as_context_not_dialogue(monkeypatch):
     monkeypatch.setattr(orch_mod, "call_llm", capture_and_answer)
     Orchestrator().run("Comment je m'appelle ?")
 
-    assert "they said" in captured["prompt"]
-    assert "\nUser: Je m'appelle Alexandre\n" not in captured["prompt"]
+    from forge.router.prompt import render_user_turn
+
+    assert render_user_turn("Je m'appelle Alexandre") in captured["prompt"]
+    # The assistant side stays deliberately asymmetric.
+    assert "\nAssistant: Salut Alexandre !" not in captured["prompt"]
+    assert "(you answered: Salut Alexandre !)" in captured["prompt"]
 
 
 def test_unknown_tool_falls_back_to_chat(monkeypatch):

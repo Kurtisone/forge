@@ -406,6 +406,25 @@ def _examples(tools: list[str]) -> str:
 # "the message below", because they are no longer adjacent to it -- the
 # whole conversation now sits between them and the message they talk
 # about.
+def render_user_turn(content: str) -> str:
+    """
+    The one and only rendering of a user message in the router prompt.
+
+    Called twice per prompt, for the same message at two different ages:
+    once by _build_template for the live turn at the bottom, and once by
+    _format_history for that same turn one turn later, after
+    orchestrator._finish() has persisted it. Those two renderings MUST
+    produce identical bytes -- that is the whole pure-append invariant,
+    and it is why this is a function instead of two f-strings that
+    happen to match today.
+
+    The leading and trailing newlines are part of it. A prompt is a byte
+    string, not a list of lines, and a missing "\\n" is a divergence like
+    any other.
+    """
+    return f"\nUser: {content}\n"
+
+
 _ANSWER_LAST_USER_LINE = (
     "\nDo not continue the conversation below as plain text. Respond to the "
     'LAST "User:" line below with a single JSON object, exactly like the '
@@ -524,9 +543,7 @@ def _build_template(tools: list[str]) -> str:
         + _HISTORY_HEADER
         + _SENTINEL_HISTORY
         + _SENTINEL_STEP_CONTEXT
-        + "\nUser: "
-        + _SENTINEL_INPUT
-        + "\n"
+        + render_user_turn(_SENTINEL_INPUT)
     )
 
 
@@ -550,11 +567,25 @@ def _format_history(history: list[dict] | None) -> str:
     if not history:
         return ""
 
-    # Deliberately NOT formatted as "User: ... / Assistant: ..." --
-    # that pattern visually matches the live turn below it, and local
-    # models tend to just continue it as plain dialogue instead of
-    # emitting JSON. Bullet-point summaries read as context, not as a
-    # conversation to continue.
+    # A user turn is rendered here EXACTLY as the live turn is rendered
+    # at the bottom of the template -- "\nUser: " + content + "\n", the
+    # same bytes including both newlines. That identity is what makes
+    # prompt N a strict prefix of prompt N+1: turn N's live line is
+    # still there, byte for byte, in the position it already occupied,
+    # with the next turn appended after it. Change the live line in
+    # _build_template and this must change with it, or the whole
+    # pure-append property silently degrades into a per-turn rewind with
+    # no test-visible symptom other than latency.
+    #
+    # Assistant turns are NOT symmetric, on purpose. They only ever
+    # appear here, never as a live line, so nothing constrains their
+    # shape -- and the free choice is worth spending. Rendering them as
+    # "Assistant: ..." would complete a "User: X / Assistant: Y" dialogue
+    # pattern that directly contradicts what the examples above teach
+    # ("User: X" -> JSON), and local models follow the nearest surface
+    # pattern. The parenthesised aside reads as an annotation on the
+    # conversation rather than as a turn to continue, so the only thing
+    # in the prompt that ever follows a bare "User:" line is JSON.
     #
     # Entries are also truncated: a code paste saved before this fix
     # landed would otherwise blow up the prompt with hundreds of lines.
@@ -572,15 +603,17 @@ def _format_history(history: list[dict] | None) -> str:
     # this whole block is byte-identical between the last call of one
     # turn and the first call of the next, letting llama-server reuse
     # the KV cache for it instead of invalidating it every turn.
-    lines = []
+    parts = []
     for turn in history:
-        speaker = "they said" if turn.get("role") == "user" else "you answered"
         content = turn.get("content", "")
-        if len(content) > _MAX_HISTORY_ENTRY:
-            content = content[:_MAX_HISTORY_ENTRY] + "…"
-        lines.append(f"- {speaker}: {content}")
+        if turn.get("role") == "user":
+            parts.append(render_user_turn(content))
+        else:
+            if len(content) > _MAX_HISTORY_ENTRY:
+                content = content[:_MAX_HISTORY_ENTRY] + "…"
+            parts.append(f"\n(you answered: {content})\n")
 
-    return "\n".join(lines) + "\n"
+    return "".join(parts)
 
 
 def _neutralize_markers(text: str) -> str:
