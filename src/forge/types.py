@@ -11,6 +11,49 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class Usage:
+    """
+    What one completion cost, as reported by the backend itself.
+
+    Every field is optional because every backend reports a different
+    subset under different names, and the shapes drift between
+    versions -- see llama_cpp.py's note on tokens_cached. A missing
+    count must stay missing rather than become 0: a zero that means
+    "not reported" and a zero that means "nothing was evaluated" would
+    be indistinguishable once summed over a run, and the sum is the
+    number the compaction threshold and the quota indicator will read.
+    """
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    # llama.cpp only, informational: see the caveat in llama_cpp.call.
+    cached_tokens: int | None = None
+
+    @property
+    def total_tokens(self) -> int | None:
+        if self.prompt_tokens is None and self.completion_tokens is None:
+            return None
+        return (self.prompt_tokens or 0) + (self.completion_tokens or 0)
+
+
+@dataclass(frozen=True)
+class Completion:
+    """
+    What a provider returns: the text, plus what it cost.
+
+    Providers used to return a bare str, which meant the token counts
+    every backend already sends back were parsed (llama.cpp), logged,
+    and then discarded at the provider boundary. Nothing downstream
+    could see them, so Forge could not answer "how much did that run
+    cost" about itself -- and compaction had to count messages because
+    counting tokens was not an option.
+    """
+
+    text: str
+    usage: Usage = field(default_factory=Usage)
+
+
+@dataclass(frozen=True)
 class RouterDecision:
     """
     What the router LLM decided to do, already validated.

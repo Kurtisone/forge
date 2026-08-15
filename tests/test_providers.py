@@ -31,14 +31,14 @@ def test_llama_cpp_call_returns_content(monkeypatch):
     monkeypatch.setattr(
         requests, "post", lambda *a, **kw: FakeResponse({"content": "hello"})
     )
-    assert llama_cpp.call("http://fake", "model", "prompt") == "hello"
+    assert llama_cpp.call("http://fake", "model", "prompt").text == "hello"
 
 
 def test_llama_cpp_call_accepts_completion_key(monkeypatch):
     monkeypatch.setattr(
         requests, "post", lambda *a, **kw: FakeResponse({"completion": "hi"})
     )
-    assert llama_cpp.call("http://fake", "model", "prompt") == "hi"
+    assert llama_cpp.call("http://fake", "model", "prompt").text == "hi"
 
 
 def test_llama_cpp_empty_content_raises_provider_error(monkeypatch):
@@ -326,7 +326,7 @@ def test_ollama_call_returns_response_field(monkeypatch):
     monkeypatch.setattr(
         requests, "post", lambda *a, **kw: FakeResponse({"response": "hello"})
     )
-    assert ollama.call("http://fake", "model", "prompt") == "hello"
+    assert ollama.call("http://fake", "model", "prompt").text == "hello"
 
 
 def test_ollama_empty_response_raises_provider_error(monkeypatch):
@@ -357,7 +357,7 @@ def test_openrouter_call_returns_message_content(monkeypatch):
         "post",
         lambda *a, **kw: FakeResponse({"choices": [{"message": {"content": "hello"}}]}),
     )
-    assert openrouter.call("http://fake", "sk-fake", "model", "prompt") == "hello"
+    assert openrouter.call("http://fake", "sk-fake", "model", "prompt").text == "hello"
 
 
 def test_openrouter_error_field_raises_provider_error(monkeypatch):

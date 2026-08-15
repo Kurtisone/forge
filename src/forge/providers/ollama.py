@@ -2,9 +2,10 @@ import requests
 
 from forge.errors import ProviderError
 from forge.providers import error_body
+from forge.types import Completion, Usage
 
 
-def call(url: str, model: str, prompt: str) -> str:
+def call(url: str, model: str, prompt: str) -> Completion:
     try:
         r = requests.post(
             url,
@@ -23,4 +24,11 @@ def call(url: str, model: str, prompt: str) -> str:
     content = data.get("response") or data.get("content")
     if not content:
         raise ProviderError(f"ollama returned no content: {data}")
-    return content
+
+    return Completion(
+        text=content,
+        usage=Usage(
+            prompt_tokens=data.get("prompt_eval_count"),
+            completion_tokens=data.get("eval_count"),
+        ),
+    )

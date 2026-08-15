@@ -13,6 +13,7 @@ import pytest
 
 import forge.llm as llm_mod
 from forge.errors import ProviderError
+from forge.types import Completion, Usage
 
 
 def test_dispatches_to_ollama(monkeypatch):
@@ -21,7 +22,7 @@ def test_dispatches_to_ollama(monkeypatch):
 
     def fake_call(url, model, prompt):
         called["args"] = (url, model, prompt)
-        return "ollama says hi"
+        return Completion(text="ollama says hi")
 
     monkeypatch.setattr(llm_mod.ollama, "call", fake_call)
     result = llm_mod.call_llm("hello")
@@ -33,7 +34,9 @@ def test_dispatches_to_ollama(monkeypatch):
 def test_dispatches_to_llama_cpp(monkeypatch):
     monkeypatch.setattr(llm_mod, "FORGE_PROVIDER", "llama_cpp")
     monkeypatch.setattr(
-        llm_mod.llama_cpp, "call", lambda url, model, prompt: "llama.cpp says hi"
+        llm_mod.llama_cpp,
+        "call",
+        lambda url, model, prompt: Completion(text="llama.cpp says hi"),
     )
 
     result = llm_mod.call_llm("hello")
@@ -45,7 +48,7 @@ def test_dispatches_to_openrouter(monkeypatch):
     monkeypatch.setattr(
         llm_mod.openrouter,
         "call",
-        lambda url, key, model, prompt: "openrouter says hi",
+        lambda url, key, model, prompt: Completion(text="openrouter says hi"),
     )
 
     result = llm_mod.call_llm("hello")
@@ -85,3 +88,45 @@ def test_unexpected_exception_gets_wrapped_into_provider_error(monkeypatch):
 
     with pytest.raises(ProviderError, match="unexpected provider failure"):
         llm_mod.call_llm("hello")
+
+
+# ---------------------------------------------------------------------
+# usage passthrough
+# ---------------------------------------------------------------------
+
+
+def test_call_llm_returns_text_not_the_completion(monkeypatch):
+    """The orchestrator contract is unchanged: call_llm hands back a
+    plain str. Only the provider boundary got richer."""
+    monkeypatch.setattr(llm_mod, "FORGE_PROVIDER", "ollama")
+    monkeypatch.setattr(
+        llm_mod.ollama,
+        "call",
+        lambda url, model, prompt: Completion(
+            text="answer", usage=Usage(prompt_tokens=120, completion_tokens=8)
+        ),
+    )
+    result = llm_mod.call_llm("hello")
+    assert result == "answer"
+    assert isinstance(result, str)
+
+
+def test_usage_reaches_the_response_log(monkeypatch):
+    monkeypatch.setattr(llm_mod, "FORGE_PROVIDER", "ollama")
+    monkeypatch.setattr(
+        llm_mod.ollama,
+        "call",
+        lambda url, model, prompt: Completion(
+            text="answer", usage=Usage(prompt_tokens=120, completion_tokens=8)
+        ),
+    )
+
+    events = []
+    monkeypatch.setattr(
+        llm_mod.log, "event", lambda name, **kw: events.append((name, kw))
+    )
+    llm_mod.call_llm("hello")
+
+    response = next(kw for name, kw in events if name == "llm.response")
+    assert response["prompt_tokens"] == 120
+    assert response["completion_tokens"] == 8

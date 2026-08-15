@@ -10,6 +10,7 @@ from forge.config import (
 from forge.errors import ProviderError
 from forge.logger import log
 from forge.providers import error_body
+from forge.types import Completion, Usage
 
 
 def get_loaded_model(url: str) -> str | None:
@@ -43,7 +44,7 @@ def get_loaded_model(url: str) -> str | None:
     return path.rsplit("/", 1)[-1]
 
 
-def call(url: str, model: str, prompt: str) -> str:
+def call(url: str, model: str, prompt: str) -> Completion:
     payload = {
         "prompt": prompt,
         "temperature": 0.0,
@@ -122,4 +123,15 @@ def call(url: str, model: str, prompt: str) -> str:
     content = data.get("content") or data.get("completion")
     if not content:
         raise ProviderError(f"llama_cpp returned no content: {data}")
-    return content
+
+    # prompt_n is already resolved above (tokens_evaluated, falling back
+    # to timings.prompt_n) for the cache log -- reuse it rather than
+    # re-deriving it with a different precedence.
+    return Completion(
+        text=content,
+        usage=Usage(
+            prompt_tokens=prompt_n,
+            completion_tokens=data.get("tokens_predicted", timings.get("predicted_n")),
+            cached_tokens=tokens_cached,
+        ),
+    )
