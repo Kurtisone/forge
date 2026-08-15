@@ -1,7 +1,12 @@
 .env*
 !.env.example
+# Working notes written for a one-off audience (a PR description, a
+# post) rather than for the repo. LINKEDIN_POST.md was already here
+# for the same reason; the PR write-ups got committed anyway because
+# nothing matched them.
 LINKEDIN_POST.md
 docs/LINKEDIN_POST.md
+/PR-*.md
 data/*
 __pycache__/
 *.pyc
