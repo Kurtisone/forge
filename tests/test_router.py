@@ -421,7 +421,7 @@ def test_history_block_is_stable_regardless_of_step_context():
         available_tools=["chat", "code", "memory"],
     )
 
-    history_block_marker = "Context from earlier in this conversation"
+    history_block_marker = "Conversation so far."
     prefix_no_ctx = no_step_context.split(history_block_marker)[0]
     prefix_with_ctx = with_step_context.split(history_block_marker)[0]
     assert prefix_no_ctx == prefix_with_ctx  # static template unaffected
@@ -676,8 +676,29 @@ def test_prompt_includes_vague_file_reference_instruction_when_history_exists():
     assert "notes.py" in prompt  # the real path stayed visible in history
 
 
-def test_prompt_omits_vague_file_reference_instruction_with_no_history():
-    prompt = build_router_prompt(
+def test_vague_file_reference_instruction_is_gated_on_tools_not_history():
+    """
+    This instruction used to be emitted only when history was non-empty.
+    That gate was wrong twice over.
+
+    It broke the cacheable prefix: a block that appears for the first
+    time on turn 2 is an insertion in front of turn 1's text, i.e. one
+    guaranteed cache miss per conversation for a fixed piece of static
+    guidance.
+
+    And history was never what made it meaningful -- the tool set is.
+    Gating on the tool set keeps the promise made at the top of
+    router/prompt.py (a tool not opted into via ENABLED_TOOLS is never
+    named in the prompt) while staying constant for the lifetime of the
+    process.
+    """
+    with_files = build_router_prompt(
         "améliore le contenu", available_tools=["chat", "code", "files"]
     )
-    assert "refers to a file vaguely" not in prompt
+    assert "refers to a file vaguely" in with_files  # no history needed
+
+    without_files = build_router_prompt(
+        "améliore le contenu", available_tools=["chat", "code"]
+    )
+    assert "refers to a file vaguely" not in without_files
+    assert "files" not in without_files

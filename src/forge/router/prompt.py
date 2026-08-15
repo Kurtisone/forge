@@ -399,6 +399,68 @@ def _examples(tools: list[str]) -> str:
     return "\n\n".join(blocks)
 
 
+# Hoisted out of the tail of the prompt (and out of _format_history) so
+# that nothing fixed-length sits after a block that grows every turn.
+#
+# Both of these are addressed to the LAST "User:" line rather than to
+# "the message below", because they are no longer adjacent to it -- the
+# whole conversation now sits between them and the message they talk
+# about.
+_ANSWER_LAST_USER_LINE = (
+    "\nDo not continue the conversation below as plain text. Respond to the "
+    'LAST "User:" line below with a single JSON object, exactly like the '
+    "examples above.\n"
+)
+
+# Previously the tail of _format_history. It moved for the same reason
+# the block above did: it was appended AFTER the turns, so every new turn
+# was inserted in front of it instead of at the end of the prompt.
+#
+# It addresses a real unresolved case from v3.9 -- "analyse le contenu"
+# referring implicitly to a file mentioned earlier (not named again)
+# could make the model answer from imagined content instead of ever
+# reading the real file. A files/review confirmation in the conversation
+# (e.g. "[ok] written N bytes to notes.py") already carries the real
+# path; this is what tells the model to go find and reuse it.
+#
+# It used to be gated on history being non-empty, which is now the wrong
+# gate twice over: a per-turn gate is exactly what breaks the cacheable
+# prefix, and history is not what makes the instruction meaningful
+# anyway. It is gated on the TOOL SET instead -- fixed for the lifetime
+# of the process, so still static -- which also keeps the promise made
+# at the top of this file: a tool the operator did not opt into via
+# ENABLED_TOOLS is never named anywhere in the prompt.
+_FILE_REFERENCE_TOOLS = ("files", "review")
+
+_VAGUE_FILE_REFERENCE = (
+    '\nIf that last message refers to a file vaguely ("ce fichier", "le '
+    'contenu", "améliore-le", "analyse-le") without naming a path, look '
+    "through the conversation below for the most recently mentioned real "
+    "file path (from a {tools} action) and use that exact path. Do NOT "
+    "invent file content from memory -- read the file first if you don't "
+    "already have its current content in this context.\n"
+)
+
+
+def _closing_instructions(tools: list[str]) -> str:
+    named = [t for t in _FILE_REFERENCE_TOOLS if t in tools]
+    if not named:
+        return _ANSWER_LAST_USER_LINE
+    return _ANSWER_LAST_USER_LINE + _VAGUE_FILE_REFERENCE.format(tools="/".join(named))
+
+
+# Emitted unconditionally, from the static template rather than from
+# _format_history. When it was conditional on history being non-empty it
+# appeared for the first time on turn 2, which is itself an insertion in
+# front of turn 1's text -- one guaranteed cache miss per conversation,
+# for a header that costs a dozen tokens to just always be there.
+_HISTORY_HEADER = (
+    '\nConversation so far. Everything up to the last "User:" line is '
+    "context only -- that last line is the new message you must answer "
+    "now:\n"
+)
+
+
 def _build_template(tools: list[str]) -> str:
     return (
         # No "/no_think" prefix here, unlike the graph synthesis prompts:
@@ -434,11 +496,37 @@ def _build_template(tools: list[str]) -> str:
         "- Use the conversation history below only as context; do not repeat it\n\n"
         "Examples:\n\n"
         f"{_examples(tools)}\n"
+        # Everything above this point is static for a given tool set, and
+        # everything below it grows by appending. That split is the whole
+        # point of this ordering.
+        #
+        # These closing instructions used to sit BETWEEN the history block
+        # and the live "User:" line. That put a fixed ~50-token block after
+        # a section that grows every turn, so each new turn inserted text
+        # in the middle of the prompt rather than at its end. llama-server
+        # cannot continue from the live slot state across an insertion: it
+        # has to rewind to the last recurrent-state checkpoint before the
+        # insertion point and replay from there. Measured on this model,
+        # that is the difference between ~0.30 ms/token (pure append) and
+        # ~1.80 ms/token (insertion one tenth of the way from the end),
+        # and it falls off a cliff to a full ~12 ms/token recompute once
+        # the insertion lands deeper than checkpoint coverage.
+        #
+        # Hoisting them here makes prompt N+1 a strict character-for-
+        # character extension of prompt N. See _format_history for the
+        # other half of that invariant.
+        #
+        # Known and accepted exception: today_line() sits in the static
+        # header, so the entire prefix is invalidated once, at midnight.
+        # Moving it to the tail would trade a daily full recompute for a
+        # per-turn rewind, which is the worse deal.
+        + _closing_instructions(tools)
+        + _HISTORY_HEADER
         + _SENTINEL_HISTORY
         + _SENTINEL_STEP_CONTEXT
-        + "\nDo not continue the conversation above as plain text. Respond to "
-        "the new message below with a single JSON object, exactly like the "
-        "examples earlier.\n" + "\nUser: " + _SENTINEL_INPUT + "\n"
+        + "\nUser: "
+        + _SENTINEL_INPUT
+        + "\n"
     )
 
 
@@ -471,40 +559,26 @@ def _format_history(history: list[dict] | None) -> str:
     # Entries are also truncated: a code paste saved before this fix
     # landed would otherwise blow up the prompt with hundreds of lines.
     #
+    # Nothing may be appended after the turns -- the header and the
+    # standing file-reference instruction that used to bracket this
+    # block now live in the static template (_HISTORY_HEADER,
+    # _closing_instructions). Anything emitted here after the loop is
+    # text that every future turn has to be inserted in front of, which
+    # is exactly the pattern this block exists to avoid.
+    #
     # This must stay an exact function of memory.json's persisted
     # history and nothing else -- no per-run tool-result content mixed
     # in (see step_context / _format_step_context below) -- so that
     # this whole block is byte-identical between the last call of one
     # turn and the first call of the next, letting llama-server reuse
     # the KV cache for it instead of invalidating it every turn.
-    lines = ["\nContext from earlier in this conversation (for reference only):"]
+    lines = []
     for turn in history:
         speaker = "they said" if turn.get("role") == "user" else "you answered"
         content = turn.get("content", "")
         if len(content) > _MAX_HISTORY_ENTRY:
             content = content[:_MAX_HISTORY_ENTRY] + "…"
         lines.append(f"- {speaker}: {content}")
-
-    # Addresses a real unresolved case from v3.9: "analyse le contenu"
-    # referring implicitly to a file mentioned earlier (not named
-    # again) could make the model answer from imagined content
-    # instead of ever actually reading the real file. A files/review
-    # confirmation persisted above (e.g. "[ok] written N bytes to
-    # notes.py") already contains the real path -- this instruction
-    # is what tells the model to go find and reuse it, instead of
-    # guessing or fabricating file content. Cross-turn reference
-    # resolution, not a single missing worked example, so this is a
-    # standing instruction rather than a step_context-gated hint like
-    # the ones below (those only fire within a single multi-step run).
-    lines.append(
-        '\nIf the new message below refers to a file vaguely ("ce '
-        'fichier", "le contenu", "améliore-le", "analyse-le") without '
-        "naming a path, look through the context above for the most "
-        "recently mentioned real file path (from a files/review "
-        "action) and use that exact path. Do NOT invent file content "
-        "from memory -- read the file first if you don't already have "
-        "its current content in this context."
-    )
 
     return "\n".join(lines) + "\n"
 
