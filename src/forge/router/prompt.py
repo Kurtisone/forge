@@ -399,9 +399,95 @@ def _examples(tools: list[str]) -> str:
     return "\n\n".join(blocks)
 
 
+# Hoisted out of the tail of the prompt (and out of _format_history) so
+# that nothing fixed-length sits after a block that grows every turn.
+#
+# Both of these are addressed to the LAST "User:" line rather than to
+# "the message below", because they are no longer adjacent to it -- the
+# whole conversation now sits between them and the message they talk
+# about.
+def render_user_turn(content: str) -> str:
+    """
+    The one and only rendering of a user message in the router prompt.
+
+    Called twice per prompt, for the same message at two different ages:
+    once by _build_template for the live turn at the bottom, and once by
+    _format_history for that same turn one turn later, after
+    orchestrator._finish() has persisted it. Those two renderings MUST
+    produce identical bytes -- that is the whole pure-append invariant,
+    and it is why this is a function instead of two f-strings that
+    happen to match today.
+
+    The leading and trailing newlines are part of it. A prompt is a byte
+    string, not a list of lines, and a missing "\\n" is a divergence like
+    any other.
+    """
+    return f"\nUser: {content}\n"
+
+
+_ANSWER_LAST_USER_LINE = (
+    "\nDo not continue the conversation below as plain text. Respond to the "
+    'LAST "User:" line below with a single JSON object, exactly like the '
+    "examples above.\n"
+)
+
+# Previously the tail of _format_history. It moved for the same reason
+# the block above did: it was appended AFTER the turns, so every new turn
+# was inserted in front of it instead of at the end of the prompt.
+#
+# It addresses a real unresolved case from v3.9 -- "analyse le contenu"
+# referring implicitly to a file mentioned earlier (not named again)
+# could make the model answer from imagined content instead of ever
+# reading the real file. A files/review confirmation in the conversation
+# (e.g. "[ok] written N bytes to notes.py") already carries the real
+# path; this is what tells the model to go find and reuse it.
+#
+# It used to be gated on history being non-empty, which is now the wrong
+# gate twice over: a per-turn gate is exactly what breaks the cacheable
+# prefix, and history is not what makes the instruction meaningful
+# anyway. It is gated on the TOOL SET instead -- fixed for the lifetime
+# of the process, so still static -- which also keeps the promise made
+# at the top of this file: a tool the operator did not opt into via
+# ENABLED_TOOLS is never named anywhere in the prompt.
+_FILE_REFERENCE_TOOLS = ("files", "review")
+
+_VAGUE_FILE_REFERENCE = (
+    '\nIf that last message refers to a file vaguely ("ce fichier", "le '
+    'contenu", "améliore-le", "analyse-le") without naming a path, look '
+    "through the conversation below for the most recently mentioned real "
+    "file path (from a {tools} action) and use that exact path. Do NOT "
+    "invent file content from memory -- read the file first if you don't "
+    "already have its current content in this context.\n"
+)
+
+
+def _closing_instructions(tools: list[str]) -> str:
+    named = [t for t in _FILE_REFERENCE_TOOLS if t in tools]
+    if not named:
+        return _ANSWER_LAST_USER_LINE
+    return _ANSWER_LAST_USER_LINE + _VAGUE_FILE_REFERENCE.format(tools="/".join(named))
+
+
+# Emitted unconditionally, from the static template rather than from
+# _format_history. When it was conditional on history being non-empty it
+# appeared for the first time on turn 2, which is itself an insertion in
+# front of turn 1's text -- one guaranteed cache miss per conversation,
+# for a header that costs a dozen tokens to just always be there.
+_HISTORY_HEADER = (
+    '\nConversation so far. Everything up to the last "User:" line is '
+    "context only -- that last line is the new message you must answer "
+    "now:\n"
+)
+
+
 def _build_template(tools: list[str]) -> str:
     return (
-        "/no_think\n"
+        # No "/no_think" prefix here, unlike the graph synthesis prompts:
+        # Qwen3's soft switch was dropped in Qwen3.5, so on the model this
+        # router actually runs against it is a dead token -- it costs a
+        # position in every single prompt and buys nothing. The router
+        # could not emit a reasoning block anyway: the GBNF grammar forces
+        # the very first token to be "{".
         "You are Forge, a JSON-routing assistant.\n"
         f"{today_line()}\n\n"
         "Return ONLY valid JSON. NO EXPLANATION, NO TEXT OUTSIDE THE JSON.\n\n"
@@ -429,15 +515,67 @@ def _build_template(tools: list[str]) -> str:
         "- Use the conversation history below only as context; do not repeat it\n\n"
         "Examples:\n\n"
         f"{_examples(tools)}\n"
+        # Everything above this point is static for a given tool set, and
+        # everything below it grows by appending. That split is the whole
+        # point of this ordering.
+        #
+        # These closing instructions used to sit BETWEEN the history block
+        # and the live "User:" line. That put a fixed ~50-token block after
+        # a section that grows every turn, so each new turn inserted text
+        # in the middle of the prompt rather than at its end. llama-server
+        # cannot continue from the live slot state across an insertion: it
+        # has to rewind to the last recurrent-state checkpoint before the
+        # insertion point and replay from there. Measured on this model,
+        # that is the difference between ~0.30 ms/token (pure append) and
+        # ~1.80 ms/token (insertion one tenth of the way from the end),
+        # and it falls off a cliff to a full ~12 ms/token recompute once
+        # the insertion lands deeper than checkpoint coverage.
+        #
+        # Hoisting them here makes prompt N+1 a strict character-for-
+        # character extension of prompt N. See _format_history for the
+        # other half of that invariant.
+        #
+        # Known and accepted exception: today_line() sits in the static
+        # header, so the entire prefix is invalidated once, at midnight.
+        # Moving it to the tail would trade a daily full recompute for a
+        # per-turn rewind, which is the worse deal.
+        + _closing_instructions(tools)
+        + _HISTORY_HEADER
         + _SENTINEL_HISTORY
         + _SENTINEL_STEP_CONTEXT
-        + "\nDo not continue the conversation above as plain text. Respond to "
-        "the new message below with a single JSON object, exactly like the "
-        "examples earlier.\n" + "\nUser: " + _SENTINEL_INPUT + "\n"
+        + render_user_turn(_SENTINEL_INPUT)
     )
 
 
-_MAX_HISTORY_ENTRY = 120  # chars per entry displayed in the prompt
+_MAX_HISTORY_ENTRY = 120  # chars per ASSISTANT entry displayed in the prompt
+# User entries get their own, much larger cap, and the asymmetry is
+# load-bearing rather than a matter of taste.
+#
+# A user turn is rendered identically live and in history
+# (render_user_turn), and the live rendering is never truncated -- the
+# router has to see the whole message it is routing. So any truncation
+# applied on the history side is, by construction, a divergence between
+# prompt N and prompt N+1 at exactly the truncation point.
+#
+# The divergence is bounded and one-shot, which is what makes it
+# acceptable rather than fatal: the truncated form is stable in history
+# from then on, so the turn after it is a pure append again. Only the
+# single turn that follows an over-cap message pays a rewind, and it
+# rewinds to the cap, not to the start of the conversation.
+#
+# 120 would have made that the common case instead of the rare one --
+# any paste, any multi-line question. 4000 puts it out of reach of
+# realistic chat input while still bounding what one message can cost
+# the prompt budget forever. Note it is a per-entry cap, not a total:
+# MEMORY_MAX_HISTORY entries at this size would not fit the context
+# window, which is what the token-based compaction threshold is for.
+#
+# Truncating at ingestion instead would remove the divergence entirely,
+# and is deliberately not done: orchestrator.py:353 records that capping
+# what gets persisted silently corrupted the web UI, which renders
+# memory.json directly via GET /history. The prompt's budget problem
+# must not be solved in the user's transcript.
+_MAX_USER_HISTORY_ENTRY = 4000
 # A files:read result in step_context is about to be reproduced in
 # full (with one part changed) on the very next step -- 120 chars
 # would guarantee a truncated/hallucinated rewrite for anything past a
@@ -457,14 +595,35 @@ def _format_history(history: list[dict] | None) -> str:
     if not history:
         return ""
 
-    # Deliberately NOT formatted as "User: ... / Assistant: ..." --
-    # that pattern visually matches the live turn below it, and local
-    # models tend to just continue it as plain dialogue instead of
-    # emitting JSON. Bullet-point summaries read as context, not as a
-    # conversation to continue.
+    # A user turn is rendered here EXACTLY as the live turn is rendered
+    # at the bottom of the template -- "\nUser: " + content + "\n", the
+    # same bytes including both newlines. That identity is what makes
+    # prompt N a strict prefix of prompt N+1: turn N's live line is
+    # still there, byte for byte, in the position it already occupied,
+    # with the next turn appended after it. Change the live line in
+    # _build_template and this must change with it, or the whole
+    # pure-append property silently degrades into a per-turn rewind with
+    # no test-visible symptom other than latency.
+    #
+    # Assistant turns are NOT symmetric, on purpose. They only ever
+    # appear here, never as a live line, so nothing constrains their
+    # shape -- and the free choice is worth spending. Rendering them as
+    # "Assistant: ..." would complete a "User: X / Assistant: Y" dialogue
+    # pattern that directly contradicts what the examples above teach
+    # ("User: X" -> JSON), and local models follow the nearest surface
+    # pattern. The parenthesised aside reads as an annotation on the
+    # conversation rather than as a turn to continue, so the only thing
+    # in the prompt that ever follows a bare "User:" line is JSON.
     #
     # Entries are also truncated: a code paste saved before this fix
     # landed would otherwise blow up the prompt with hundreds of lines.
+    #
+    # Nothing may be appended after the turns -- the header and the
+    # standing file-reference instruction that used to bracket this
+    # block now live in the static template (_HISTORY_HEADER,
+    # _closing_instructions). Anything emitted here after the loop is
+    # text that every future turn has to be inserted in front of, which
+    # is exactly the pattern this block exists to avoid.
     #
     # This must stay an exact function of memory.json's persisted
     # history and nothing else -- no per-run tool-result content mixed
@@ -472,36 +631,19 @@ def _format_history(history: list[dict] | None) -> str:
     # this whole block is byte-identical between the last call of one
     # turn and the first call of the next, letting llama-server reuse
     # the KV cache for it instead of invalidating it every turn.
-    lines = ["\nContext from earlier in this conversation (for reference only):"]
+    parts = []
     for turn in history:
-        speaker = "they said" if turn.get("role") == "user" else "you answered"
         content = turn.get("content", "")
-        if len(content) > _MAX_HISTORY_ENTRY:
-            content = content[:_MAX_HISTORY_ENTRY] + "…"
-        lines.append(f"- {speaker}: {content}")
+        if turn.get("role") == "user":
+            if len(content) > _MAX_USER_HISTORY_ENTRY:
+                content = content[:_MAX_USER_HISTORY_ENTRY] + "…"
+            parts.append(render_user_turn(content))
+        else:
+            if len(content) > _MAX_HISTORY_ENTRY:
+                content = content[:_MAX_HISTORY_ENTRY] + "…"
+            parts.append(f"\n(you answered: {content})\n")
 
-    # Addresses a real unresolved case from v3.9: "analyse le contenu"
-    # referring implicitly to a file mentioned earlier (not named
-    # again) could make the model answer from imagined content
-    # instead of ever actually reading the real file. A files/review
-    # confirmation persisted above (e.g. "[ok] written N bytes to
-    # notes.py") already contains the real path -- this instruction
-    # is what tells the model to go find and reuse it, instead of
-    # guessing or fabricating file content. Cross-turn reference
-    # resolution, not a single missing worked example, so this is a
-    # standing instruction rather than a step_context-gated hint like
-    # the ones below (those only fire within a single multi-step run).
-    lines.append(
-        '\nIf the new message below refers to a file vaguely ("ce '
-        'fichier", "le contenu", "améliore-le", "analyse-le") without '
-        "naming a path, look through the context above for the most "
-        "recently mentioned real file path (from a files/review "
-        "action) and use that exact path. Do NOT invent file content "
-        "from memory -- read the file first if you don't already have "
-        "its current content in this context."
-    )
-
-    return "\n".join(lines) + "\n"
+    return "".join(parts)
 
 
 def _neutralize_markers(text: str) -> str:

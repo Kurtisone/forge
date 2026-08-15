@@ -50,8 +50,15 @@ _PROMPT_LEAK_MARKERS = [
     "NEVER add text outside the JSON",
     'WHAT "content" MEANS PER TOOL',
     "Stop generating immediately after the closing brace",
-    "they said:",
+    # "they said:" used to live here alongside "you answered:". The
+    # history block no longer renders user turns as a bullet -- they are
+    # rendered exactly like the live "User:" line so that each prompt is
+    # a pure append over the last one (see router/prompt.render_user_turn).
+    # "User:" itself is far too generic to use as a leak marker, so the
+    # replacement is the history header, which is template-only text and
+    # cannot plausibly appear in a real answer.
     "you answered:",
+    "is the new message you must answer now",
 ]
 
 # Max chars shown to the user for a plain-text fallback.

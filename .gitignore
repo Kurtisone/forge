@@ -8,6 +8,10 @@ LINKEDIN_POST.md
 docs/LINKEDIN_POST.md
 /PR-*.md
 data/*
+# A/B result files written by bench/router_ab.py. They hold the model's
+# full output for every fixture, which is worth keeping locally to read
+# by hand and worth nothing in the history.
+/bench/*.json
 __pycache__/
 *.pyc
 *.egg-info/
