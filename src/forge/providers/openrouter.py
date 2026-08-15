@@ -1,6 +1,7 @@
 import requests
 
 from forge.errors import ProviderError
+from forge.providers import error_body
 
 
 def call(url: str, api_key: str, model: str, prompt: str) -> str:
@@ -24,9 +25,15 @@ def call(url: str, api_key: str, model: str, prompt: str) -> str:
             },
             timeout=120,
         )
-        r.raise_for_status()
     except requests.RequestException as e:
         raise ProviderError(f"openrouter request failed: {e}") from e
+
+    try:
+        r.raise_for_status()
+    except requests.RequestException as e:
+        # 402 (out of credits) and 429 (rate limited) both come back as
+        # a bare status with the actionable detail in the body.
+        raise ProviderError(f"openrouter request failed: {e}{error_body(r)}") from e
 
     data = r.json()
 

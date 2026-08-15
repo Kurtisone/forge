@@ -1,6 +1,7 @@
 import requests
 
 from forge.errors import ProviderError
+from forge.providers import error_body
 
 
 def call(url: str, model: str, prompt: str) -> str:
@@ -10,9 +11,13 @@ def call(url: str, model: str, prompt: str) -> str:
             json={"model": model, "prompt": prompt, "stream": False},
             timeout=120,
         )
-        r.raise_for_status()
     except requests.RequestException as e:
         raise ProviderError(f"ollama request failed: {e}") from e
+
+    try:
+        r.raise_for_status()
+    except requests.RequestException as e:
+        raise ProviderError(f"ollama request failed: {e}{error_body(r)}") from e
 
     data = r.json()
     content = data.get("response") or data.get("content")

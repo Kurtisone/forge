@@ -9,6 +9,7 @@ from forge.config import (
 )
 from forge.errors import ProviderError
 from forge.logger import log
+from forge.providers import error_body
 
 
 def get_loaded_model(url: str) -> str | None:
@@ -80,9 +81,17 @@ def call(url: str, model: str, prompt: str) -> str:
 
     try:
         r = requests.post(f"{url}/completion", json=payload, timeout=LLAMA_CPP_TIMEOUT)
+    except requests.RequestException as e:
+        # Never reached the server: connection refused, DNS, timeout.
+        # There is no body to report here, only the transport error.
+        raise ProviderError(f"llama_cpp request failed: {e}") from e
+
+    try:
         r.raise_for_status()
     except requests.RequestException as e:
-        raise ProviderError(f"llama_cpp request failed: {e}") from e
+        # Reached the server and was rejected -- the body carries the
+        # reason (see providers.error_body).
+        raise ProviderError(f"llama_cpp request failed: {e}{error_body(r)}") from e
 
     data = r.json()
 
