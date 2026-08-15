@@ -14,6 +14,7 @@ upstream changes, and records the usage on the way through.
 
 import time
 
+from forge import metrics
 from forge.config import (
     FORGE_PROVIDER,
     LLAMA_CPP_URL,
@@ -48,6 +49,7 @@ def call_llm(prompt: str) -> str:
         raise ProviderError(f"unexpected provider failure: {e}") from e
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
+    metrics.record(result.usage, elapsed_ms)
     log.event(
         "llm.response",
         elapsed_ms=elapsed_ms,
