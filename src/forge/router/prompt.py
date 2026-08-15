@@ -401,7 +401,12 @@ def _examples(tools: list[str]) -> str:
 
 def _build_template(tools: list[str]) -> str:
     return (
-        "/no_think\n"
+        # No "/no_think" prefix here, unlike the graph synthesis prompts:
+        # Qwen3's soft switch was dropped in Qwen3.5, so on the model this
+        # router actually runs against it is a dead token -- it costs a
+        # position in every single prompt and buys nothing. The router
+        # could not emit a reasoning block anyway: the GBNF grammar forces
+        # the very first token to be "{".
         "You are Forge, a JSON-routing assistant.\n"
         f"{today_line()}\n\n"
         "Return ONLY valid JSON. NO EXPLANATION, NO TEXT OUTSIDE THE JSON.\n\n"
