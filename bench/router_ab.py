@@ -273,6 +273,37 @@ FIXTURES = [
         user="Améliore le fichier",
         expect=None,
     ),
+    # c05 read by hand once too often. The closing instruction now
+    # states what to do when no real path exists (ask), so the right
+    # answer is nameable and these can be scored instead of eyeballed.
+    # Both directions are here on purpose: c05b/f01b catch the
+    # invention, c05c catches the over-correction -- an instruction to
+    # ask when unsure is one prompt tweak away from asking always, and
+    # only the pair can tell those apart.
+    _fx(
+        id="c05b",
+        history=[("user", "Salut"), ("assistant", "Bonjour !")],
+        user="Relis ce fichier et dis-moi ce qui cloche",
+        expect=["chat"],
+        forbid=["files", "review"],
+    ),
+    _fx(
+        id="f01b",
+        step_context=[("assistant", "[files] PORT = 8080\nDEBUG = True")],
+        user="Passe DEBUG à False",
+        expect=["chat"],
+        forbid=["files"],
+    ),
+    _fx(
+        id="c05c",
+        history=[
+            ("user", "Lis src/forge/router/parser.py"),
+            ("assistant", "[ok] lu"),
+        ],
+        user="Relis ce fichier et dis-moi ce qui cloche",
+        expect=["review", "files"],
+        contains="src/forge/router/parser.py",
+    ),
     # -- D. history has to remain READABLE, not just cache-friendly.
     #    Assistant turns render as "(you answered: ...)" now; these check
     #    the model still resolves references into that shape.
