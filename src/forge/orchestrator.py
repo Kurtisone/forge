@@ -24,7 +24,7 @@ Rules enforced here, by construction:
 
 import json
 
-from forge import memory, subtrace, trace
+from forge import memory, metrics, subtrace, trace
 from forge.config import (
     ALLOW_MUTATION_AFTER_EXTERNAL_DATA,
     MAX_STEPS,
@@ -109,6 +109,10 @@ class Orchestrator:
         self.max_steps = max_steps
 
     def run(self, user_input: str) -> AgentResult:
+        # Reset before anything else: _recall() below can trigger
+        # compaction, which calls the LLM, and that call belongs to
+        # this run's bill.
+        metrics.start_run()
         state = AgentState(
             user_input=user_input,
             max_steps=self.max_steps,

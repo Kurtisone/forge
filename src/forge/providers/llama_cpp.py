@@ -9,6 +9,8 @@ from forge.config import (
 )
 from forge.errors import ProviderError
 from forge.logger import log
+from forge.providers import error_body
+from forge.types import Completion, Usage
 
 
 def get_loaded_model(url: str) -> str | None:
@@ -42,7 +44,7 @@ def get_loaded_model(url: str) -> str | None:
     return path.rsplit("/", 1)[-1]
 
 
-def call(url: str, model: str, prompt: str) -> str:
+def call(url: str, model: str, prompt: str) -> Completion:
     payload = {
         "prompt": prompt,
         "temperature": 0.0,
@@ -80,9 +82,17 @@ def call(url: str, model: str, prompt: str) -> str:
 
     try:
         r = requests.post(f"{url}/completion", json=payload, timeout=LLAMA_CPP_TIMEOUT)
+    except requests.RequestException as e:
+        # Never reached the server: connection refused, DNS, timeout.
+        # There is no body to report here, only the transport error.
+        raise ProviderError(f"llama_cpp request failed: {e}") from e
+
+    try:
         r.raise_for_status()
     except requests.RequestException as e:
-        raise ProviderError(f"llama_cpp request failed: {e}") from e
+        # Reached the server and was rejected -- the body carries the
+        # reason (see providers.error_body).
+        raise ProviderError(f"llama_cpp request failed: {e}{error_body(r)}") from e
 
     data = r.json()
 
@@ -113,4 +123,15 @@ def call(url: str, model: str, prompt: str) -> str:
     content = data.get("content") or data.get("completion")
     if not content:
         raise ProviderError(f"llama_cpp returned no content: {data}")
-    return content
+
+    # prompt_n is already resolved above (tokens_evaluated, falling back
+    # to timings.prompt_n) for the cache log -- reuse it rather than
+    # re-deriving it with a different precedence.
+    return Completion(
+        text=content,
+        usage=Usage(
+            prompt_tokens=prompt_n,
+            completion_tokens=data.get("tokens_predicted", timings.get("predicted_n")),
+            cached_tokens=tokens_cached,
+        ),
+    )

@@ -21,6 +21,7 @@ import time
 import uuid
 from pathlib import Path
 
+from forge import metrics
 from forge.config import TRACE_ENABLED, TRACE_FILE
 from forge.logger import log
 
@@ -57,6 +58,11 @@ def _build_record(state) -> dict:
         "ok": state.ok,
         "error": state.error,
         "total_ms": _elapsed_ms(state),
+        # None when the run never opened a metrics scope (a Graph run
+        # outside the orchestrator, a direct call in a test) -- absent
+        # rather than zeroed, so a missing measurement never reads as a
+        # free run.
+        "llm": metrics.snapshot(),
     }
 
 
@@ -123,6 +129,20 @@ def format_for_display(traces: list[dict]) -> str:
             f"{t.get('total_ms')}ms  {step_summary or 'no steps'}"
         )
         lines.append(f"    in:  {t.get('user_input_preview', '')!r}")
+        llm = t.get("llm")
+        if llm:
+            # Inference time as a share of the run is the number that
+            # says whether a slow run is the model's fault or a tool's.
+            share = ""
+            total_ms = t.get("total_ms") or 0
+            if total_ms and llm.get("llm_ms"):
+                share = f" ({round(100 * llm['llm_ms'] / total_ms)}% of run)"
+            tokens = llm.get("total_tokens")
+            lines.append(
+                f"    llm: {llm.get('llm_calls')} calls  "
+                f"{llm.get('llm_ms')}ms{share}  "
+                f"{tokens if tokens is not None else '?'} tokens"
+            )
         if not t.get("ok") and t.get("error"):
             lines.append(f"    err: {t.get('error')}")
     return "\n".join(lines)

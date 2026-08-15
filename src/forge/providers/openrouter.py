@@ -1,9 +1,11 @@
 import requests
 
 from forge.errors import ProviderError
+from forge.providers import error_body
+from forge.types import Completion, Usage
 
 
-def call(url: str, api_key: str, model: str, prompt: str) -> str:
+def call(url: str, api_key: str, model: str, prompt: str) -> Completion:
     if not api_key:
         raise ProviderError("OPENROUTER_API_KEY is not set")
 
@@ -24,9 +26,15 @@ def call(url: str, api_key: str, model: str, prompt: str) -> str:
             },
             timeout=120,
         )
-        r.raise_for_status()
     except requests.RequestException as e:
         raise ProviderError(f"openrouter request failed: {e}") from e
+
+    try:
+        r.raise_for_status()
+    except requests.RequestException as e:
+        # 402 (out of credits) and 429 (rate limited) both come back as
+        # a bare status with the actionable detail in the body.
+        raise ProviderError(f"openrouter request failed: {e}{error_body(r)}") from e
 
     data = r.json()
 
@@ -35,4 +43,11 @@ def call(url: str, api_key: str, model: str, prompt: str) -> str:
     if "choices" not in data:
         raise ProviderError(f"openrouter bad response: {data}")
 
-    return data["choices"][0]["message"]["content"]
+    usage = data.get("usage") or {}
+    return Completion(
+        text=data["choices"][0]["message"]["content"],
+        usage=Usage(
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+        ),
+    )

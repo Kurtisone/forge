@@ -5,10 +5,16 @@ This is the ONLY module the orchestrator talks to for inference. It
 knows nothing about tools, routing, or logging policy -- it just
 turns a prompt into text, or raises ProviderError. That is the
 "LLM" leg of the LLM / tools / logs separation.
+
+Being the single dispatch point also makes it the single place where
+what a run costs can be observed. Providers hand back a Completion
+(text + Usage); call_llm keeps returning a plain str so nothing
+upstream changes, and records the usage on the way through.
 """
 
 import time
 
+from forge import metrics
 from forge.config import (
     FORGE_PROVIDER,
     LLAMA_CPP_URL,
@@ -43,5 +49,12 @@ def call_llm(prompt: str) -> str:
         raise ProviderError(f"unexpected provider failure: {e}") from e
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
-    log.event("llm.response", elapsed_ms=elapsed_ms, length=len(result))
-    return result
+    metrics.record(result.usage, elapsed_ms)
+    log.event(
+        "llm.response",
+        elapsed_ms=elapsed_ms,
+        length=len(result.text),
+        prompt_tokens=result.usage.prompt_tokens,
+        completion_tokens=result.usage.completion_tokens,
+    )
+    return result.text
