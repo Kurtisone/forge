@@ -547,7 +547,35 @@ def _build_template(tools: list[str]) -> str:
     )
 
 
-_MAX_HISTORY_ENTRY = 120  # chars per entry displayed in the prompt
+_MAX_HISTORY_ENTRY = 120  # chars per ASSISTANT entry displayed in the prompt
+# User entries get their own, much larger cap, and the asymmetry is
+# load-bearing rather than a matter of taste.
+#
+# A user turn is rendered identically live and in history
+# (render_user_turn), and the live rendering is never truncated -- the
+# router has to see the whole message it is routing. So any truncation
+# applied on the history side is, by construction, a divergence between
+# prompt N and prompt N+1 at exactly the truncation point.
+#
+# The divergence is bounded and one-shot, which is what makes it
+# acceptable rather than fatal: the truncated form is stable in history
+# from then on, so the turn after it is a pure append again. Only the
+# single turn that follows an over-cap message pays a rewind, and it
+# rewinds to the cap, not to the start of the conversation.
+#
+# 120 would have made that the common case instead of the rare one --
+# any paste, any multi-line question. 4000 puts it out of reach of
+# realistic chat input while still bounding what one message can cost
+# the prompt budget forever. Note it is a per-entry cap, not a total:
+# MEMORY_MAX_HISTORY entries at this size would not fit the context
+# window, which is what the token-based compaction threshold is for.
+#
+# Truncating at ingestion instead would remove the divergence entirely,
+# and is deliberately not done: orchestrator.py:353 records that capping
+# what gets persisted silently corrupted the web UI, which renders
+# memory.json directly via GET /history. The prompt's budget problem
+# must not be solved in the user's transcript.
+_MAX_USER_HISTORY_ENTRY = 4000
 # A files:read result in step_context is about to be reproduced in
 # full (with one part changed) on the very next step -- 120 chars
 # would guarantee a truncated/hallucinated rewrite for anything past a
@@ -607,6 +635,8 @@ def _format_history(history: list[dict] | None) -> str:
     for turn in history:
         content = turn.get("content", "")
         if turn.get("role") == "user":
+            if len(content) > _MAX_USER_HISTORY_ENTRY:
+                content = content[:_MAX_USER_HISTORY_ENTRY] + "…"
             parts.append(render_user_turn(content))
         else:
             if len(content) > _MAX_HISTORY_ENTRY:
