@@ -610,10 +610,67 @@ Every push to `main` and every PR targeting it runs, via GitHub Actions
 
 ```bash
 ruff check .
-pytest tests/ -v
+ruff format --check .
+pytest -v
 ```
 
-Same commands locally, after `pip install -r requirements-dev.txt`.
+Same commands locally, after the same setup the workflow does:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pip install -e .
+```
+
+The editable install is what makes `forge` importable from the repo
+root; without it `pytest -v` fails at collection with
+`ModuleNotFoundError: No module named 'forge'`.
+`ruff format --check` is a separate gate from `ruff check` and fails on
+formatting alone -- running only the latter locally will let a patch
+through that CI then rejects.
+
+---
+
+### Prompt Cache & Routing A/B (v3.12)
+
+`bench/router_ab.py` measures what the router prompt costs and what it
+decides. It exists because the two failure modes it covers are invisible
+from the test suite: a prompt-cache regression has no functional symptom
+at all (every answer stays correct, runs just get slower), and a routing
+regression is masked by the GBNF grammar, which guarantees the output
+*shape* whatever the model picks.
+
+Three measurements, deliberately separate:
+
+| | what it answers | needs a server |
+|---|---|---|
+| `prefix` | how many characters diverge between consecutive prompts | no |
+| `bench` | prompt-processing time on a growing conversation | yes |
+| `routing` | which tool gets picked, across 29 fixtures | yes |
+
+`prefix` is pure string arithmetic and fully deterministic, so it is the
+one to trust when the other two disagree. A prompt that is a strict
+prefix of the next one continues from llama-server's live slot state; an
+insertion anywhere above forces a rewind to the last checkpoint, and past
+a certain depth a full recompute.
+
+```bash
+# no llama-server needed
+python bench/router_ab.py run --offline --out before.json
+
+# full run, against the configured provider
+python bench/router_ab.py run --out after.json
+python bench/router_ab.py compare --before before.json --after after.json
+```
+
+The two arms of a comparison are two checkouts -- the harness never
+rebuilds the old prompt itself. Run it once per branch, then compare.
+It refuses to start on a fallback tool set, since `ENABLED_TOOLS` decides
+what the prompt contains and an A/B across two different tool sets
+compares two prompts rather than two layouts.
+
+Read `agreement` rather than the pass counts: on 29 fixtures a one- or
+two-fixture difference is noise, and a changed decision is worth opening
+by hand even when it changed from fail to pass.
 
 ---
 
@@ -654,6 +711,7 @@ Same commands locally, after `pip install -r requirements-dev.txt`.
 | **v3.9** | done | Context compaction + drawer: `rag_pointer`/`llm_summary` strategies, pin/unpin, `/history` `/drawer` `/compact` endpoints, `!compact` REPL command, files write-diff |
 | **v3.10** | done | Hardening + new tools: dedicated `test` tool, `web_fetch` (SSRF-guarded), `web_search` + `research` (self-hosted SearXNG), review graph gains an optional test-run step and chat-dispatch; router disambiguation fixes (files vs review, tool descriptions/examples for every new tool) found through real usage |
 | **v3.11** | done | Sysadmin: `discover → collect → synthesize` graph diagnosing real service/system problems from logs, read-only always (no restart/stop path exists in the code); UI gains expandable per-step detail (`forge.subtrace`) for every graph-based tool; read-only host access via three independent proxies (`xdg-dbus-proxy` for systemd, a hand-rolled GET-only proxy for podman.sock, a plain bind mount for the journal) rather than raw socket access — real production debugging found and fixed a prompt-injection-shaped example-leak, a context-overflow crash, `systemctl`'s undocumented refusal to honor `DBUS_SYSTEM_BUS_ADDRESS` (switched discovery to `busctl`), and a rootless-podman supplementary-groups gap blocking `journalctl -u` on root-owned services (`--group-add keep-groups`) |
+| **v3.12** | in progress | Router prompt latency: lot 1 adds per-call instrumentation (`ms_per_token` from llama-server's own timings, a cache-reuse signal that does not rely on `tokens_cached`); lot 2 makes the prompt a **pure append** over the previous turn -- closing instructions hoisted above the conversation, a persisted user turn rendered byte-identically to the live one -- taking warm prompt processing from 3.12 to 0.81 ms/token (~3.9x, ~8.4s to ~2.2s per routing call) with zero routing regressions across a 29-fixture A/B (`bench/router_ab.py`) |
 
 ---
 
