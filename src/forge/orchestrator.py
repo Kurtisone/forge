@@ -334,10 +334,19 @@ class Orchestrator:
             # Blocking reads too would also break the legitimate
             # read-then-write flow, where the path is grounded by the
             # read itself and by nothing before it.
+            # `review` is read-only but still guarded: it is a terminal
+            # analysis of a file the model NAMED, not a discovery step,
+            # so running it on an invented path buys nothing and costs
+            # everything -- observed live at 47 s to reach "file not
+            # found". files:read and files:list stay exempt because
+            # they are how a run legitimately finds out what exists.
             decision_path = _decision_path(decision)
             if (
                 decision_path
-                and _is_mutating(decision.tool, decision.content)
+                and (
+                    decision.tool == "review"
+                    or _is_mutating(decision.tool, decision.content)
+                )
                 and not _path_is_grounded(decision_path, state)
             ):
                 note = (

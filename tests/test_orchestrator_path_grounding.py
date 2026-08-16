@@ -108,6 +108,34 @@ def test_invented_write_path_is_refused_before_dispatch(monkeypatch, tmp_path):
     assert not (tmp_path / "src" / "app.py").exists()
 
 
+def test_invented_review_path_is_refused(monkeypatch, tmp_path):
+    """
+    review is read-only, but it is a terminal analysis of a file the
+    model NAMED -- not a discovery step. Running it on an invented path
+    buys nothing and costs everything: observed live at 47 seconds to
+    reach "file not found". files:read and files:list stay exempt
+    because they are how a run legitimately finds out what exists.
+    """
+    from forge.tools.registry import TOOLS
+
+    # Registered only so the router doesn't fall back to chat before
+    # the guard is reached. It is never called: the point of guarding
+    # before dispatch is that the tool does not run.
+    monkeypatch.setitem(TOOLS, "review", lambda content: pytest.fail("dispatched"))
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {"tool": "review", "content": json.dumps({"file_path": "src/nope.py"})}
+        ),
+    )
+
+    result = Orchestrator(max_steps=1).run("améliore le fichier")
+
+    assert result.tool == "chat"
+    assert "which file" in result.output.lower()
+
+
 def test_invented_read_path_still_runs(monkeypatch, tmp_path):
     import forge.config as cfg
     from forge.tools import files as files_tool
