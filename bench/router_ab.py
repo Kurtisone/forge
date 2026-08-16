@@ -273,6 +273,50 @@ FIXTURES = [
         user="Améliore le fichier",
         expect=None,
     ),
+    # c05 read by hand once too often. The closing instruction now
+    # states what to do when no real path exists (ask), so the right
+    # answer is nameable and these can be scored instead of eyeballed.
+    # Both directions are here on purpose: c05b/f01b catch the
+    # invention, c05c catches the over-correction -- an instruction to
+    # ask when unsure is one prompt tweak away from asking always, and
+    # only the pair can tell those apart.
+    # c05b/f01b are UNSCORED on purpose, and that is the finding.
+    # Scored, they failed: c05b invented src/forge/main.py, f01b
+    # invented src/forge/config.py and reached for "edit". Two rounds
+    # of wording -- naming the exit ("ask via chat"), then removing the
+    # placeholder the model was copying -- moved neither. Asked to act
+    # on "ce fichier" with no path in sight, this model class produces
+    # a plausible path with full confidence, and no phrasing tested so
+    # far changes that.
+    #
+    # So the guarantee moved to code: the orchestrator refuses to
+    # dispatch a WRITE or EDIT whose path appears nowhere in the
+    # conversation (see _path_is_grounded, tests in
+    # test_orchestrator_path_grounding.py). These two stay here as
+    # observation -- they show what the router still does on its own,
+    # which is worth watching if the model or the prompt changes.
+    _fx(
+        id="c05b",
+        history=[("user", "Salut"), ("assistant", "Bonjour !")],
+        user="Relis ce fichier et dis-moi ce qui cloche",
+        expect=None,
+    ),
+    _fx(
+        id="f01b",
+        step_context=[("assistant", "[files] PORT = 8080\nDEBUG = True")],
+        user="Passe DEBUG à False",
+        expect=None,
+    ),
+    _fx(
+        id="c05c",
+        history=[
+            ("user", "Lis src/forge/router/parser.py"),
+            ("assistant", "[ok] lu"),
+        ],
+        user="Relis ce fichier et dis-moi ce qui cloche",
+        expect=["review", "files"],
+        contains="src/forge/router/parser.py",
+    ),
     # -- D. history has to remain READABLE, not just cache-friendly.
     #    Assistant turns render as "(you answered: ...)" now; these check
     #    the model still resolves references into that shape.

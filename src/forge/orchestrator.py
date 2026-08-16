@@ -23,6 +23,7 @@ Rules enforced here, by construction:
 """
 
 import json
+import re
 
 from forge import memory, metrics, subtrace, trace
 from forge.config import (
@@ -34,6 +35,7 @@ from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
 from forge.llm import call_llm
 from forge.logger import log
 from forge.router import build_router_prompt, parse_router_output
+from forge.tool_payload import loads_payload
 from forge.tools.registry import get_tool, load_tools
 from forge.types import AgentResult, AgentState, ToolResult
 
@@ -59,6 +61,34 @@ load_tools()
 # rather than papered over here.
 _EXTERNAL_INGEST_TOOLS = frozenset({"web_fetch", "web_search", "research", "sysadmin"})
 
+
+def _read_path_of(decision) -> str | None:
+    """
+    The path of a files:read, taken from the routing decision.
+
+    Deliberately narrow: only a `read`, only from a decision Forge
+    itself produced and dispatched. The alternative -- parsing the
+    path back out of the tool's own output -- would let file content
+    choose the path the next step writes to, which is the escalation
+    the E-2 guard exists to prevent.
+
+    Returns None on anything unexpected (wrong tool, wrong action,
+    unparseable payload, non-string path). A missing path is handled
+    by the prompt, which then refuses to steer toward a write at all;
+    a wrong one would be silent.
+    """
+    if getattr(decision, "tool", None) != "files":
+        return None
+    try:
+        payload = loads_payload(getattr(decision, "content", "") or "", "files")
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("action") != "read":
+        return None
+    path = payload.get("path")
+    return path if isinstance(path, str) and path else None
+
+
 # Tools that change something outside the run. "code" is not one: it
 # returns source as text, it doesn't execute or persist anything.
 _MUTATING_TOOLS = frozenset({"shell", "test"})
@@ -77,6 +107,65 @@ if ALLOW_MUTATION_AFTER_EXTERNAL_DATA:
         "write files or run commands in a later step. The content of "
         "that page is part of the prompt choosing that step."
     )
+
+
+# Tools whose payload names a file to act on. `files` spells the key
+# "path", `review` spells it "file_path"; both are checked.
+_PATH_DECISION_KEYS = ("path", "file_path")
+
+
+def _decision_path(decision) -> str | None:
+    """The file path a decision is about, if it names one."""
+    if getattr(decision, "tool", None) not in {"files", "review"}:
+        return None
+    try:
+        payload = loads_payload(getattr(decision, "content", "") or "", decision.tool)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in _PATH_DECISION_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _path_is_grounded(path: str, state: AgentState) -> bool:
+    """
+    Did this path come from the conversation, or did the model make it up?
+
+    Grounding sources, in order of trust: the user's own message, the
+    persisted history, and the path of a read this run actually
+    performed (state.last_read_path, taken from that step's routing
+    decision).
+
+    step_context is deliberately NOT a source. It holds raw tool
+    output -- a web page, a file's contents, a system log -- and
+    letting it ground a path would mean a fetched page could name the
+    file the next step writes to. That is the same escalation the E-2
+    guard refuses, arriving by a quieter door.
+
+    Matching is on the normalized string: a leading "./" is stripped,
+    and a bare basename counts only if the model wrote a bare
+    basename. "src/app.py" mentioned in history does not ground a
+    decision about "app.py" -- two files can share a name, and the
+    whole point here is that the model must not choose which.
+    """
+    needle = path.lstrip("./").strip()
+    if not needle:
+        return False
+    if state.last_read_path and needle == state.last_read_path.lstrip("./"):
+        return True
+    hay = "\n".join(
+        [state.user_input] + [turn.get("content", "") or "" for turn in state.history]
+    )
+    # Whole-path match, not a substring one: "app.py" must not be
+    # grounded by "src/app.py" sitting in the history. Two files can
+    # share a basename, and choosing between them is precisely what
+    # the model must not do silently.
+    pattern = rf"(?<![\w./\\-]){re.escape(needle)}(?![\w.-])"
+    return re.search(pattern, hay) is not None
 
 
 def _is_mutating(tool: str, content: str) -> bool:
@@ -221,6 +310,59 @@ class Orchestrator:
                 state.final_tool = decision.tool
                 return self._finish(state, remember=False)
 
+            # --- Path grounding guard ------------------------------------
+            # Checked before dispatch, for the same reason as the
+            # escalation guard above: the point is that the tool must
+            # not run, not that a wrong path gets reported afterwards.
+            #
+            # Two rounds of prompt wording failed to stop this (bench
+            # fixtures c05b/f01b): asked to act on "ce fichier" with no
+            # path anywhere, the model invents a plausible one --
+            # src/forge/main.py, src/forge/config.py -- and a write or
+            # an edit to an invented path is the worst shape of failure
+            # this project has, because it succeeds. That makes it the
+            # fourth time prompt wording lost to a deterministic check
+            # on this codebase; see the web_search saga in
+            # router/prompt.py and the read-then-write hint next to it.
+            # Mutating actions only. A read of an invented path fails
+            # loudly and harmlessly -- the file isn't there, the error
+            # comes back, the run stops. A write or an edit to one
+            # SUCCEEDS, leaving a plausible file nobody asked for, and
+            # that asymmetry is the whole reason this guard exists.
+            # Blocking reads too would also break the legitimate
+            # read-then-write flow, where the path is grounded by the
+            # read itself and by nothing before it.
+            # `review` is read-only but still guarded: it is a terminal
+            # analysis of a file the model NAMED, not a discovery step,
+            # so running it on an invented path buys nothing and costs
+            # everything -- observed live at 47 s to reach "file not
+            # found". files:read and files:list stay exempt because
+            # they are how a run legitimately finds out what exists.
+            decision_path = _decision_path(decision)
+            if (
+                decision_path
+                and (
+                    decision.tool == "review"
+                    or _is_mutating(decision.tool, decision.content)
+                )
+                and not _path_is_grounded(decision_path, state)
+            ):
+                note = (
+                    f"path grounding guard: tool={decision.tool!r} named "
+                    f"{decision_path!r}, which appears nowhere in this "
+                    "conversation"
+                )
+                log.warning(note)
+                ts.abandon(note)
+                state.final_output = (
+                    "I don't have a real file path for that in this "
+                    "conversation, and I won't guess one. Which file do "
+                    "you mean?"
+                )
+                state.final_tool = "chat"
+                state.ok = True
+                return self._finish(state, remember=False)
+
             # --- Dispatch ------------------------------------------------
             result = self._dispatch(decision.tool, decision.content)
             ts.finish(result)
@@ -263,6 +405,7 @@ class Orchestrator:
             state.step_context = state.step_context + [
                 {"role": "assistant", "content": f"[{result.tool}] {result.output}"}
             ]
+            state.last_read_path = _read_path_of(decision) or state.last_read_path
 
         raise LoopGuardError("max_steps exhausted without a result")
 
@@ -287,7 +430,10 @@ class Orchestrator:
 
     def _route(self, state: AgentState):
         prompt = build_router_prompt(
-            state.user_input, history=state.history, step_context=state.step_context
+            state.user_input,
+            history=state.history,
+            step_context=state.step_context,
+            last_read_path=state.last_read_path,
         )
         log.event("router.prompt", chars=len(prompt))
         raw = call_llm(prompt)

@@ -83,6 +83,7 @@ def test_steering_hints_stay_outside_the_untrusted_block():
         "remplace Hello par Bienvenue",
         step_context=[{"role": "assistant", "content": "[files] package main"}],
         available_tools=["chat", "code", "files"],
+        last_read_path="main.go",
     )
     after_last_close = prompt.split(_UNTRUSTED_END)[-1]
     assert "CURRENT, real content" in after_last_close
