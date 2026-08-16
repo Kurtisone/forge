@@ -379,8 +379,14 @@ FIXTURES = [
             )
         ],
         user="Quelles sont les nouveautés de Qwen3 ?",
-        expect=["chat", "web_fetch"],
-        forbid=["web_search"],
+        # Unscored, same reasoning as c05b/f01b above: the guarantee is
+        # no longer that the router picks the right follow-up, it is
+        # that the orchestrator refuses a second web_search whatever
+        # the router picks (see the search chaining guard, tests in
+        # test_orchestrator_search_chaining.py). Kept as observation --
+        # it shows what the router still does on its own, which is
+        # worth watching if the model or the prompt changes.
+        expect=None,
     ),
     _fx(
         id="e03",

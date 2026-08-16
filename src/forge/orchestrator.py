@@ -227,49 +227,59 @@ class Orchestrator:
             ts.decision_content = decision.content
             ts.router_raw = decision.raw
 
+            # --- Search chaining guard -----------------------------------
+            # One web_search per run, whatever the query text.
+            #
+            # Chaining web_search into a router-decided second step is a
+            # known, non-fatal failure mode with small local models: the
+            # steering hint in router/prompt.py asks them to switch to
+            # chat or web_fetch once results are in step_context, but in
+            # practice they search again -- confirmed live with two
+            # different hint phrasings (prose-only, then an explicit
+            # worked JSON example) and with prompt caching disabled to
+            # rule out a cache-reuse bug. That is not a wording problem,
+            # it is a self-correction limit of this model class, and it
+            # is why "research" exists at all: search -> fetch ->
+            # synthesize happens inside one graph call instead.
+            #
+            # The loop guard below used to carry this fallback, but only
+            # for a byte-identical repeat. The failure does not need the
+            # query to be identical -- bench fixture e02 reformulates it
+            # and lands in the same place, burning a second search and a
+            # step to arrive at results it already had. Keyed on the
+            # tool, that whole shape is covered and the identical case
+            # becomes one instance of it.
+            #
+            # Degrade rather than error: state already holds the
+            # previous (successful) result, and returning the links the
+            # run did gather beats surfacing an internal guard message.
+            if decision.tool == "web_search" and any(
+                tool == "web_search" for tool, _ in state.seen_calls
+            ):
+                note = (
+                    "search chaining guard: web_search already ran this run "
+                    f"(now {decision.content!r}) -- falling back to its "
+                    "previous result"
+                )
+                log.warning(note)
+                ts.abandon(note)
+                return self._finish(state, remember=True)
+
             # --- Loop guard ----------------------------------------------
+            # Every tool other than web_search hard-fails on an identical
+            # repeat: a repeat there is a genuine signal worth surfacing,
+            # not something to paper over.
+            #
+            # memory used to need the same fallback web_search gets
+            # above, for the same underlying failure: routing
+            # memory:recall with "done": false and asking the router to
+            # phrase a real answer on the next step. That chaining is
+            # what looped, not memory itself -- see graphs/recall.py's
+            # docstring. "recall" is now one deterministic call that
+            # never re-enters this loop, so the tool that used to trip
+            # this branch can no longer reach it.
             call_signature = (decision.tool, decision.content)
             if call_signature in state.seen_calls:
-                if decision.tool == "web_search":
-                    # A repeated call on the second step is a known,
-                    # non-fatal failure mode with small local models: the
-                    # steering hint in router/prompt.py asks them to
-                    # switch to chat or web_fetch on the second step, but
-                    # in practice they sometimes repeat the same tool
-                    # call instead -- confirmed live with two different
-                    # hint phrasings (prose-only, then an explicit worked
-                    # JSON example) and with prompt caching disabled to
-                    # rule out a cache-reuse bug, so this isn't a
-                    # prompt-wording or infra problem, it's a genuine
-                    # self-correction limit of this model class. state
-                    # already holds the previous (successful) result at
-                    # this point -- degrade to that instead of surfacing
-                    # an internal loop-guard message. Every other tool
-                    # still hard-fails below: a repeat there is a genuine
-                    # signal worth surfacing, not something to paper
-                    # over.
-                    #
-                    # memory used to need this same fallback, for the
-                    # same underlying failure: routing memory:recall
-                    # with "done": false and asking the router to
-                    # phrase a real answer on the next step. That
-                    # chaining is what looped, not memory itself -- see
-                    # graphs/recall.py's docstring. "recall" is now one
-                    # deterministic call that never re-enters this loop,
-                    # so the tool that used to trip this branch can no
-                    # longer reach it.
-                    log.warning(
-                        "%s tool repeated identical call (%r) -- "
-                        "falling back to its previous result instead of "
-                        "a loop-guard error",
-                        decision.tool,
-                        decision.content,
-                    )
-                    ts.abandon(
-                        "loop guard: repeated call, fell back to previous result"
-                    )
-                    return self._finish(state, remember=True)
-
                 err = LoopGuardError(
                     f"repeated call to tool={decision.tool!r} with identical content"
                 )
