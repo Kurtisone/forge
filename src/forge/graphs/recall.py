@@ -75,6 +75,16 @@ _PROMPT_LEAK_MARKERS = [
 # entries about that hardware would reproduce it word for word and trip
 # the check. A placeholder has to be fictional to be detectable, which
 # is the point of the rewrite below.
+# This prompt asks for ONE SHORT SENTENCE, so the shared unwrap
+# minimums (8 words / 40 chars, calibrated on review's multi-sentence
+# syntheses) reject correct answers here: "Le serveur utilise le port
+# 8080." is 6 words, 32 chars, and was reaching the user as raw JSON.
+# Low enough to let a real short sentence through, high enough to still
+# reject the degenerate echo actually observed -- the NEVER DO THIS
+# example's own content, the three characters "...".
+_MIN_UNWRAP_WORDS = 3
+_MIN_UNWRAP_CHARS = 15
+
 _EXAMPLE_LEAK_FRAGMENTS = [
     "exemple-hôte",
     "modèle-fictif",
@@ -148,7 +158,12 @@ def _clean_synthesis_response(raw: str) -> str:
     for this exact class of prompt."""
     cleaned = strip_think_blocks(raw)
 
-    unwrapped = try_unwrap_router_json(cleaned, source="recall")
+    unwrapped = try_unwrap_router_json(
+        cleaned,
+        source="recall",
+        min_words=_MIN_UNWRAP_WORDS,
+        min_chars=_MIN_UNWRAP_CHARS,
+    )
     if unwrapped is not None:
         cleaned = unwrapped
 

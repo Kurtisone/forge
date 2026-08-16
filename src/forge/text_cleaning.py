@@ -34,6 +34,14 @@ THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 # degenerate echo whose "content" was just a filename (1 word, 8
 # chars) versus a genuine multi-sentence answer that was still wrapped
 # in the JSON shape despite instructions not to.
+#
+# These are the defaults, not a universal floor. They fit the callers
+# they were measured on -- review, research, sysadmin -- which all ask
+# for a multi-sentence synthesis. recall asks for the opposite ("ONE
+# short, natural sentence"), so a correct recall answer sits BELOW
+# them: "Le serveur utilise le port 8080." is 6 words and 32 chars, and
+# was being rejected as degenerate and shown to the user as raw JSON.
+# A caller that asks for short answers passes its own minimums.
 MIN_UNWRAP_WORDS = 8
 MIN_UNWRAP_CHARS = 40
 
@@ -42,7 +50,12 @@ def strip_think_blocks(raw: str) -> str:
     return THINK_BLOCK.sub("", raw).strip()
 
 
-def try_unwrap_router_json(cleaned: str, source: str) -> str | None:
+def try_unwrap_router_json(
+    cleaned: str,
+    source: str,
+    min_words: int = MIN_UNWRAP_WORDS,
+    min_chars: int = MIN_UNWRAP_CHARS,
+) -> str | None:
     """
     If *cleaned* is exactly a {"tool":...,"content":"..."} object (the
     router's decision shape) and "content" looks like a substantive
@@ -52,7 +65,12 @@ def try_unwrap_router_json(cleaned: str, source: str) -> str | None:
     to look like a valid short answer.
 
     *source* is only used to label the warning log (e.g. "review",
-    "research") so the two callers stay distinguishable in logs.
+    "research") so the callers stay distinguishable in logs.
+
+    *min_words* / *min_chars* set what counts as substantive. The
+    defaults suit a multi-sentence synthesis; a caller whose prompt
+    asks for one short sentence must lower them or its correct answers
+    are rejected as degenerate.
     """
     try:
         data = json.loads(cleaned)
@@ -67,7 +85,7 @@ def try_unwrap_router_json(cleaned: str, source: str) -> str | None:
         return None
 
     word_count = len(content.split())
-    if word_count >= MIN_UNWRAP_WORDS or len(content) >= MIN_UNWRAP_CHARS:
+    if word_count >= min_words or len(content) >= min_chars:
         log.warning(
             "%s: model wrapped a substantive answer in router-style JSON "
             "(%d words) despite instructions -- unwrapped it",
