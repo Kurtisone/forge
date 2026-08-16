@@ -59,6 +59,12 @@ What the columns mean, in order of importance:
            for you" -- which was wrong, and cost a finding: recall's
            copy came back with no flag at all, because a copied example
            contains no marker and reads like a real answer.
+  RAW      the JSON envelope reached the user instead of an answer,
+           i.e. the unwrap minimums called the content degenerate.
+           Sometimes correct, sometimes a floor mis-fitted to the
+           prompt -- recall asks for one short sentence and inherited
+           minimums calibrated on review's multi-sentence syntheses,
+           which rejected its correct answers.
   think    a <think> block in the raw output. Never observed, in either
            arm, on any graph -- the grammar makes it impossible.
   gen      characters generated. A large jump is the softer version of
@@ -82,12 +88,28 @@ for _candidate in (_HERE / "src", _HERE.parent / "src", Path("src")):
         break
 
 from forge.context_info import today_line
-from forge.graphs.recall import _SYNTHESIS_PROMPT as RECALL
-from forge.graphs.research import _SYNTHESIS_PROMPT as RESEARCH
-from forge.graphs.review import _REVIEW_PROMPT as REVIEW
-from forge.graphs.sysadmin import _SYNTHESIS_PROMPT as SYSADMIN
+from forge.graphs import recall, research, review, sysadmin
 from forge.llm import call_llm
-from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
+
+RECALL = recall._SYNTHESIS_PROMPT
+RESEARCH = research._SYNTHESIS_PROMPT
+REVIEW = review._REVIEW_PROMPT
+SYSADMIN = sysadmin._SYNTHESIS_PROMPT
+
+# Each graph's OWN cleaner, not a local reimplementation of it. The
+# first version of this harness called strip_think_blocks and
+# try_unwrap_router_json itself, with the module-level defaults -- so
+# it silently measured a cleaning path that production does not use,
+# and showed recall's answers as raw JSON envelopes even after recall
+# had been given its own unwrap minimums. Anything that changes how a
+# graph cleans its output has to show up here, which only happens if
+# the graph's own function is the one being called.
+CLEANERS = {
+    "recall": recall._clean_synthesis_response,
+    "review": review._clean_review_response,
+    "research": research._clean_synthesis_response,
+    "sysadmin": sysadmin._clean_diagnosis_response,
+}
 
 PREFIX = "/no_think\n"
 THINK_OPEN = re.compile(r"<think>|<thinking>|◁think▷")
@@ -136,23 +158,26 @@ CASES = {
 }
 
 
-def clean(raw: str, source: str) -> str:
-    cleaned = strip_think_blocks(raw)
-    unwrapped = try_unwrap_router_json(cleaned, source=source)
-    return unwrapped if unwrapped is not None else cleaned
-
-
 def run_arm(name: str, prompt: str, source: str) -> dict:
     started = time.monotonic()
     raw = call_llm(prompt)
     elapsed = int((time.monotonic() - started) * 1000)
-    answer = clean(raw, source)
+    answer = CLEANERS[source](raw)
+    # A refusal from the graph's own example-leak check is an echo too
+    # -- it means the detector fired before the text could be shown.
+    refused = "recopié" in answer and answer.startswith("[error]")
     return {
         "arm": name,
         "ms": elapsed,
         "gen": len(raw),
         "think": bool(THINK_OPEN.search(raw)),
-        "echo": [f for f in ECHOES.get(source, []) if f in answer],
+        "echo": [f for f in ECHOES.get(source, []) if f in answer]
+        or (["refused by the runtime check"] if refused else []),
+        # The envelope reaching the user means the unwrap minimums
+        # rejected the content as degenerate. Sometimes right (the
+        # model really did emit "..."), sometimes a mis-fitted floor --
+        # either way the user is being shown JSON, so flag it.
+        "raw_envelope": answer.lstrip().startswith('{"tool"'),
         "answer": answer,
     }
 
@@ -195,6 +220,11 @@ def main() -> int:
                 if r["echo"]:
                     flags += f" ECHO!{r['echo']}"
                     failures.append(f"{source}/{r['arm']}: copied {r['echo']}")
+                if r["raw_envelope"]:
+                    flags += " RAW!"
+                    failures.append(
+                        f"{source}/{r['arm']}: JSON envelope reached the user"
+                    )
                 print(f"[{i}] {r['arm']:<8} {r['ms']:>6} ms  gen={r['gen']:>4}{flags}")
                 # Whole answer, never truncated -- see the header.
                 for line in r["answer"].splitlines() or [""]:
