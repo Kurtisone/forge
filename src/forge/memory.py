@@ -14,7 +14,7 @@ at that point, not before.
 import json
 from pathlib import Path
 
-from forge import compaction
+from forge import compaction, tokens
 from forge.config import MEMORY_FILE, MEMORY_HARD_CAP_SLACK, MEMORY_MAX_HISTORY
 from forge.logger import log
 
@@ -124,6 +124,25 @@ def _apply_retention(history: list[dict]) -> list[dict]:
     was quietly reintroducing it. Cutting deeper costs a bit more
     context at once and buys a stable prefix for many turns after.
     """
+    # Observation only, and deliberately BEFORE compaction runs: the
+    # size that matters is the one that would have been sent, not what
+    # is left after eviction. Nothing reads this yet.
+    #
+    # The plan is to trigger compaction on tokens rather than on a
+    # message count, but the constants for that cannot be chosen from
+    # first principles -- nobody has measured what a real Forge history
+    # weighs in tokens. Logging it for a while under actual use is what
+    # turns those constants into a measurement instead of a guess. Same
+    # discipline as MEMORY_HARD_CAP_SLACK below, which exists because a
+    # threshold picked without measuring quietly reintroduced the
+    # sliding window it was meant to prevent.
+    log.event(
+        "history.size",
+        messages=len(history),
+        estimated_tokens=tokens.estimate_messages(history),
+        pinned=sum(1 for m in history if m.get("pinned")),
+    )
+
     try:
         history = compaction.maybe_compact(history)
     except compaction.CompactionError as e:
