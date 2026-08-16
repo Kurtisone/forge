@@ -280,19 +280,32 @@ FIXTURES = [
     # invention, c05c catches the over-correction -- an instruction to
     # ask when unsure is one prompt tweak away from asking always, and
     # only the pair can tell those apart.
+    # c05b/f01b are UNSCORED on purpose, and that is the finding.
+    # Scored, they failed: c05b invented src/forge/main.py, f01b
+    # invented src/forge/config.py and reached for "edit". Two rounds
+    # of wording -- naming the exit ("ask via chat"), then removing the
+    # placeholder the model was copying -- moved neither. Asked to act
+    # on "ce fichier" with no path in sight, this model class produces
+    # a plausible path with full confidence, and no phrasing tested so
+    # far changes that.
+    #
+    # So the guarantee moved to code: the orchestrator refuses to
+    # dispatch a WRITE or EDIT whose path appears nowhere in the
+    # conversation (see _path_is_grounded, tests in
+    # test_orchestrator_path_grounding.py). These two stay here as
+    # observation -- they show what the router still does on its own,
+    # which is worth watching if the model or the prompt changes.
     _fx(
         id="c05b",
         history=[("user", "Salut"), ("assistant", "Bonjour !")],
         user="Relis ce fichier et dis-moi ce qui cloche",
-        expect=["chat"],
-        forbid=["files", "review"],
+        expect=None,
     ),
     _fx(
         id="f01b",
         step_context=[("assistant", "[files] PORT = 8080\nDEBUG = True")],
         user="Passe DEBUG à False",
-        expect=["chat"],
-        forbid=["files"],
+        expect=None,
     ),
     _fx(
         id="c05c",
