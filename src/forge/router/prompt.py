@@ -14,6 +14,8 @@ that already gates it for the Graph engine.
 """
 
 from forge.context_info import today_line
+from forge.logger import log
+from forge.tokens import estimate_tokens
 
 _SENTINEL_INPUT = "\x00USER_INPUT\x00"
 _SENTINEL_HISTORY = "\x00HISTORY_BLOCK\x00"
@@ -855,8 +857,27 @@ def build_router_prompt(
         available_tools = registry.available_tools() or list(_FALLBACK_TOOLS)
 
     template = _build_template(available_tools)
+    history_block = _format_history(history)
+
+    # What the history actually WEIGHS in the prompt, which is not what
+    # it weighs in memory.json. _format_history truncates assistant
+    # entries to _MAX_HISTORY_ENTRY (120 chars), so a 1400-char answer
+    # contributes ~120 -- measured live on 2026-08-16, a 16-message
+    # history estimated at ~1290 tokens on disk rendered to well under
+    # half that here.
+    #
+    # The difference is the whole point of logging this separately.
+    # Compaction evicts stored messages, but what it BUYS is measured
+    # on this side, so a token budget keyed on the stored size would be
+    # keyed on a number that barely tracks context pressure.
+    log.event(
+        "router.history_block",
+        chars=len(history_block),
+        estimated_tokens=estimate_tokens(history_block),
+    )
+
     return (
-        template.replace(_SENTINEL_HISTORY, _format_history(history))
+        template.replace(_SENTINEL_HISTORY, history_block)
         .replace(
             _SENTINEL_STEP_CONTEXT,
             _format_step_context(step_context, last_read_path),

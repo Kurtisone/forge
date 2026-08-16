@@ -23,6 +23,9 @@ CALIBRATION = [
     ("research synthesis", 1384, 345),
     ("recall fixture", 1326, 319),
     ("recall in production", 2977, 810),
+    # Added 2026-08-16 from the first live run of this instrumentation.
+    ("router prompt, 12-msg history", 11944, 3014),
+    ("router prompt, 14-msg history", 12130, 3069),
 ]
 
 

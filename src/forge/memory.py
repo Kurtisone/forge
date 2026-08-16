@@ -128,18 +128,25 @@ def _apply_retention(history: list[dict]) -> list[dict]:
     # size that matters is the one that would have been sent, not what
     # is left after eviction. Nothing reads this yet.
     #
-    # The plan is to trigger compaction on tokens rather than on a
-    # message count, but the constants for that cannot be chosen from
-    # first principles -- nobody has measured what a real Forge history
-    # weighs in tokens. Logging it for a while under actual use is what
-    # turns those constants into a measurement instead of a guess. Same
-    # discipline as MEMORY_HARD_CAP_SLACK below, which exists because a
-    # threshold picked without measuring quietly reintroduced the
-    # sliding window it was meant to prevent.
+    # This is the STORED size. It is not what the history weighs in the
+    # router prompt -- _format_history truncates assistant entries to
+    # 120 chars, so the two diverge by more than a factor of two on a
+    # normal conversation (measured 2026-08-16). The prompt-side figure
+    # is logged separately as "router.history_block", and that is the
+    # one a token budget should be keyed on. This one says what
+    # compaction is evicting; that one says what evicting it buys.
+    #
+    # Both are logged rather than one, because switching compaction
+    # from a message count to a token budget needs constants nobody can
+    # pick from first principles, and picking them off the wrong metric
+    # is worse than not measuring at all. Same discipline as
+    # MEMORY_HARD_CAP_SLACK below, which exists because a threshold
+    # chosen without measuring quietly reintroduced the sliding window
+    # it was meant to prevent.
     log.event(
         "history.size",
         messages=len(history),
-        estimated_tokens=tokens.estimate_messages(history),
+        stored_tokens=tokens.estimate_messages(history),
         pinned=sum(1 for m in history if m.get("pinned")),
     )
 
