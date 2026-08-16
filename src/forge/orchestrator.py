@@ -88,6 +88,7 @@ def _read_path_of(decision) -> str | None:
     path = payload.get("path")
     return path if isinstance(path, str) and path else None
 
+
 # Tools that change something outside the run. "code" is not one: it
 # returns source as text, it doesn't execute or persist anything.
 _MUTATING_TOOLS = frozenset({"shell", "test"})
@@ -118,9 +119,7 @@ def _decision_path(decision) -> str | None:
     if getattr(decision, "tool", None) not in {"files", "review"}:
         return None
     try:
-        payload = loads_payload(
-            getattr(decision, "content", "") or "", decision.tool
-        )
+        payload = loads_payload(getattr(decision, "content", "") or "", decision.tool)
     except (ValueError, TypeError):
         return None
     if not isinstance(payload, dict):
@@ -159,8 +158,7 @@ def _path_is_grounded(path: str, state: AgentState) -> bool:
     if state.last_read_path and needle == state.last_read_path.lstrip("./"):
         return True
     hay = "\n".join(
-        [state.user_input]
-        + [turn.get("content", "") or "" for turn in state.history]
+        [state.user_input] + [turn.get("content", "") or "" for turn in state.history]
     )
     # Whole-path match, not a substring one: "app.py" must not be
     # grounded by "src/app.py" sitting in the history. Two files can

@@ -74,7 +74,9 @@ def test_tool_output_does_not_ground_a_path():
     # authorize writing to it. Same escalation the E-2 guard refuses,
     # arriving by a quieter door.
     state = _state(user_input="résume ça")
-    state.step_context = [{"role": "assistant", "content": "[web_fetch] see src/app.py"}]
+    state.step_context = [
+        {"role": "assistant", "content": "[web_fetch] see src/app.py"}
+    ]
     assert not _path_is_grounded("src/app.py", state)
 
 
