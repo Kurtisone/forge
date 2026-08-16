@@ -67,6 +67,14 @@ _PROMPT_LEAK_MARKERS = [
     "NEVER DO THIS",
 ]
 
+# The "/no_think" prefix below is NOT dead, however dead it looks.
+# Qwen3.5 dropped the /think soft switch, and the router GBNF grammar
+# (applied to every call, not just routing) already makes a reasoning
+# block impossible -- so on paper the token buys nothing. Measured on
+# 2026-08-16 with bench/no_think_ab.py, removing it made this model
+# return the GOOD ANSWER example below instead of a real answer, twice,
+# deterministically. Whatever it does at position 0 is not what its
+# name says. Run that harness before touching it.
 _SYNTHESIS_PROMPT = """/no_think
 {today_line}
 You are answering a question using web search results and fetched
