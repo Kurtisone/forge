@@ -61,6 +61,25 @@ _PROMPT_LEAK_MARKERS = [
     "NEVER DO THIS",
 ]
 
+# _PROMPT_LEAK_MARKERS above catches the model echoing the instruction
+# markers. This catches the harder failure: copying the GOOD ANSWER
+# *content* verbatim, with no marker in sight, so it comes back looking
+# exactly like a real answer. graphs/sysadmin.py hit this in production
+# on 2026-08-11; recall hit it on 2026-08-16, surfaced by the
+# /no_think experiment (the prefix stayed -- see the comment above the
+# prompt), on a question ("quel port utilise le serveur ?") that had
+# nothing to do with the example.
+#
+# Unlike sysadmin, the old example is NOT kept here as a permanent net.
+# It named this box's real hardware, so a legitimate recall over
+# entries about that hardware would reproduce it word for word and trip
+# the check. A placeholder has to be fictional to be detectable, which
+# is the point of the rewrite below.
+_EXAMPLE_LEAK_FRAGMENTS = [
+    "exemple-hôte",
+    "modèle-fictif",
+]
+
 # The "/no_think" prefix below is NOT dead, however dead it looks.
 # Qwen3.5 dropped the /think soft switch, and the router GBNF grammar
 # (applied to every call, not just routing) already makes a reasoning
@@ -87,11 +106,16 @@ Respond in plain text ONLY. Do NOT wrap your answer in JSON, and do
 NOT return a {{"tool":...,"content":...}} object -- that format is
 for a different system (a routing decision) and never applies here.
 
-GOOD ANSWER: Tu as un Steam Deck et un Dell R710.
+GOOD ANSWER (an example of FORM AND TONE only -- these names are
+fictional placeholders, never real memory entries, and copying any of
+them into your own answer is always wrong whatever the entries above
+say): Tu as un serveur exemple-hôte et un onduleur modèle-fictif.
 NEVER DO THIS: {{"tool":"chat","content":"..."}}
 
-Now write your own answer to the question above, in the same plain
-format as GOOD ANSWER -- not the NEVER DO THIS shape. Be concise.
+Now write your own answer using ONLY what actually appears in the
+memory entries above -- the words "exemple-hôte" and "modèle-fictif"
+must never appear in your answer. Same plain format as GOOD ANSWER,
+not the NEVER DO THIS shape. Be concise.
 """
 
 
@@ -131,6 +155,13 @@ def _clean_synthesis_response(raw: str) -> str:
     if any(marker in cleaned for marker in _PROMPT_LEAK_MARKERS):
         log.warning("recall: model echoed prompt instructions instead of answering")
         return "[error] Le modèle n'a pas généré de réponse exploitable. Réessayez."
+
+    if any(fragment in cleaned for fragment in _EXAMPLE_LEAK_FRAGMENTS):
+        log.warning(
+            "recall: model copied the GOOD ANSWER example verbatim "
+            "instead of answering from the memory entries"
+        )
+        return "[error] Le modèle a recopié un exemple au lieu de répondre. Réessayez."
 
     if not cleaned:
         return "[error] Le modèle n'a pas généré de réponse. Réessayez."
