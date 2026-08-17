@@ -48,6 +48,10 @@
       display: flex; align-items: center; gap: 6px;
       font-size: .8rem; color: var(--muted);
       min-width: 0;
+      /* Same fixed height as .ctx so the two share a centre line.
+         Without it they are each centred inside boxes of different
+         heights, which centres neither against the other. */
+      height: 20px;
     }
     #status-text {
       overflow: hidden;
@@ -75,17 +79,39 @@
       background: none; border: 0; padding: 2px 4px;
       font-family: inherit; cursor: pointer;
       border-radius: 6px;
+      /* Three separate reasons this sat low next to the status dot,
+         all fixed here rather than one guessed at:
+         - a <button> carries the UA font metrics and its own
+           line-height, so line-height:1 pins its box to the text;
+         - align-self overrides whatever the parent decides, so the
+           gauge no longer depends on the header keeping
+           align-items:center;
+         - height matches .status's line box, so the two sit on the
+           same centre line instead of merely both being "centred"
+           inside boxes of different heights. */
+      line-height: 1;
+      align-self: center;
+      height: 20px;
     }
     .ctx:hover { background: var(--bot-bg); color: var(--text); }
     .ctx:disabled { cursor: default; }
     /* The action reads as available on hover rather than announcing
        itself: the gauge is a reading first and a button second. */
-    .ctx-icon { opacity: 0; transition: opacity .2s; flex-shrink: 0; }
+    .ctx-icon {
+      opacity: 0; transition: opacity .2s; flex-shrink: 0;
+      /* display:block takes the icon out of baseline layout entirely.
+         Every other inline SVG in this file carries a
+         vertical-align nudge for the same reason -- this one does not
+         need the nudge because it stops being inline. */
+      display: block;
+    }
     .ctx:hover .ctx-icon { opacity: .8; }
+    #ctx-text { line-height: 1; }
     .ctx-bar {
       width: 46px; height: 4px; border-radius: 2px;
       background: var(--border);
       overflow: hidden;
+      flex-shrink: 0;
     }
     .ctx-fill {
       height: 100%; width: 0;
