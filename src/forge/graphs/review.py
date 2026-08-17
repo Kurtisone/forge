@@ -184,13 +184,25 @@ def _read_file_node(state: AgentState) -> AgentState:
     path_str = state.context.get("file_path", state.user_input.strip())
     path = Path(path_str)
 
-    if not path.exists() or not path.is_file():
-        state.ok = False
-        state.error = f"File not found: {path_str}"
-        state.final_output = f"[error] {state.error}"
-        return state
-
+    # exists() is inside the try, not before it. Path.exists() returns
+    # False for a missing file but RAISES for a malformed one --
+    # pathlib ignores ENOENT/ENOTDIR/EBADF/ELOOP and lets everything
+    # else through, so ENAMETOOLONG escapes. Seen live on 2026-08-17
+    # when the router put an entire pasted document into file_path:
+    # this node blew up before reaching any of its own error handling,
+    # and the run surfaced to the user as "returned empty output".
+    #
+    # tools/review.py rejects that shape before dispatch now. This stays
+    # anyway: a graph node that raises loses its error message, and the
+    # cost of being wrong about which errnos pathlib swallows is paid in
+    # unreadable failures.
     try:
+        if not path.exists() or not path.is_file():
+            state.ok = False
+            state.error = f"File not found: {path_str}"
+            state.final_output = f"[error] {state.error}"
+            return state
+
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         state.ok = False
@@ -277,8 +289,23 @@ def _llm_review_node(state: AgentState) -> AgentState:
 
 
 def _error_node(state: AgentState) -> AgentState:
+    """
+    Turn a failed node into a message the user can read.
+
+    It used to only flip state.ok and trust whichever node failed to
+    have set final_output. That holds for a node that returns an error
+    -- and fails exactly when it is needed, for a node that RAISES,
+    which leaves final_output empty. The result was a run reported as
+    "tool 'review' returned empty output": the least informative thing
+    the system can say, produced by the node whose whole job is to say
+    something informative.
+
+    So the output is guaranteed here rather than assumed upstream.
+    """
     log.warning("review graph: %s", state.error)
     state.ok = True  # surface as message, not crash
+    if not state.final_output:
+        state.final_output = f"[error] review failed: {state.error or 'unknown error'}"
     return state
 
 
