@@ -12,6 +12,7 @@
       --accent:   #58a6ff;
       --green:    #3fb950;
       --red:      #f85149;
+      --amber:    #d29922;
       --muted:    #8b949e;
       --text:     #e6edf3;
       --user-bg:  #1f6feb;
@@ -47,6 +48,10 @@
       display: flex; align-items: center; gap: 6px;
       font-size: .8rem; color: var(--muted);
       min-width: 0;
+      /* Same fixed height as .ctx so the two share a centre line.
+         Without it they are each centred inside boxes of different
+         heights, which centres neither against the other. */
+      height: 20px;
     }
     #status-text {
       overflow: hidden;
@@ -61,6 +66,61 @@
     }
     .dot.ok  { background: var(--green); }
     .dot.err { background: var(--red); }
+
+    /* Context gauge. Always present, never announced: a widget that
+       appears only once things get tight reads as an alarm, and its
+       absence would mean both "plenty of room" and "the gauge is
+       broken" -- same reason .dot above is always visible and changes
+       colour rather than popping in when the server drops. */
+    .ctx {
+      display: flex; align-items: center; gap: 6px;
+      font-size: .75rem; color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      background: none; border: 0; padding: 2px 4px;
+      font-family: inherit; cursor: pointer;
+      border-radius: 6px;
+      /* Three separate reasons this sat low next to the status dot,
+         all fixed here rather than one guessed at:
+         - a <button> carries the UA font metrics and its own
+           line-height, so line-height:1 pins its box to the text;
+         - align-self overrides whatever the parent decides, so the
+           gauge no longer depends on the header keeping
+           align-items:center;
+         - height matches .status's line box, so the two sit on the
+           same centre line instead of merely both being "centred"
+           inside boxes of different heights. */
+      line-height: 1;
+      align-self: center;
+      height: 20px;
+    }
+    .ctx:hover { background: var(--bot-bg); color: var(--text); }
+    .ctx:disabled { cursor: default; }
+    /* The action reads as available on hover rather than announcing
+       itself: the gauge is a reading first and a button second. */
+    .ctx-icon {
+      opacity: 0; transition: opacity .2s; flex-shrink: 0;
+      /* display:block takes the icon out of baseline layout entirely.
+         Every other inline SVG in this file carries a
+         vertical-align nudge for the same reason -- this one does not
+         need the nudge because it stops being inline. */
+      display: block;
+    }
+    .ctx:hover .ctx-icon { opacity: .8; }
+    #ctx-text { line-height: 1; }
+    .ctx-bar {
+      width: 46px; height: 4px; border-radius: 2px;
+      background: var(--border);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .ctx-fill {
+      height: 100%; width: 0;
+      background: var(--accent);
+      transition: width .4s, background .4s;
+    }
+    .ctx.warn .ctx-fill { background: var(--amber); }
+    .ctx.crit .ctx-fill { background: var(--red); }
+    .ctx.crit { color: var(--red); }
 
     /* ── Tabs ── */
     .tabs {
@@ -225,7 +285,6 @@
       box-shadow: 0 0 0 3px rgba(210,153,34,.15), 0 2px 6px rgba(0,0,0,.35);
     }
     .pin-icon.pinned:hover { color: #e3a83a; border-color: #e3a83a; }
-    #compact-btn { align-self: center; margin: 0 0 8px; }
 
     /* ── Drawer panel ── */
     #drawer-panel { padding: 20px; overflow-y: auto; gap: 10px; }
@@ -365,6 +424,11 @@
   <div class="logo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:4px"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Forge</span></div>
   <div style="display:flex;align-items:center;gap:14px;">
     <button class="btn-outline" id="token-btn" onclick="promptForToken()" title="Définir le token API (si API_TOKEN est configuré côté serveur)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>Token</button>
+    <button class="ctx" id="ctx" onclick="compactNow()" title="Compacter maintenant">
+      <div class="ctx-bar"><div class="ctx-fill" id="ctx-fill"></div></div>
+      <span id="ctx-text">…</span>
+      <svg class="ctx-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"></polyline><polyline points="7 6 12 11 17 6"></polyline></svg>
+    </button>
     <div class="status">
       <div class="dot" id="status-dot"></div>
       <span id="status-text">connecting…</span>
@@ -389,7 +453,6 @@
 
 <!-- Drawer -->
 <div class="panel" id="drawer-panel">
-  <button class="btn-outline" id="compact-btn" onclick="compactNow()"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><polyline points="7 13 12 18 17 13"></polyline><polyline points="7 6 12 11 17 6"></polyline></svg>Compacter maintenant</button>
   <div id="drawer-list"></div>
 </div>
 
@@ -435,8 +498,85 @@ document.querySelectorAll('.tab').forEach(tab => {
 // Load on startup
 checkHealth()
 loadHistory()
+refreshContext()
 
 // ── Health check ──────────────────────────────────────────────────
+// ── Context gauge ─────────────────────────────────────────────────
+// Two numbers live here and they answer different questions, so they
+// are shown differently rather than averaged into one.
+//
+// The BAR is a forecast: what the next turn will cost, from
+// GET /context. That is the question worth asking -- "am I near the
+// limit?" is useful before writing, not after. It is necessarily an
+// estimate, since the exact count only exists once llama-server has
+// seen the prompt, so the figure carries a "~".
+//
+// The TOOLTIP is a fact: what the last turn actually cost, from the
+// measured counts /chat returns. Exact where exactness means
+// something, and kept off the bar so the gauge never jumps between a
+// measured and an estimated scale for reasons the reader cannot see.
+//
+// CTX_WARN is context FILL -- the whole prompt against n_ctx.
+// Deliberately NOT the compaction budget, despite an earlier note here
+// saying it should become one: compaction is budgeted on the history
+// block alone, a different quantity on a different scale. Tying the
+// gauge to it would put a history-block number on a whole-prompt bar,
+// which is the same conflation the bar and tooltip are split to avoid.
+const CTX_WARN = 0.70
+const CTX_CRIT = 0.90
+
+let _lastMeasured = null
+
+function renderContext(used, limit, estimated) {
+  const el = document.getElementById('ctx')
+  const fill = document.getElementById('ctx-fill')
+  const text = document.getElementById('ctx-text')
+  // Never hidden, even with nothing to show. It carries the compaction
+  // action now, and an action that vanishes when a poll fails is an
+  // action you cannot reach exactly when a bloated context is the
+  // likeliest reason the poll failed.
+  if (!used) {
+    fill.style.width = '0'
+    el.className = 'ctx'
+    text.textContent = '—'
+    return
+  }
+
+  const prefix = estimated ? '~' : ''
+  const n = used.toLocaleString('fr-FR')
+
+  if (limit) {
+    const ratio = used / limit
+    fill.style.width = Math.min(100, ratio * 100) + '%'
+    el.className =
+      'ctx' + (ratio >= CTX_CRIT ? ' crit' : ratio >= CTX_WARN ? ' warn' : '')
+    text.textContent = `${prefix}${n} / ${limit.toLocaleString('fr-FR')}`
+  } else {
+    // No denominator rather than a plausible-looking one: the server
+    // could not report its window, and a bar against an invented
+    // limit would be worse than no bar.
+    fill.style.width = '0'
+    el.className = 'ctx'
+    text.textContent = `${prefix}${n} tokens`
+  }
+
+  const note = estimated ? 'estimation du prochain tour' : 'mesuré'
+  el.title = _lastMeasured
+    ? `Contexte : ${note}. Dernier tour : ${_lastMeasured.toLocaleString('fr-FR')} tokens mesurés.`
+    : `Contexte : ${note}.`
+}
+
+async function refreshContext() {
+  try {
+    const r = await apiFetch('/context')
+    if (!r.ok) { renderContext(null); return }
+    const d = await r.json()
+    renderContext(d.prompt_tokens, d.context_limit, d.estimated)
+  } catch {
+    renderContext(null)
+  }
+}
+
 async function checkHealth() {
   try {
     const r = await fetch('/health')
@@ -687,6 +827,11 @@ async function sendChat() {
     })
     const data = await r.json()
     removeThinking()
+    // Exact counts for the turn that just ran. Kept off the bar -- see
+    // the Context gauge block -- but shown in its tooltip.
+    if (data.usage && data.usage.max_prompt_tokens) {
+      _lastMeasured = data.usage.max_prompt_tokens
+    }
     if (!data.ok) {
       appendMsg(null, data.output || '[empty response]', 'bot error', data.error || '')
     }
@@ -699,6 +844,7 @@ async function sendChat() {
   // ids (needed for pin buttons) and any compaction that ran on this
   // turn is reflected immediately.
   await loadHistory()
+  await refreshContext()
 
   _busy = false
   document.getElementById('send-btn').disabled = false
@@ -749,20 +895,44 @@ async function loadDrawer() {
   }
 }
 
+// Lives on the gauge rather than in the Tiroir tab: the gauge is what
+// tells you compaction is worth doing, so the action belongs where the
+// reason is, and it is reachable from every tab instead of one.
+//
+// It asks first. Compaction replaces non-pinned messages with a
+// summary pointer and there is no undo, so a header element that is
+// always on screen must not do that on a stray click -- the same
+// reason the gauge is a reading first and a button second.
 async function compactNow() {
-  const btn = document.getElementById('compact-btn')
+  const btn = document.getElementById('ctx')
+  const text = document.getElementById('ctx-text')
+  if (btn.disabled) return
+  if (!confirm(
+    "Compacter l'historique maintenant ?\n\n" +
+    'Les messages non épinglés seront remplacés par un résumé. ' +
+    'Cette action est irréversible.'
+  )) return
+
   btn.disabled = true
-  const original = btn.textContent
-  btn.textContent = '…'
+  const original = text.textContent
+  text.textContent = '…'
   try {
     const r = await apiFetch('/compact', { method: 'POST' })
     const data = await r.json()
-    btn.textContent = data.removed > 0 ? `✓ ${data.removed} messages compactés` : '✓ rien à compacter'
+    text.textContent = data.removed > 0 ? `✓ ${data.removed} compactés` : '✓ rien à faire'
     await loadHistory()
   } catch (e) {
-    btn.textContent = '✗ échec'
+    text.textContent = '✗ échec'
   }
-  setTimeout(() => { btn.textContent = original; btn.disabled = false }, 2000)
+  // Re-reads rather than restoring the old figure: compaction just
+  // changed the very number this gauge exists to display, so putting
+  // the pre-compaction reading back would be showing something known
+  // to be false.
+  setTimeout(async () => {
+    btn.disabled = false
+    text.textContent = original
+    await refreshContext()
+  }, 2000)
 }
 
 // Toggles one step's sub-steps panel (discover/collect/synthesize

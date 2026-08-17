@@ -44,6 +44,39 @@ def get_loaded_model(url: str) -> str | None:
     return path.rsplit("/", 1)[-1]
 
 
+def get_context_size(url: str) -> int | None:
+    """
+    The context window llama-server was actually started with, from the
+    same /props endpoint as get_loaded_model.
+
+    Asking the server rather than reading a config value is the whole
+    point: -c is passed on the llama-server command line, in a compose
+    file Forge does not read, so any value Forge held would be a copy
+    that drifts silently. A gauge showing a denominator nobody
+    maintains is worse than no gauge.
+
+    Best-effort in the same way and for the same reasons: None on any
+    failure, so a caller falls back rather than breaking over it.
+    """
+    try:
+        r = requests.get(f"{url}/props", timeout=2)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+    # Same version drift as the model path above -- n_ctx has lived at
+    # the top level and inside default_generation_settings depending on
+    # the build.
+    n_ctx = data.get("n_ctx") or data.get("default_generation_settings", {}).get(
+        "n_ctx"
+    )
+    if not isinstance(n_ctx, int) or n_ctx <= 0:
+        return None
+
+    return n_ctx
+
+
 def call(url: str, model: str, prompt: str) -> Completion:
     payload = {
         "prompt": prompt,

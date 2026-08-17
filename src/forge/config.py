@@ -116,8 +116,40 @@ COMPACTION_ENABLED = _bool("COMPACTION_ENABLED", "true")
 # below MEMORY_MAX_HISTORY on purpose, to leave headroom instead of
 # racing the hard cap.
 COMPACTION_THRESHOLD = int(os.getenv("COMPACTION_THRESHOLD", "80"))
+# Second trigger, on the size of the history as the ROUTER PROMPT
+# renders it -- not as memory.json stores it. The two differ by more
+# than a factor of two, because router/prompt.py truncates assistant
+# entries to 120 chars on the way in.
+#
+# Both triggers are kept, and neither replaces the other. A message
+# count cannot see a big paste: user entries are capped at 4000 chars,
+# so one exchange costs ~90 rendered tokens in ordinary chat and ~1150
+# at the ceiling -- a factor of thirteen. At that ceiling the context
+# window is gone in about 24 messages, and a threshold of 80 would
+# never fire in time. Conversely a token budget cannot see a flood of
+# tiny entries, which costs little in the prompt but plenty in
+# _format_history and in every persist.
+#
+# 6000 was chosen so the message trigger stays the common path: at
+# ordinary rates this is ~133 messages, well past 80. It only takes
+# over for the paste case, where it fires around 10 messages. The
+# prompt at that point is roughly 8800 of 16384 tokens -- deliberately
+# early, since compaction is cheap and a blown context window is not.
+COMPACTION_TOKEN_THRESHOLD = int(os.getenv("COMPACTION_TOKEN_THRESHOLD", "6000"))
+# What a pass aims to get BACK DOWN to, not just under.
+#
+# MEMORY_MAX_HISTORY below records what happens when eviction lands
+# exactly on its limit: one message evicted per turn, which is the
+# sliding window v3.8 removed, and which destroys KV-cache reuse. The
+# same trap is worse here, because COMPACTION_KEEP_RECENT is a count of
+# MESSAGES while the budget is in TOKENS -- how much a pass frees is
+# not fixed. Aiming well below the threshold buys turns before the next
+# pass instead of hovering at the line.
+COMPACTION_TOKEN_TARGET = int(os.getenv("COMPACTION_TOKEN_TARGET", "3000"))
 # How many of the most recent (non-pinned) messages are always left
-# untouched by compaction.
+# untouched by compaction. A FLOOR, not an exact count: a token-budget
+# pass keeps compacting past this only when the budget still is not
+# met, and never leaves fewer than this many behind.
 COMPACTION_KEEP_RECENT = int(os.getenv("COMPACTION_KEEP_RECENT", "20"))
 # "rag_pointer" (default): no LLM call -- push the compacted block into
 # vector memory verbatim (rag.py) and replace it inline with a short

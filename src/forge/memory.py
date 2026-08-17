@@ -14,7 +14,7 @@ at that point, not before.
 import json
 from pathlib import Path
 
-from forge import compaction
+from forge import compaction, tokens
 from forge.config import MEMORY_FILE, MEMORY_HARD_CAP_SLACK, MEMORY_MAX_HISTORY
 from forge.logger import log
 
@@ -124,6 +124,32 @@ def _apply_retention(history: list[dict]) -> list[dict]:
     was quietly reintroducing it. Cutting deeper costs a bit more
     context at once and buys a stable prefix for many turns after.
     """
+    # Observation only, and deliberately BEFORE compaction runs: the
+    # size that matters is the one that would have been sent, not what
+    # is left after eviction. Nothing reads this yet.
+    #
+    # This is the STORED size. It is not what the history weighs in the
+    # router prompt -- _format_history truncates assistant entries to
+    # 120 chars, so the two diverge by more than a factor of two on a
+    # normal conversation (measured 2026-08-16). The prompt-side figure
+    # is logged separately as "router.history_block", and that is the
+    # one a token budget should be keyed on. This one says what
+    # compaction is evicting; that one says what evicting it buys.
+    #
+    # Both are logged rather than one, because switching compaction
+    # from a message count to a token budget needs constants nobody can
+    # pick from first principles, and picking them off the wrong metric
+    # is worse than not measuring at all. Same discipline as
+    # MEMORY_HARD_CAP_SLACK below, which exists because a threshold
+    # chosen without measuring quietly reintroduced the sliding window
+    # it was meant to prevent.
+    log.event(
+        "history.size",
+        messages=len(history),
+        stored_tokens=tokens.estimate_messages(history),
+        pinned=sum(1 for m in history if m.get("pinned")),
+    )
+
     try:
         history = compaction.maybe_compact(history)
     except compaction.CompactionError as e:

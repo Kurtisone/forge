@@ -48,7 +48,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from forge import rag, ratelimit, trace
+from forge import memory, rag, ratelimit, trace
 from forge.config import (
     API_ALLOW_UNAUTHENTICATED,
     API_DOCS_ENABLED,
@@ -56,8 +56,11 @@ from forge.config import (
     FORGE_PROVIDER,
     LLAMA_CPP_URL,
     LLM_MODEL,
+    MEMORY_ENABLED,
 )
 from forge.orchestrator import Orchestrator
+from forge.router import build_router_prompt
+from forge.tokens import estimate_tokens
 
 
 class InsecureConfiguration(RuntimeError):
@@ -170,6 +173,12 @@ class ChatResponse(BaseModel):
     ok: bool
     steps: int
     error: str | None = None
+    # Absent, not zeroed, when no accounting scope was open -- same
+    # convention as the trace's "llm" block. A client must be able to
+    # tell "not reported" from "reported as nothing", which matters
+    # here because the header gauge has to decide between showing a
+    # number and showing nothing at all.
+    usage: dict | None = None
 
 
 class ReviewResponse(BaseModel):
@@ -276,6 +285,72 @@ async def health():
     }
 
 
+async def _context_limit() -> int | None:
+    """
+    The context window, asked of the server that owns it. None for any
+    provider that cannot say -- the gauge then shows a used figure with
+    no denominator rather than inventing one.
+    """
+    if FORGE_PROVIDER != "llama_cpp":
+        return None
+
+    from forge.providers.llama_cpp import get_context_size
+
+    return await _run_in_thread(get_context_size, LLAMA_CPP_URL)
+
+
+async def _context_usage(usage: dict | None) -> dict | None:
+    """
+    Add the two fields the header gauge needs to the run's own totals.
+
+    `estimated` is not decoration. Everything in *usage* comes from the
+    backend's own counts, but the gauge also has to render before any
+    call has happened (GET /context on page load), where the only
+    number available is tokens.estimate_tokens. Showing an estimate as
+    if it were a measurement is precisely the confusion this whole lot
+    exists to remove, so the flag travels with the numbers.
+    """
+    if usage is None:
+        return None
+    return {
+        **usage,
+        "context_limit": await _context_limit(),
+        "estimated": False,
+    }
+
+
+@app.get("/context", dependencies=[Depends(require_token), Depends(rate_limit)])
+async def get_context():
+    """
+    What the next turn will cost, before it is sent.
+
+    /chat can only report a window that has already been used, so on a
+    freshly loaded page there is nothing to show. This is the answer to
+    "am I near the limit?", which is a question worth asking BEFORE
+    writing rather than after.
+
+    Necessarily an estimate: the exact count only exists once
+    llama-server has seen the prompt. It is built from the same
+    rendered history block the router would send, not from the stored
+    messages -- assistant entries are truncated to 120 chars on the way
+    into the prompt, so the stored size runs more than double the real
+    one and would make this gauge alarmist for no reason.
+    """
+    history = memory.get_history() if MEMORY_ENABLED else []
+    # Builds the prompt but never sends it. Worth being explicit about:
+    # an LLM call here would be a passive UI poll writing into
+    # llama-server's pinned slot, evicting the KV prefix the next real
+    # turn depends on -- a silent factor-of-twenty on latency, for a
+    # gauge.
+    prompt = build_router_prompt("", history=history)
+    return {
+        "prompt_tokens": estimate_tokens(prompt),
+        "history_messages": len(history),
+        "context_limit": await _context_limit(),
+        "estimated": True,
+    }
+
+
 @app.post(
     "/chat",
     response_model=ChatResponse,
@@ -292,6 +367,7 @@ async def chat(req: ChatRequest):
         ok=result.ok,
         steps=result.steps,
         error=result.error,
+        usage=await _context_usage(result.usage),
     )
 
 

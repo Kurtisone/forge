@@ -221,7 +221,20 @@ class AgentState:
     def current_step(self) -> TraceStep | None:
         return self.trace[-1] if self.trace else None
 
-    def to_result(self) -> "AgentResult":
+    def to_result(self, usage: dict | None = None) -> "AgentResult":
+        """
+        *usage* is passed in rather than read here, and types.py stays
+        free of a metrics import -- metrics already imports Usage from
+        this module, so the dependency only goes one way.
+
+        The caller that supplies it must be inside the run. metrics
+        keeps its totals in a contextvar so concurrent requests cannot
+        sum into each other, and api.chat() dispatches run() through a
+        worker thread, so a snapshot taken after run() returns would
+        see either nothing or another request's scope. Orchestrator
+        ._finish is the one place that is both inside the run and on
+        every exit path.
+        """
         return AgentResult(
             output=self.final_output or "",
             tool=self.final_tool or "none",
@@ -229,6 +242,7 @@ class AgentState:
             ok=self.ok,
             error=self.error,
             trace=self.trace,
+            usage=usage,
         )
 
 
@@ -242,3 +256,8 @@ class AgentResult:
     ok: bool = True
     error: str | None = None
     trace: list = field(default_factory=list, compare=False)
+    # None when no accounting scope was open (a direct AgentState with
+    # no run(), most tests). Absent rather than zeroed, the same
+    # convention the trace's "llm" block already uses: a caller must be
+    # able to tell "not reported" from "reported as nothing".
+    usage: dict | None = field(default=None, compare=False)

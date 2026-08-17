@@ -35,6 +35,7 @@ from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
 from forge.llm import call_llm
 from forge.logger import log
 from forge.router import build_router_prompt, parse_router_output
+from forge.router.prompt import estimate_history_tokens
 from forge.tool_payload import loads_payload
 from forge.tools.registry import get_tool, load_tools
 from forge.types import AgentResult, AgentState, ToolResult
@@ -436,7 +437,10 @@ class Orchestrator:
         trace.save(state)
         if MEMORY_ENABLED and remember:
             self._remember(state.user_input, state.final_output or "")
-        return state.to_result()
+        # Snapshot taken here, on the way out but still inside the run:
+        # see AgentState.to_result for why the caller cannot take it
+        # itself.
+        return state.to_result(usage=metrics.snapshot())
 
     def _route(self, state: AgentState):
         prompt = build_router_prompt(
@@ -446,6 +450,15 @@ class Orchestrator:
             last_read_path=state.last_read_path,
         )
         log.event("router.prompt", chars=len(prompt))
+        # Logged HERE and not inside build_router_prompt, which
+        # GET /context also calls: a passive gauge poll would otherwise
+        # emit a line indistinguishable from a real routing step and
+        # double every sample in any later analysis of this log. The
+        # measurement is only meaningful for turns that actually ran.
+        log.event(
+            "router.history_block",
+            estimated_tokens=estimate_history_tokens(state.history),
+        )
         raw = call_llm(prompt)
         log.event("router.raw_output", raw=raw)
         decision = parse_router_output(raw)
