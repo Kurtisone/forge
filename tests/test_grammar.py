@@ -11,38 +11,8 @@ whatever tools are actually enabled+loaded.
 import re
 
 import forge.tools.registry as registry_mod
+from forge.gbnf import check_rule_names, referenced_names, rule_names
 from forge.router.grammar import build_router_grammar
-
-
-def _rule_names(grammar: str) -> set[str]:
-    return set(re.findall(r"^([a-zA-Z][a-zA-Z0-9_-]*)\s*::=", grammar, re.MULTILINE))
-
-
-def _referenced_names(grammar: str) -> set[str]:
-    """Rule names referenced in the grammar body.
-
-    String literals and char classes are stripped FIRST, so a JSON key
-    like "\\"tool\\"" is not mistaken for a reference to a rule named
-    `tool`. This used to be a bare identifier scan filtered against a
-    hand-maintained keyword list, which silently passed only because
-    `tool` and `content` happened to be rule names too; the moment they
-    stopped being rules, the check started reporting them as undefined.
-    Stripping properly removes the need for the list at all -- and with
-    it, the need to remember to update it whenever a rule is added.
-    """
-    body = re.sub(r'"(?:[^"\\]|\\.)*"', " ", grammar)  # string literals
-    body = re.sub(r"\[\^?(?:[^\]\\]|\\.)*\]", " ", body)  # char classes
-    return set(re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*", body))
-
-
-def _llama_cpp_is_word_char(c: str) -> bool:
-    """llama.cpp's own is_word_char() from its grammar lexer.
-
-    Deliberately reimplemented rather than approximated: it accepts
-    [a-zA-Z0-9-] and NOT underscore, which is the single fact this
-    test exists to pin down.
-    """
-    return c.isascii() and (c.isalpha() or c.isdigit() or c == "-")
 
 
 def test_rule_names_use_only_characters_llama_cpp_accepts():
@@ -62,9 +32,7 @@ def test_rule_names_use_only_characters_llama_cpp_accepts():
     grammar = build_router_grammar(
         available_tools=["chat", "code", "files", "memory", "review", "sysadmin"]
     )
-    for name in _rule_names(grammar) | _referenced_names(grammar):
-        bad = [c for c in name if not _llama_cpp_is_word_char(c)]
-        assert not bad, f"rule name {name!r} has characters llama.cpp rejects: {bad}"
+    assert check_rule_names(grammar) == []
 
 
 def test_has_a_root_rule():
@@ -76,8 +44,8 @@ def test_every_referenced_rule_is_defined():
     grammar = build_router_grammar(
         available_tools=["chat", "code", "files", "shell", "git"]
     )
-    defined = _rule_names(grammar)
-    referenced = _referenced_names(grammar)
+    defined = rule_names(grammar)
+    referenced = referenced_names(grammar)
     assert referenced <= defined
 
 
