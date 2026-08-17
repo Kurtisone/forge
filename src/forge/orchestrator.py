@@ -436,7 +436,10 @@ class Orchestrator:
         trace.save(state)
         if MEMORY_ENABLED and remember:
             self._remember(state.user_input, state.final_output or "")
-        return state.to_result()
+        # Snapshot taken here, on the way out but still inside the run:
+        # see AgentState.to_result for why the caller cannot take it
+        # itself.
+        return state.to_result(usage=metrics.snapshot())
 
     def _route(self, state: AgentState):
         prompt = build_router_prompt(
