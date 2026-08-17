@@ -12,6 +12,7 @@
       --accent:   #58a6ff;
       --green:    #3fb950;
       --red:      #f85149;
+      --amber:    #d29922;
       --muted:    #8b949e;
       --text:     #e6edf3;
       --user-bg:  #1f6feb;
@@ -61,6 +62,30 @@
     }
     .dot.ok  { background: var(--green); }
     .dot.err { background: var(--red); }
+
+    /* Context gauge. Always present, never announced: a widget that
+       appears only once things get tight reads as an alarm, and its
+       absence would mean both "plenty of room" and "the gauge is
+       broken" -- same reason .dot above is always visible and changes
+       colour rather than popping in when the server drops. */
+    .ctx {
+      display: flex; align-items: center; gap: 6px;
+      font-size: .75rem; color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .ctx-bar {
+      width: 46px; height: 4px; border-radius: 2px;
+      background: var(--border);
+      overflow: hidden;
+    }
+    .ctx-fill {
+      height: 100%; width: 0;
+      background: var(--accent);
+      transition: width .4s, background .4s;
+    }
+    .ctx.warn .ctx-fill { background: var(--amber); }
+    .ctx.crit .ctx-fill { background: var(--red); }
+    .ctx.crit { color: var(--red); }
 
     /* ── Tabs ── */
     .tabs {
@@ -365,6 +390,10 @@
   <div class="logo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:4px"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg><span>Forge</span></div>
   <div style="display:flex;align-items:center;gap:14px;">
     <button class="btn-outline" id="token-btn" onclick="promptForToken()" title="Définir le token API (si API_TOKEN est configuré côté serveur)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>Token</button>
+    <div class="ctx" id="ctx" hidden>
+      <div class="ctx-bar"><div class="ctx-fill" id="ctx-fill"></div></div>
+      <span id="ctx-text"></span>
+    </div>
     <div class="status">
       <div class="dot" id="status-dot"></div>
       <span id="status-text">connecting…</span>
@@ -435,8 +464,75 @@ document.querySelectorAll('.tab').forEach(tab => {
 // Load on startup
 checkHealth()
 loadHistory()
+refreshContext()
 
 // ── Health check ──────────────────────────────────────────────────
+// ── Context gauge ─────────────────────────────────────────────────
+// Two numbers live here and they answer different questions, so they
+// are shown differently rather than averaged into one.
+//
+// The BAR is a forecast: what the next turn will cost, from
+// GET /context. That is the question worth asking -- "am I near the
+// limit?" is useful before writing, not after. It is necessarily an
+// estimate, since the exact count only exists once llama-server has
+// seen the prompt, so the figure carries a "~".
+//
+// The TOOLTIP is a fact: what the last turn actually cost, from the
+// measured counts /chat returns. Exact where exactness means
+// something, and kept off the bar so the gauge never jumps between a
+// measured and an estimated scale for reasons the reader cannot see.
+//
+// CTX_WARN is a plain context-fill threshold for now. Once compaction
+// runs on a token budget it should become that budget instead, so the
+// colour change means "compaction is about to fire" rather than a
+// round number.
+const CTX_WARN = 0.70
+const CTX_CRIT = 0.90
+
+let _lastMeasured = null
+
+function renderContext(used, limit, estimated) {
+  const el = document.getElementById('ctx')
+  const fill = document.getElementById('ctx-fill')
+  const text = document.getElementById('ctx-text')
+  if (!used) { el.hidden = true; return }
+  el.hidden = false
+
+  const prefix = estimated ? '~' : ''
+  const n = used.toLocaleString('fr-FR')
+
+  if (limit) {
+    const ratio = used / limit
+    fill.style.width = Math.min(100, ratio * 100) + '%'
+    el.className =
+      'ctx' + (ratio >= CTX_CRIT ? ' crit' : ratio >= CTX_WARN ? ' warn' : '')
+    text.textContent = `${prefix}${n} / ${limit.toLocaleString('fr-FR')}`
+  } else {
+    // No denominator rather than a plausible-looking one: the server
+    // could not report its window, and a bar against an invented
+    // limit would be worse than no bar.
+    fill.style.width = '0'
+    el.className = 'ctx'
+    text.textContent = `${prefix}${n} tokens`
+  }
+
+  const note = estimated ? 'estimation du prochain tour' : 'mesuré'
+  el.title = _lastMeasured
+    ? `Contexte : ${note}. Dernier tour : ${_lastMeasured.toLocaleString('fr-FR')} tokens mesurés.`
+    : `Contexte : ${note}.`
+}
+
+async function refreshContext() {
+  try {
+    const r = await apiFetch('/context')
+    if (!r.ok) { document.getElementById('ctx').hidden = true; return }
+    const d = await r.json()
+    renderContext(d.prompt_tokens, d.context_limit, d.estimated)
+  } catch {
+    document.getElementById('ctx').hidden = true
+  }
+}
+
 async function checkHealth() {
   try {
     const r = await fetch('/health')
@@ -687,6 +783,11 @@ async function sendChat() {
     })
     const data = await r.json()
     removeThinking()
+    // Exact counts for the turn that just ran. Kept off the bar -- see
+    // the Context gauge block -- but shown in its tooltip.
+    if (data.usage && data.usage.max_prompt_tokens) {
+      _lastMeasured = data.usage.max_prompt_tokens
+    }
     if (!data.ok) {
       appendMsg(null, data.output || '[empty response]', 'bot error', data.error || '')
     }
@@ -699,6 +800,7 @@ async function sendChat() {
   // ids (needed for pin buttons) and any compaction that ran on this
   // turn is reflected immediately.
   await loadHistory()
+  await refreshContext()
 
   _busy = false
   document.getElementById('send-btn').disabled = false
