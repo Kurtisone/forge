@@ -516,10 +516,12 @@ refreshContext()
 // something, and kept off the bar so the gauge never jumps between a
 // measured and an estimated scale for reasons the reader cannot see.
 //
-// CTX_WARN is a plain context-fill threshold for now. Once compaction
-// runs on a token budget it should become that budget instead, so the
-// colour change means "compaction is about to fire" rather than a
-// round number.
+// CTX_WARN is context FILL -- the whole prompt against n_ctx.
+// Deliberately NOT the compaction budget, despite an earlier note here
+// saying it should become one: compaction is budgeted on the history
+// block alone, a different quantity on a different scale. Tying the
+// gauge to it would put a history-block number on a whole-prompt bar,
+// which is the same conflation the bar and tooltip are split to avoid.
 const CTX_WARN = 0.70
 const CTX_CRIT = 0.90
 

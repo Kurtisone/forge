@@ -6,7 +6,8 @@ kicks in -- see the comment on MEMORY_MAX_HISTORY in config.py -- and
 throws away context outright besides.
 
 Two responsibilities are deliberately kept separate:
-  - WHEN to compact: maybe_compact() checks COMPACTION_THRESHOLD.
+  - WHEN to compact: maybe_compact() checks COMPACTION_THRESHOLD and
+    COMPACTION_TOKEN_THRESHOLD.
   - HOW to compact: a strategy function decides what happens to the
     evicted messages.
 
@@ -15,6 +16,13 @@ single summary dict), so COMPACTION_STRATEGY is a one-line config
 change, not a rewrite. Pinned messages (the "tiroir") are always
 excluded from what gets compacted -- see forge.memory for how
 "pinned" is set.
+
+Sizing is asked of router/prompt.py rather than computed here, which
+puts a low-level module's import above a high-level one. That is on
+purpose: what compaction BUYS is measured in the rendered prompt, and
+the renderer is the only thing that knows the truncation rules. A local
+copy of that arithmetic would be a second definition of the same fact,
+free to drift from the one that matters.
 """
 
 from forge import rag
@@ -23,8 +31,11 @@ from forge.config import (
     COMPACTION_KEEP_RECENT,
     COMPACTION_STRATEGY,
     COMPACTION_THRESHOLD,
+    COMPACTION_TOKEN_TARGET,
+    COMPACTION_TOKEN_THRESHOLD,
 )
 from forge.logger import log
+from forge.router.prompt import estimate_history_tokens
 
 
 class CompactionError(Exception):
@@ -42,24 +53,41 @@ def maybe_compact(history: list[dict], force: bool = False) -> list[dict]:
     """
     if not COMPACTION_ENABLED and not force:
         return history
-    if not force and len(history) <= COMPACTION_THRESHOLD:
+
+    rendered = estimate_history_tokens(history)
+    over_messages = len(history) > COMPACTION_THRESHOLD
+    over_tokens = rendered > COMPACTION_TOKEN_THRESHOLD
+    if not force and not over_messages and not over_tokens:
         return history
 
     pinned = [m for m in history if m.get("pinned")]
     unpinned = [m for m in history if not m.get("pinned")]
 
-    if len(unpinned) <= COMPACTION_KEEP_RECENT:
+    # How many messages this pass will evict, decided independently by
+    # each trigger and then taken at the larger of the two -- a pass
+    # that satisfies one trigger while leaving the other still over is
+    # a pass that runs again next turn.
+    split = 0
+    if over_messages or force:
+        split = max(split, len(unpinned) - COMPACTION_KEEP_RECENT)
+    if over_tokens:
+        split = max(split, _split_for_token_target(pinned, unpinned))
+
+    if split <= 0:
         # Nothing eligible to compact -- e.g. pinned messages alone
-        # pushed len(history) past the threshold.
+        # pushed the history past a threshold.
         return history
 
-    split = len(unpinned) - COMPACTION_KEEP_RECENT
     to_compact, to_keep = unpinned[:split], unpinned[split:]
 
     summary_message = _run_strategy(to_compact)
     log.event(
         "compaction.run",
         strategy=COMPACTION_STRATEGY,
+        trigger="tokens"
+        if over_tokens
+        else ("messages" if over_messages else "forced"),
+        rendered_tokens=rendered,
         compacted=len(to_compact),
         kept=len(to_keep),
         pinned=len(pinned),
@@ -69,6 +97,49 @@ def maybe_compact(history: list[dict], force: bool = False) -> list[dict]:
     # of the summary rather than re-threaded back into strict
     # chronological order.
     return [*pinned, summary_message, *to_keep]
+
+
+def _split_for_token_target(pinned: list[dict], unpinned: list[dict]) -> int:
+    """
+    How many of the oldest unpinned messages must go for the rendered
+    history to fit COMPACTION_TOKEN_TARGET. Zero when nothing needs to.
+
+    Two things this does differently from the message-count path.
+
+    It aims at the TARGET, not the threshold. KEEP_RECENT counts
+    messages while the budget counts tokens, so one pass frees an
+    amount nobody can predict -- twenty short exchanges free almost
+    nothing. Landing just under the threshold means compacting again
+    next turn, which is the per-turn eviction MEMORY_HARD_CAP_SLACK
+    exists to record: it reintroduces the sliding window v3.8 removed
+    and destroys KV-cache reuse, with no symptom other than latency.
+
+    And it may go BELOW COMPACTION_KEEP_RECENT, which is a floor for a
+    count-driven pass and cannot be one here. Twenty 4000-char pastes
+    are twenty messages: a floor of twenty would forbid touching any of
+    them, making the budget unreachable in exactly the case it exists
+    for. One exchange is always kept, so the model is never left
+    answering with no recent context at all.
+
+    The search runs from the smallest eviction upward and stops at the
+    first that fits, so a pass never compacts more than it must.
+    Pinned messages count toward the total -- they are part of the
+    rendered block, and the budget is about the block -- but are never
+    evicted, so a pinned set alone over the target simply means the
+    target is unreachable and the caller gets the largest split
+    available rather than nothing.
+    """
+    keep_at_least = 2  # one exchange
+    if estimate_history_tokens([*pinned, *unpinned]) <= COMPACTION_TOKEN_TARGET:
+        return 0
+
+    for split in range(1, max(1, len(unpinned) - keep_at_least) + 1):
+        if (
+            estimate_history_tokens([*pinned, *unpinned[split:]])
+            <= COMPACTION_TOKEN_TARGET
+        ):
+            return split
+    return max(0, len(unpinned) - keep_at_least)
 
 
 def _run_strategy(messages: list[dict]) -> dict:
