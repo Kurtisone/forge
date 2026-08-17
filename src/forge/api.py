@@ -337,6 +337,11 @@ async def get_context():
     one and would make this gauge alarmist for no reason.
     """
     history = memory.get_history() if MEMORY_ENABLED else []
+    # Builds the prompt but never sends it. Worth being explicit about:
+    # an LLM call here would be a passive UI poll writing into
+    # llama-server's pinned slot, evicting the KV prefix the next real
+    # turn depends on -- a silent factor-of-twenty on latency, for a
+    # gauge.
     prompt = build_router_prompt("", history=history)
     return {
         "prompt_tokens": estimate_tokens(prompt),
