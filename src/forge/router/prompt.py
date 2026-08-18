@@ -155,12 +155,12 @@ TOOL_DESCRIPTIONS = {
         "content is the task to hand off, in plain text, repeated as "
         "faithfully as possible from what the user asked -- do NOT "
         "summarize it and do NOT fill in details they did not give. "
-        'Use this when the user asks for a CODING task to be carried '
+        "Use this when the user asks for a CODING task to be carried "
         'out somewhere else ("fais-moi une PR qui...", "délègue ça", '
         '"lance un job pour..."), not when they want an answer here '
-        'and now. Forge will then interview them about anything '
+        "and now. Forge will then interview them about anything "
         "missing, so an incomplete request is fine -- an invented "
-        "detail is not. Never respond with \"done\":false after it: "
+        'detail is not. Never respond with "done":false after it: '
         "the job opens and the conversation continues on its own."
     ),
     "sysadmin": (

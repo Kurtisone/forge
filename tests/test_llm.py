@@ -36,9 +36,7 @@ def test_dispatches_to_llama_cpp(monkeypatch):
     monkeypatch.setattr(
         llm_mod.llama_cpp,
         "call",
-        lambda url, model, prompt, grammar=None: Completion(
-            text="llama.cpp says hi"
-        ),
+        lambda url, model, prompt, grammar=None: Completion(text="llama.cpp says hi"),
     )
 
     result = llm_mod.call_llm("hello")
