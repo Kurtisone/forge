@@ -40,7 +40,8 @@ Usage (Python):
   print(run("répare le cache KV dans src/forge"))
 """
 
-from forge import delegation, jobs, spec
+from forge import delegation, jobs, spec, turn
+from forge.config import DELEGATE_DRAFT
 from forge.errors import ForgeError, ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
@@ -63,32 +64,47 @@ jamais vérifié."""
 
 def draft_node(state: AgentState) -> AgentState:
     """
-    One constrained call; an empty spec is a valid outcome.
+    Seed the spec from the request, and only draft if asked to.
 
-    The grammar covers spec.DRAFTABLE only, so the fields the model
-    used to invent are not merely discarded afterwards -- it cannot
-    emit them. That also shortens the answer: the two runs that
-    invented acceptance criteria spent 214 and 86 completion tokens on
-    them, at roughly 100 ms per token on this box.
+    The objective is the user's RAW message, not the router's
+    restatement of it. The tool contract hands a graph the router's
+    `content`, and on one real turn that content was lifted from an
+    earlier message in the history -- so the job's objective described
+    a request nobody had just made. The raw message cannot drift from
+    itself. See turn.py.
+
+    DELEGATE_DRAFT is off by default. Across the first real
+    delegations the draft call cost 6-14 s and the only field it ever
+    contributed was a workspace already spelled out in the request;
+    everything else it produced was invented and dropped by
+    spec.ground(). The interview turns it saves cost 0 ms each. The
+    path stays because what fails is the model rather than the design
+    -- see config.DELEGATE_DRAFT.
     """
-    prompt = _PROMPT.format(
-        request=state.user_input.strip(),
-        fields=spec.prompt_fields(spec.DRAFTABLE),
-    )
+    request = turn.get_input().strip() or state.user_input.strip()
 
-    try:
-        raw = call_llm(prompt, grammar=spec.build_spec_grammar(spec.DRAFTABLE))
-        drafted = spec.parse(raw)
-    except (ProviderError, ForgeError) as e:
-        # Degraded, not failed: the interview can fill every field on
-        # its own, so a model that cannot draft costs questions, not
-        # the feature.
-        log.warning("delegate: could not draft a spec (%s), interviewing instead", e)
-        drafted = spec.Spec()
+    drafted = spec.Spec()
+    drafted.set("objective", request)
 
-    # Nothing the draft says is trusted on its own: ground() keeps
-    # only what the request actually supports. See spec.ground().
-    state.context["spec"] = spec.ground(drafted, state.user_input)
+    if DELEGATE_DRAFT:
+        try:
+            raw = call_llm(
+                _PROMPT.format(
+                    request=request, fields=spec.prompt_fields(spec.DRAFTABLE)
+                ),
+                grammar=spec.build_spec_grammar(spec.DRAFTABLE),
+            )
+            # ground() keeps only what the request supports; the
+            # objective stays the user's own words either way.
+            grounded = spec.ground(spec.parse(raw), request)
+            if grounded.workspace:
+                drafted.set("workspace", grounded.workspace)
+        except (ProviderError, ForgeError) as e:
+            # Degraded, not failed: the interview fills every field on
+            # its own, which is exactly why the draft can be optional.
+            log.warning("delegate: could not draft a spec (%s), interviewing", e)
+
+    state.context["spec"] = drafted
     return state
 
 

@@ -4,7 +4,8 @@ Tests for forge.graphs.delegate and the handoff executor.
 The property that matters most here is that the LLM call is an
 accelerator, not a dependency: every failure of it still leaves a
 usable job, because the interview in delegation.py can fill the spec
-on its own.
+on its own. Lot 7 took that to its conclusion -- the draft is off by
+default -- so the tests that exercise it turn it back on explicitly.
 """
 
 import json
@@ -18,6 +19,12 @@ import forge.graphs.delegate as delegate_mod
 from forge import jobs
 from forge.errors import ProviderError
 from forge.executors import HandoffExecutor, JobCancelled
+
+
+@pytest.fixture
+def drafting(monkeypatch):
+    """Turn the optional draft call back on for the tests about it."""
+    monkeypatch.setattr(delegate_mod, "DELEGATE_DRAFT", True)
 
 
 def _draft(monkeypatch, **fields):
@@ -34,7 +41,7 @@ def _draft(monkeypatch, **fields):
     )
 
 
-def test_a_grounded_workspace_survives_the_draft(monkeypatch):
+def test_a_grounded_workspace_survives_the_draft(monkeypatch, drafting):
     """
     A workspace named in the request is a restatement, so the draft
     keeps it and no question is asked about it.
@@ -52,7 +59,7 @@ def test_a_grounded_workspace_survives_the_draft(monkeypatch):
     assert job.pending_field == "acceptance"
 
 
-def test_acceptance_is_always_asked_however_complete_the_draft(monkeypatch):
+def test_acceptance_is_always_asked_however_complete_the_draft(monkeypatch, drafting):
     """
     The failure this whole lot exists for: on the first real run, two
     jobs out of three skipped the interview entirely because the model
@@ -96,11 +103,11 @@ def test_an_incomplete_request_starts_the_interview(monkeypatch):
 
     job = jobs.all_jobs()[0]
     assert job.pending_field == "workspace"
-    assert job.spec["objective"] == "corriger le cache KV"
+    assert job.spec["objective"] == "corrige le cache KV"
     assert output
 
 
-def test_the_spec_call_runs_under_the_spec_grammar(monkeypatch):
+def test_the_spec_call_runs_under_the_spec_grammar(monkeypatch, drafting):
     """
     The first call in Forge constrained by something other than the
     router's grammar (lot 1). Without it the answer comes back shaped
@@ -120,7 +127,7 @@ def test_the_spec_call_runs_under_the_spec_grammar(monkeypatch):
     assert "objective" in seen["grammar"]
 
 
-def test_a_provider_failure_still_opens_a_job(monkeypatch):
+def test_a_provider_failure_still_opens_a_job(monkeypatch, drafting):
     """
     Degraded, not failed. The interview can fill every field on its
     own, so a model that cannot draft costs questions, not the
@@ -134,23 +141,33 @@ def test_a_provider_failure_still_opens_a_job(monkeypatch):
     output = delegate_mod.run("corrige le cache KV")
 
     job = jobs.all_jobs()[0]
-    assert job.pending_field == "objective"
+    # The objective survives a dead provider because it never came
+    # from the model: it is the user's own message. Only workspace
+    # and acceptance are left to ask.
+    assert job.spec["objective"] == "corrige le cache KV"
+    assert job.pending_field == "workspace"
     assert output
 
 
-def test_an_unparseable_draft_still_opens_a_job(monkeypatch):
+def test_an_unparseable_draft_still_opens_a_job(monkeypatch, drafting):
     monkeypatch.setattr(
         delegate_mod, "call_llm", lambda prompt, grammar=None: "je ne sais pas"
     )
     delegate_mod.run("corrige le cache KV")
-    assert jobs.all_jobs()[0].pending_field == "objective"
+    assert jobs.all_jobs()[0].pending_field == "workspace"
 
 
 def test_a_second_job_is_refused_while_one_is_waiting(monkeypatch):
     """
-    jobs.py allows only one job to wait at a time, and it is right to.
-    This turns that invariant into a sentence rather than a stack
-    trace.
+    A DEFENSIVE path, not one chat can reach.
+
+    The real traces settled this: a second delegation request sent
+    while a job is waiting never gets to the router at all --
+    delegation.intercept() takes it first and records it as the answer
+    to the pending question. So this branch only guards direct callers
+    of delegate_mod.run() (the Python entry point, this test), and it
+    is kept for them rather than deleted: without it jobs.transition()
+    raises JobStateError out of a tool.
     """
     _draft(monkeypatch, objective="a")
     delegate_mod.run("premier")
@@ -209,3 +226,51 @@ def test_handoff_honours_a_cancellation_taken_before_it_writes(tmp_path):
             job, cancel, deadline=time.time() + 60
         )
     assert not directory.exists()
+
+
+def test_the_objective_is_the_raw_message_not_the_routers_restatement():
+    """
+    On one real turn the user typed "délègue un truc" and the router
+    answered with `content` lifted from an EARLIER message in the
+    history, so the job's objective described a request nobody had
+    just made. The raw message cannot drift from itself.
+    """
+    from forge import turn
+
+    turn.set_input("corrige la pagination du journal")
+    try:
+        delegate_mod.run("quelque chose de complètement différent")
+    finally:
+        turn.clear()
+
+    assert jobs.all_jobs()[0].spec["objective"] == "corrige la pagination du journal"
+
+
+def test_no_llm_call_at_all_when_the_draft_is_off(monkeypatch):
+    """
+    The default. Across the first real delegations the draft cost
+    6-14 s and only ever contributed a workspace the user had already
+    typed; the interview turns it saved cost 0 ms each.
+    """
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("the draft must not run when DELEGATE_DRAFT is off")
+
+    monkeypatch.setattr(delegate_mod, "call_llm", _explode)
+    delegate_mod.run("corrige le cache KV dans src/forge")
+
+    assert jobs.all_jobs()[0].pending_field == "workspace"
+
+
+def test_the_draft_can_be_turned_back_on(monkeypatch, drafting):
+    """
+    Kept rather than deleted: what fails is the model, not the design.
+    Point call_llm at something stronger and this is worth its call
+    again.
+    """
+    _draft(monkeypatch, workspace="src/forge")
+    delegate_mod.run("corrige le cache KV dans src/forge")
+
+    job = jobs.all_jobs()[0]
+    assert job.spec["workspace"] == "src/forge"
+    assert job.pending_field == "acceptance"

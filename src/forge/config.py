@@ -276,6 +276,21 @@ JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "1800"))
 # rest of the delegation machinery does not change when one appears.
 DELEGATE_EXECUTOR = os.getenv("DELEGATE_EXECUTOR", "handoff")
 
+# Whether the delegate graph spends an LLM call drafting the spec
+# before interviewing. OFF by default, on the evidence rather than on
+# principle: across the first real delegations the draft cost 6-14 s
+# and the only field it ever contributed was a workspace the user had
+# already typed in the request -- everything else was either invented
+# (and dropped by spec.ground) or left for the interview anyway. The
+# interview turns it replaces cost 0 ms.
+#
+# The path is kept rather than deleted because the reason it fails is
+# the model, not the design: a 9B under a grammar fills required keys
+# instead of leaving them empty. Point call_llm at something stronger
+# and this becomes worth its call again -- turn it back on and measure
+# rather than rewriting it.
+DELEGATE_DRAFT = os.getenv("DELEGATE_DRAFT", "false").lower() in ("1", "true", "yes")
+
 # How long the "echo" executor pretends to work, in seconds. Exists so
 # that cancelling a RUNNING job and restarting mid-run can be exercised
 # for real: handoff finishes in milliseconds, so both paths had unit

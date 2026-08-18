@@ -25,7 +25,7 @@ Rules enforced here, by construction:
 import json
 import re
 
-from forge import delegation, memory, metrics, subtrace, trace
+from forge import delegation, memory, metrics, subtrace, trace, turn
 from forge.config import (
     ALLOW_MUTATION_AFTER_EXTERNAL_DATA,
     MAX_STEPS,
@@ -203,6 +203,9 @@ class Orchestrator:
         # compaction, which calls the LLM, and that call belongs to
         # this run's bill.
         metrics.start_run()
+        # The raw message, for the one tool that needs it rather than
+        # the router's restatement of it. See turn.py.
+        turn.set_input(user_input)
 
         # Delegation traffic never reaches the router. When a job is
         # waiting on an answer, the next message belongs to it because
