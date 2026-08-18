@@ -48,7 +48,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from forge import memory, rag, ratelimit, trace
+from forge import jobs, memory, rag, ratelimit, trace
 from forge.config import (
     API_ALLOW_UNAUTHENTICATED,
     API_DOCS_ENABLED,
@@ -97,6 +97,9 @@ def check_auth_configuration() -> None:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     check_auth_configuration()
+    # A job left RUNNING on disk is a lie as soon as this process is
+    # new: whatever was executing it died with the previous one.
+    jobs.reconcile()
     yield
 
 
@@ -410,6 +413,20 @@ async def review(req: ReviewRequest):
 @app.get("/traces", dependencies=[Depends(require_token), Depends(rate_limit)])
 async def get_traces(n: int = 10):
     return {"traces": trace.read_last(n)}
+
+
+@app.get("/jobs", dependencies=[Depends(require_token), Depends(rate_limit)])
+async def list_jobs():
+    """
+    Every delegation job and its state.
+
+    Forge's own interface is the conversation thread -- the zero-tab
+    rule -- so this is not where a job is meant to be read day to day.
+    It exists so that "what is this job actually doing" has an answer
+    that does not require reading data/jobs.json over SSH from a
+    phone.
+    """
+    return {"jobs": [job.to_dict() for job in jobs.all_jobs()]}
 
 
 @app.get("/tools", dependencies=[Depends(require_token), Depends(rate_limit)])

@@ -466,3 +466,48 @@ def test_manual_compact_reports_removed_count(monkeypatch, tmp_path):
     r = client.post("/compact")
     assert r.status_code == 200
     assert r.json()["removed"] > 0
+
+
+def test_jobs_endpoint_lists_delegation_jobs():
+    """
+    Forge's own interface is the thread (zero tabs), so this endpoint
+    is not where a job gets read day to day -- it exists so "what is
+    that job doing" has an answer that isn't cat data/jobs.json over
+    SSH from a phone.
+    """
+    from forge import jobs
+
+    job = jobs.create({"objective": "réparer le cache"})
+    jobs.transition(job.id, jobs.AWAITING_USER, pending_field="workspace")
+
+    response = _client().get("/jobs")
+    assert response.status_code == 200
+    listed = response.json()["jobs"]
+    assert [j["id"] for j in listed] == [job.id]
+    assert listed[0]["status"] == jobs.AWAITING_USER
+    assert listed[0]["pending_field"] == "workspace"
+
+
+def test_startup_reconciles_jobs_left_running(monkeypatch):
+    """
+    The reconciliation only helps if it runs on the path a restart
+    actually takes. Wiring it into lifespan and never checking that
+    lifespan calls it would leave the lie on disk untouched in exactly
+    the case it was written for.
+    """
+    import asyncio
+
+    from forge import jobs
+
+    job = jobs.create()
+    jobs.transition(job.id, jobs.READY)
+    jobs.transition(job.id, jobs.RUNNING)
+
+    monkeypatch.setattr(api_mod, "check_auth_configuration", lambda: None)
+
+    async def _startup():
+        async with api_mod.lifespan(api_mod.app):
+            pass
+
+    asyncio.run(_startup())
+    assert jobs.get(job.id).status == jobs.INTERRUPTED

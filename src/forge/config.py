@@ -255,6 +255,13 @@ ENABLED_TOOLS = {
 TRACE_ENABLED = _bool("TRACE_ENABLED", "true")
 TRACE_FILE = os.getenv("TRACE_FILE", "data/traces.jsonl")
 
+# --- Delegation jobs --------------------------------------------------------
+# Deliberately NOT a key inside memory.json: compaction rewrites that
+# file in full, and the job runner writes to this one from another
+# thread. Two whole-file writers on one file means the loser's work
+# disappears, and here the loser would be queued work. See jobs.py.
+JOBS_FILE = os.getenv("JOBS_FILE", "data/jobs.json")
+
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")
 
