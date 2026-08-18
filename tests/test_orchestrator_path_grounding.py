@@ -12,6 +12,12 @@ to unscored observation.
 The asymmetry matters and is tested both ways: a READ of an invented
 path fails loudly and harmlessly, so it still runs. A WRITE succeeds,
 leaving a file nobody asked for -- so it is refused before dispatch.
+
+EVERY path in a payload is checked, not just the first one found.
+The guard shipped looking at two key spellings, "path" and
+"file_path", and review already had a third: "test_path", whose value
+graphs/review.py hands to pytest. A grounded file_path next to an
+invented test_path went straight through.
 """
 
 import json
@@ -19,7 +25,13 @@ import json
 import pytest
 
 import forge.orchestrator as orch_mod
-from forge.orchestrator import Orchestrator, _decision_path, _path_is_grounded
+from forge.orchestrator import (
+    Orchestrator,
+    _decision_paths,
+    _is_path_key,
+    _path_is_grounded,
+)
+from forge.tool_payload import JSON_PAYLOAD_TOOLS
 from forge.types import AgentState, RouterDecision
 
 
@@ -33,16 +45,77 @@ def _state(user_input="", history=None, last_read_path=None):
 @pytest.mark.parametrize(
     "tool,content,expected",
     [
-        ("files", '{"action":"write","path":"a.py","content":"x"}', "a.py"),
-        ("files", '{"action":"edit","path":"a.py","find":"x","replace":"y"}', "a.py"),
-        ("review", '{"file_path":"a.py"}', "a.py"),
-        ("files", '{"action":"list"}', None),
-        ("files", "not json", None),
-        ("chat", '{"path":"a.py"}', None),
+        (
+            "files",
+            '{"action":"write","path":"a.py","content":"x"}',
+            (("path", "a.py"),),
+        ),
+        (
+            "files",
+            '{"action":"edit","path":"a.py","find":"x","replace":"y"}',
+            (("path", "a.py"),),
+        ),
+        ("review", '{"file_path":"a.py"}', (("file_path", "a.py"),)),
+        # The one that used to be invisible: two paths, and the guard
+        # only ever saw the first.
+        (
+            "review",
+            '{"file_path":"a.py","test_path":"tests/test_a.py"}',
+            (("file_path", "a.py"), ("test_path", "tests/test_a.py")),
+        ),
+        ("files", '{"action":"list"}', ()),
+        ("files", "not json", ()),
+        ("chat", '{"path":"a.py"}', ()),
+        # A path-shaped key with a non-path value is not a path.
+        ("review", '{"file_path":"a.py","test_path":""}', (("file_path", "a.py"),)),
+        ("review", '{"file_path":"a.py","test_path":42}', (("file_path", "a.py"),)),
     ],
 )
-def test_decision_path_reads_both_key_spellings(tool, content, expected):
-    assert _decision_path(RouterDecision(tool=tool, content=content)) == expected
+def test_decision_paths_collects_every_path_in_the_payload(tool, content, expected):
+    assert _decision_paths(RouterDecision(tool=tool, content=content)) == expected
+
+
+@pytest.mark.parametrize(
+    "key,guarded",
+    [
+        ("path", True),
+        ("file_path", True),
+        ("test_path", True),
+        ("some_future_path", True),
+        ("question", False),
+        ("content", False),
+        ("pathological", False),
+    ],
+)
+def test_path_keys_are_recognized_by_shape(key, guarded):
+    assert _is_path_key(key) is guarded
+
+
+def test_every_path_key_in_the_router_prompt_is_guarded():
+    """
+    The invariant that keeps this from rotting again.
+
+    test_path escaped the guard because someone taught the router a
+    new path key and nothing here noticed. Teaching the router a
+    fourth one now fails this test instead of shipping a hole.
+    """
+    import re as _re
+
+    from forge.router.prompt import build_router_prompt
+
+    prompt = build_router_prompt(
+        "bonjour", history=[], available_tools=sorted(JSON_PAYLOAD_TOOLS)
+    )
+    keys = set(_re.findall(r'"([A-Za-z_]*path)"\s*:', prompt))
+    assert "file_path" in keys and "test_path" in keys, (
+        "the prompt no longer shows the payload keys this test reads; "
+        f"found {sorted(keys)}"
+    )
+    unguarded = sorted(k for k in keys if not _is_path_key(k))
+    assert not unguarded, (
+        f"the router prompt teaches path keys the grounding guard ignores: "
+        f"{unguarded}. Add them to _is_path_key in orchestrator.py."
+    )
 
 
 def test_user_message_grounds_a_path():
@@ -163,3 +236,72 @@ def test_invented_read_path_still_runs(monkeypatch, tmp_path):
     assert result.tool == "files"
     # Loud and harmless: the tool ran, found nothing, and said so.
     assert "not found" in result.output
+
+
+def test_grounded_file_path_does_not_cover_an_invented_test_path(monkeypatch):
+    """
+    The hole this branch closes.
+
+    "Relis src/forge/graph.py et lance ses tests" names one file. The
+    model fills in the other from convention, and graphs/review.py
+    runs `pytest <that>` -- executing workspace code chosen by a
+    string nobody typed. pytest also auto-loads conftest.py from the
+    rootdir before collecting, so "the file doesn't exist" is not the
+    protection it sounds like.
+    """
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setitem(TOOLS, "review", lambda content: pytest.fail("dispatched"))
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {
+                "tool": "review",
+                "content": json.dumps(
+                    {
+                        "file_path": "src/forge/graph.py",
+                        "test_path": "tests/test_graph.py",
+                    }
+                ),
+            }
+        ),
+    )
+
+    result = Orchestrator(max_steps=1).run(
+        "relis src/forge/graph.py et lance ses tests"
+    )
+
+    assert result.tool == "chat"
+    # Names the field, so the next turn can answer the question that
+    # was actually left open -- which tests, not which file.
+    assert "test_path" in result.output
+
+
+def test_two_grounded_paths_still_run(monkeypatch):
+    """The mirror image: name both files and the review goes through."""
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setitem(TOOLS, "review", lambda content: "[review] ok")
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {
+                "tool": "review",
+                "content": json.dumps(
+                    {
+                        "file_path": "src/forge/graph.py",
+                        "test_path": "tests/test_graph.py",
+                    }
+                ),
+            }
+        ),
+    )
+
+    result = Orchestrator(max_steps=1).run(
+        "relis src/forge/graph.py et lance tests/test_graph.py"
+    )
+
+    assert result.tool == "review"
+    assert result.output == "[review] ok"
