@@ -262,6 +262,13 @@ TRACE_FILE = os.getenv("TRACE_FILE", "data/traces.jsonl")
 # disappears, and here the loser would be queued work. See jobs.py.
 JOBS_FILE = os.getenv("JOBS_FILE", "data/jobs.json")
 
+# Wall-clock ceiling for one job, in seconds. Generous by default: the
+# work being delegated is the kind that takes minutes, and a bound
+# that fires on normal work is a bound that gets removed. It exists so
+# that an executor which hangs cannot leave a job RUNNING forever --
+# a state nothing else would ever move it out of.
+JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "1800"))
+
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")
 

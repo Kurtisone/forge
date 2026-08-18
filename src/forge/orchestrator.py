@@ -25,7 +25,7 @@ Rules enforced here, by construction:
 import json
 import re
 
-from forge import memory, metrics, subtrace, trace
+from forge import delegation, memory, metrics, subtrace, trace
 from forge.config import (
     ALLOW_MUTATION_AFTER_EXTERNAL_DATA,
     MAX_STEPS,
@@ -203,6 +203,24 @@ class Orchestrator:
         # compaction, which calls the LLM, and that call belongs to
         # this run's bill.
         metrics.start_run()
+
+        # Delegation traffic never reaches the router. When a job is
+        # waiting on an answer, the next message belongs to it because
+        # there is exactly one waiting job -- a fact checked in code,
+        # not a judgement the model is asked to make. See
+        # delegation.py.
+        #
+        # Placed above _recall() on purpose: an intercepted turn makes
+        # no LLM call at all, and _recall can trigger compaction, which
+        # does. Answering "src/forge" to "which folder?" should not
+        # cost a prefill.
+        reply = delegation.intercept(user_input)
+        if reply is not None:
+            intercepted = AgentState(user_input=user_input, max_steps=self.max_steps)
+            intercepted.final_output = reply
+            intercepted.final_tool = "delegate"
+            return self._finish(intercepted, remember=True)
+
         state = AgentState(
             user_input=user_input,
             max_steps=self.max_steps,

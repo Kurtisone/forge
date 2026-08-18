@@ -775,3 +775,39 @@ def test_failed_step_stops_the_loop_even_if_not_done(monkeypatch):
     # unknown tool falls back to chat in the parser, which always
     # succeeds — so this exercises the "done" respected on success path.
     assert result.tool == "chat"
+
+
+def test_delegation_interception_bypasses_the_router(monkeypatch):
+    """
+    An intercepted turn makes no LLM call at all -- not routing, not
+    recall, not compaction. Answering "src/forge" to "which folder?"
+    must not cost a prefill on an APU.
+    """
+    from forge import jobs
+
+    job = jobs.create({})
+    jobs.transition(job.id, jobs.AWAITING_USER, pending_field="objective")
+
+    def _explode(_prompt, grammar=None):
+        raise AssertionError("the router must not be called for delegation traffic")
+
+    monkeypatch.setattr(orch_mod, "call_llm", _explode)
+
+    result = orch_mod.Orchestrator().run("réparer le cache KV")
+    assert result.ok
+    assert result.tool == "delegate"
+    assert jobs.get(job.id).spec["objective"] == "réparer le cache KV"
+
+
+def test_an_ordinary_turn_still_reaches_the_router(monkeypatch):
+    """
+    The guard above only means something if the common path is
+    unchanged: with no job pending, intercept() returns None and run()
+    proceeds exactly as before.
+    """
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps({"tool": "chat", "content": "bonjour"}),
+    )
+    assert orch_mod.Orchestrator().run("bonjour").output == "bonjour"
