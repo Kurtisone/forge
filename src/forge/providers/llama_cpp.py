@@ -1,5 +1,6 @@
 import requests
 
+from forge import gbnf
 from forge.config import (
     LLAMA_CPP_CACHE_PROMPT,
     LLAMA_CPP_ID_SLOT,
@@ -77,7 +78,40 @@ def get_context_size(url: str) -> int | None:
     return n_ctx
 
 
-def call(url: str, model: str, prompt: str) -> Completion:
+def _grammar_for(grammar: str | None) -> str | None:
+    """
+    Which grammar text to send, or None to send none.
+
+    LLAMA_CPP_USE_GRAMMAR stays absolute: when it's off, nothing is
+    constrained, whatever the caller asked for -- it exists to take
+    grammar sampling out of the picture while debugging, and a knob
+    with an exception isn't one.
+
+    An invalid grammar is dropped rather than sent. llama-server
+    answers 400 to every completion it can't parse, so sending one is
+    a guaranteed total outage; running unconstrained falls back to
+    router/parser.py's existing chain, which is degraded but alive.
+    The log line carries the offending rule name, which the server's
+    own 400 body never does.
+    """
+    if not LLAMA_CPP_USE_GRAMMAR:
+        return None
+
+    if grammar is None:
+        from forge.router.grammar import build_router_grammar
+
+        grammar = build_router_grammar()
+
+    try:
+        gbnf.validate(grammar)
+    except gbnf.GrammarError as e:
+        log.error("grammar rejected before sending, running unconstrained: %s", e)
+        return None
+
+    return grammar
+
+
+def call(url: str, model: str, prompt: str, grammar: str | None = None) -> Completion:
     payload = {
         "prompt": prompt,
         "temperature": 0.0,
@@ -101,17 +135,23 @@ def call(url: str, model: str, prompt: str) -> Completion:
         ],
     }
 
-    if LLAMA_CPP_USE_GRAMMAR:
-        # Grammar-constrained decoding: the model can only emit tokens
-        # matching the router's exact JSON schema (see router/grammar.py),
-        # at the sampling level -- it cannot hallucinate a new "User:"
-        # turn, leak prompt text, or emit anything but valid JSON in the
-        # first place. The stop sequences above stay as defense-in-depth
-        # (a model can still choose not to stop generating right after a
-        # complete, valid object) rather than the primary safeguard.
-        from forge.router.grammar import build_router_grammar
-
-        payload["grammar"] = build_router_grammar()
+    # Grammar-constrained decoding: the model can only emit tokens
+    # matching a JSON schema at the sampling level -- it cannot
+    # hallucinate a new "User:" turn, leak prompt text, or emit
+    # anything but valid JSON in the first place. The stop sequences
+    # above stay as defense-in-depth (a model can still choose not to
+    # stop generating right after a complete, valid object) rather
+    # than the primary safeguard.
+    #
+    # `grammar` defaults to the router's (router/grammar.py), which is
+    # what every call used until v3.13. A caller passing its own is
+    # how a graph gets a shape that ISN'T a routing decision -- before
+    # this, the router grammar applied to every call including graph
+    # syntheses, which is why the graphs all carry
+    # try_unwrap_router_json().
+    grammar_text = _grammar_for(grammar)
+    if grammar_text is not None:
+        payload["grammar"] = grammar_text
 
     try:
         r = requests.post(f"{url}/completion", json=payload, timeout=LLAMA_CPP_TIMEOUT)

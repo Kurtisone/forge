@@ -36,7 +36,7 @@ def test_dispatches_to_llama_cpp(monkeypatch):
     monkeypatch.setattr(
         llm_mod.llama_cpp,
         "call",
-        lambda url, model, prompt: Completion(text="llama.cpp says hi"),
+        lambda url, model, prompt, grammar=None: Completion(text="llama.cpp says hi"),
     )
 
     result = llm_mod.call_llm("hello")
@@ -130,3 +130,42 @@ def test_usage_reaches_the_response_log(monkeypatch):
     response = next(kw for name, kw in events if name == "llm.response")
     assert response["prompt_tokens"] == 120
     assert response["completion_tokens"] == 8
+
+
+def test_grammar_is_forwarded_to_llama_cpp(monkeypatch):
+    """
+    A per-call grammar is the whole point of v3.13 lot 1: before it,
+    llama_cpp.call built the router's grammar unconditionally, so a
+    graph asking for a spec-shaped answer got a routing decision's
+    shape instead (which is why every graph carries
+    try_unwrap_router_json).
+    """
+    seen = {}
+
+    def _fake_call(url, model, prompt, grammar=None):
+        seen["grammar"] = grammar
+        return Completion(text="ok")
+
+    monkeypatch.setattr(llm_mod, "FORGE_PROVIDER", "llama_cpp")
+    monkeypatch.setattr(llm_mod.llama_cpp, "call", _fake_call)
+
+    llm_mod.call_llm("hello", grammar='root ::= "x"')
+    assert seen["grammar"] == 'root ::= "x"'
+
+
+def test_grammar_request_is_logged_when_provider_cannot_honour_it(monkeypatch, caplog):
+    """
+    Ollama and OpenRouter cannot constrain sampling to a schema. The
+    call still runs -- refusing would make a provider swap fail on a
+    feature the caller can survive without -- but the caller's parse
+    is then unprotected, so the downgrade must not be silent.
+    """
+    monkeypatch.setattr(llm_mod, "FORGE_PROVIDER", "ollama")
+    monkeypatch.setattr(
+        llm_mod.ollama, "call", lambda url, model, prompt: Completion(text="hi")
+    )
+
+    with caplog.at_level("WARNING"):
+        assert llm_mod.call_llm("hello", grammar='root ::= "x"') == "hi"
+
+    assert "unconstrained" in caplog.text

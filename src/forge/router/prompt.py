@@ -151,6 +151,18 @@ TOOL_DESCRIPTIONS = {
         '"web_search" into a second step reliably failed with this '
         "model (repeated the same search instead of answering)."
     ),
+    "delegate": (
+        "content is the task to hand off, in plain text, repeated as "
+        "faithfully as possible from what the user asked -- do NOT "
+        "summarize it and do NOT fill in details they did not give. "
+        "Use this when the user asks for a CODING task to be carried "
+        'out somewhere else ("fais-moi une PR qui...", "délègue ça", '
+        '"lance un job pour..."), not when they want an answer here '
+        "and now. Forge will then interview them about anything "
+        "missing, so an incomplete request is fine -- an invented "
+        'detail is not. Never respond with "done":false after it: '
+        "the job opens and the conversation continues on its own."
+    ),
     "sysadmin": (
         "content is a JSON object: "
         '{"target_hint":"...","question":"..."}. Both fields are '
@@ -332,6 +344,25 @@ _TOOL_EXAMPLES = {
         (
             "Quelles sont les dernières actualités en bourse ?",
             '{"tool":"research","content":"actualités bourse aujourd\'hui"}',
+        ),
+    ],
+    "delegate": [
+        # No "done":false -- opening a job is self-contained, and the
+        # questions that follow are handled above the router (see
+        # delegation.py), not as further tool calls.
+        #
+        # Only two examples on purpose. The router prompt floor is the
+        # dominant per-call cost on this box (~3900 tokens), so every
+        # tool added here is paid on every single turn, including the
+        # ones that never delegate. v3.12's instrumentation is what
+        # makes that measurable rather than assumed.
+        (
+            "Délègue la correction du cache KV, je regarderai ce soir",
+            '{"tool":"delegate","content":"corriger le cache KV"}',
+        ),
+        (
+            "Tu peux lancer un job pour ajouter des tests au routeur ?",
+            '{"tool":"delegate","content":"ajouter des tests au routeur"}',
         ),
     ],
     "web_search": [

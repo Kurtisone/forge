@@ -380,3 +380,38 @@ def test_openrouter_missing_choices_raises_provider_error(monkeypatch):
         assert False, "expected ProviderError"
     except ProviderError:
         pass
+
+
+def test_grammar_selection_prefers_the_callers_grammar(monkeypatch):
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_USE_GRAMMAR", True)
+    assert llama_cpp._grammar_for('root ::= "x"') == 'root ::= "x"'
+
+
+def test_grammar_selection_falls_back_to_the_router_grammar(monkeypatch):
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_USE_GRAMMAR", True)
+    grammar = llama_cpp._grammar_for(None)
+    assert grammar is not None
+    assert "root" in grammar
+
+
+def test_grammar_knob_off_beats_an_explicit_grammar(monkeypatch):
+    """
+    LLAMA_CPP_USE_GRAMMAR exists to take grammar sampling out of the
+    picture while debugging. A knob with an exception isn't one.
+    """
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_USE_GRAMMAR", False)
+    assert llama_cpp._grammar_for('root ::= "x"') is None
+
+
+def test_an_invalid_grammar_is_dropped_rather_than_sent(monkeypatch, caplog):
+    """
+    llama-server answers 400 to every completion whose grammar it
+    can't parse, so sending one is a guaranteed TOTAL outage (v3.10:
+    the router didn't degrade, it died). Running unconstrained falls
+    back to the parser's existing chain instead -- and the log line
+    names the offending rule, which the server's 400 body never does.
+    """
+    monkeypatch.setattr(llama_cpp, "LLAMA_CPP_USE_GRAMMAR", True)
+    with caplog.at_level("ERROR"):
+        assert llama_cpp._grammar_for('root ::= spec_call\nspec_call ::= "x"') is None
+    assert "spec_call" in caplog.text

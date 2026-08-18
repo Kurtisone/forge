@@ -29,15 +29,32 @@ from forge.providers import llama_cpp, ollama, openrouter
 from forge.tokens import estimate_tokens
 
 
-def call_llm(prompt: str) -> str:
+def call_llm(prompt: str, grammar: str | None = None) -> str:
+    """
+    grammar: a GBNF grammar constraining this call only. None means
+    the provider's default (for llama.cpp, the router grammar).
+
+    Only llama.cpp can honour it -- it is the one provider Forge talks
+    to that exposes raw GBNF sampling. Asking for one anywhere else is
+    logged rather than silently ignored, because the caller's parse is
+    then unprotected and a quiet downgrade is exactly the kind of
+    thing that shows up later as an unexplained parse failure.
+    """
     started = time.monotonic()
     log.event("llm.call", provider=FORGE_PROVIDER, model=LLM_MODEL)
+
+    if grammar is not None and FORGE_PROVIDER != "llama_cpp":
+        log.warning(
+            "grammar requested but provider %r cannot constrain sampling; "
+            "the call will run unconstrained",
+            FORGE_PROVIDER,
+        )
 
     try:
         if FORGE_PROVIDER == "ollama":
             result = ollama.call(OLLAMA_URL, LLM_MODEL, prompt)
         elif FORGE_PROVIDER == "llama_cpp":
-            result = llama_cpp.call(LLAMA_CPP_URL, LLM_MODEL, prompt)
+            result = llama_cpp.call(LLAMA_CPP_URL, LLM_MODEL, prompt, grammar)
         elif FORGE_PROVIDER == "openrouter":
             result = openrouter.call(
                 OPENROUTER_URL, OPENROUTER_API_KEY, LLM_MODEL, prompt

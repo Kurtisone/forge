@@ -704,3 +704,22 @@ def test_vague_file_reference_instruction_is_gated_on_tools_not_history():
     )
     assert "refers to a file vaguely" not in without_files
     assert "files" not in without_files
+
+
+def test_delegate_is_described_when_enabled(monkeypatch):
+    """
+    A tool the prompt never mentions is a tool the router never picks.
+    Worth pinning down because adding one is not free: the prompt
+    floor is the dominant per-call cost on this box, so "delegate"
+    ships with two examples rather than the six it could have had.
+    """
+    monkeypatch.setattr(
+        registry_mod, "available_tools", lambda: ["chat", "code", "delegate"]
+    )
+    prompt = build_router_prompt("délègue la correction du cache KV")
+    assert "delegate" in prompt
+
+
+def test_delegate_is_absent_when_not_enabled(monkeypatch):
+    monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code"])
+    assert "delegate" not in build_router_prompt("délègue la correction du cache KV")

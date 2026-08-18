@@ -18,6 +18,10 @@ class RouterParseError(ForgeError):
     """The router did not return a usable JSON instruction."""
 
 
+class SpecParseError(ForgeError):
+    """The model did not return a usable delegation spec."""
+
+
 class ToolNotFoundError(ForgeError):
     """The router asked for a tool that is not registered."""
 

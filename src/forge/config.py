@@ -255,6 +255,57 @@ ENABLED_TOOLS = {
 TRACE_ENABLED = _bool("TRACE_ENABLED", "true")
 TRACE_FILE = os.getenv("TRACE_FILE", "data/traces.jsonl")
 
+# --- Delegation jobs --------------------------------------------------------
+# Deliberately NOT a key inside memory.json: compaction rewrites that
+# file in full, and the job runner writes to this one from another
+# thread. Two whole-file writers on one file means the loser's work
+# disappears, and here the loser would be queued work. See jobs.py.
+JOBS_FILE = os.getenv("JOBS_FILE", "data/jobs.json")
+
+# Wall-clock ceiling for one job, in seconds. Generous by default: the
+# work being delegated is the kind that takes minutes, and a bound
+# that fires on normal work is a bound that gets removed. It exists so
+# that an executor which hangs cannot leave a job RUNNING forever --
+# a state nothing else would ever move it out of.
+JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "1800"))
+
+# Who carries out a job. "handoff" writes the spec into the workspace
+# and stops -- the honest default while no implementer is reachable
+# from the container. "echo" does nothing at all and exists for tests.
+# A real executor is one class implementing executors.Executor; the
+# rest of the delegation machinery does not change when one appears.
+DELEGATE_EXECUTOR = os.getenv("DELEGATE_EXECUTOR", "handoff")
+
+# Whether the delegate graph spends an LLM call drafting the spec
+# before interviewing. OFF by default, on the evidence rather than on
+# principle: across the first real delegations the draft cost 6-14 s
+# and the only field it ever contributed was a workspace the user had
+# already typed in the request -- everything else was either invented
+# (and dropped by spec.ground) or left for the interview anyway. The
+# interview turns it replaces cost 0 ms.
+#
+# The path is kept rather than deleted because the reason it fails is
+# the model, not the design: a 9B under a grammar fills required keys
+# instead of leaving them empty. Point call_llm at something stronger
+# and this becomes worth its call again -- turn it back on and measure
+# rather than rewriting it.
+DELEGATE_DRAFT = os.getenv("DELEGATE_DRAFT", "false").lower() in ("1", "true", "yes")
+
+# How long the "echo" executor pretends to work, in seconds. Exists so
+# that cancelling a RUNNING job and restarting mid-run can be exercised
+# for real: handoff finishes in milliseconds, so both paths had unit
+# tests and no way to reproduce them against a live Forge.
+DELEGATE_ECHO_SECONDS = float(os.getenv("DELEGATE_ECHO_SECONDS", "0"))
+
+# How long the "echo" executor pretends to work, in seconds. Zero by
+# default. It exists because cancelling a RUNNING job and restarting
+# mid-run are the two behaviours that cannot be exercised by hand
+# otherwise: handoff writes a file and returns in milliseconds, so
+# there is never a window to cancel inside. Unit tests cover both, and
+# a behaviour only ever verified by its own test is one nobody has
+# actually seen work.
+DELEGATE_ECHO_SECONDS = float(os.getenv("DELEGATE_ECHO_SECONDS", "0"))
+
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")
 
