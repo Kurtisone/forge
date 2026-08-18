@@ -26,11 +26,14 @@ and lose the bound entirely.
 
 import threading
 import time
+from pathlib import Path
 from typing import Protocol
 
+from forge.config import WORKSPACE_DIR
 from forge.errors import ForgeError
 from forge.jobs import Job
 from forge.logger import log
+from forge.spec import FIELD_NAMES, Spec, render
 
 
 class JobCancelled(ForgeError):
@@ -90,3 +93,56 @@ class EchoExecutor:
         log.info("echo executor completed job %d", job.id)
         objective = job.spec.get("objective", "")
         return f"[echo] rien n'a été exécuté. Spec reçue : {objective}"
+
+
+class HandoffExecutor:
+    """
+    Writes the spec into the workspace and stops there.
+
+    This is the executor Forge ships with, and it is a deliberate
+    choice rather than a placeholder. There is no implementer
+    reachable from the container: no CLI on PATH, no Node, and the
+    Claude Code CLI bundled inside the VS Code extension lives at a
+    path that is not a supported entry point and moves with every
+    update. Building a host-side proxy for it would be plumbing for a
+    dependency already known to be temporary.
+
+    So the last link stays manual, and everything before it does not.
+    The value of delegation was never the automation of the final
+    step: it was being able to describe a task from a phone, be
+    interviewed about the parts that were vague, and have a checkable
+    spec waiting. That works today. The spec file is what gets handed
+    to an implementer at the desk.
+
+    When a real executor exists, it implements this same protocol and
+    nothing else in v3.13 changes.
+    """
+
+    name = "handoff"
+
+    def __init__(self, directory: str | None = None):
+        self.directory = directory or str(Path(WORKSPACE_DIR) / "delegations")
+
+    def run(self, job: Job, cancel: threading.Event, deadline: float) -> str:
+        if cancel.is_set():
+            raise JobCancelled(f"job {job.id} cancelled before it was written")
+
+        # int-formatted job id, fixed directory: the path is built
+        # here, never taken from the spec, so nothing the model wrote
+        # can steer where this lands.
+        directory = Path(self.directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"job-{int(job.id)}.md"
+
+        current = Spec(**{k: v for k, v in job.spec.items() if k in FIELD_NAMES})
+        path.write_text(
+            f"# Job {job.id}\n\n{render(current)}\n",
+            encoding="utf-8",
+        )
+        log.info("job %d handed off at %s", job.id, path)
+
+        return (
+            f"Spec écrite dans {path}.\n"
+            "Rien n'a été exécuté : donne-la à un implémenteur, "
+            "puis reviens fermer le job."
+        )

@@ -21,16 +21,37 @@ import threading
 import time
 
 from forge import jobs
-from forge.config import JOB_TIMEOUT
-from forge.executors import EchoExecutor, Executor, JobCancelled, JobTimedOut
+from forge.config import DELEGATE_EXECUTOR, JOB_TIMEOUT
+from forge.executors import (
+    EchoExecutor,
+    Executor,
+    HandoffExecutor,
+    JobCancelled,
+    JobTimedOut,
+)
 from forge.logger import log
 
 _STOP = object()
 
+_EXECUTORS = {"handoff": HandoffExecutor, "echo": EchoExecutor}
+
+
+def _configured_executor() -> Executor:
+    factory = _EXECUTORS.get(DELEGATE_EXECUTOR)
+    if factory is None:
+        # Falling back rather than raising: an unknown name in .env
+        # must not take the whole runtime down, and handoff never
+        # touches anything beyond writing a file.
+        log.warning(
+            "unknown DELEGATE_EXECUTOR %r, falling back to handoff", DELEGATE_EXECUTOR
+        )
+        factory = HandoffExecutor
+    return factory()
+
 
 class JobRunner:
     def __init__(self, executor: Executor | None = None, timeout: int | None = None):
-        self.executor = executor or EchoExecutor()
+        self.executor = executor or _configured_executor()
         self.timeout = JOB_TIMEOUT if timeout is None else timeout
         self._queue: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None

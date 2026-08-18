@@ -175,3 +175,14 @@ def test_grammar_has_balanced_parens_and_brackets():
         # of this test had, tripping over the literal '"' inside
         # char classes like [^"\\/bfnrt].
     assert depth == 0
+
+
+def test_delegate_is_routable():
+    """
+    A tool the grammar forbids is a tool the router can never choose,
+    however well the prompt describes it -- the failure mode that made
+    prompt/grammar drift expensive in the first place.
+    """
+    grammar = build_router_grammar(available_tools=["chat", "code", "delegate"])
+    assert "delegate" in grammar
+    assert check_rule_names(grammar) == []

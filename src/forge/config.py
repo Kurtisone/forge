@@ -269,6 +269,13 @@ JOBS_FILE = os.getenv("JOBS_FILE", "data/jobs.json")
 # a state nothing else would ever move it out of.
 JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "1800"))
 
+# Who carries out a job. "handoff" writes the spec into the workspace
+# and stops -- the honest default while no implementer is reachable
+# from the container. "echo" does nothing at all and exists for tests.
+# A real executor is one class implementing executors.Executor; the
+# rest of the delegation machinery does not change when one appears.
+DELEGATE_EXECUTOR = os.getenv("DELEGATE_EXECUTOR", "handoff")
+
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")
 
