@@ -207,3 +207,18 @@ def test_echo_executor_respects_the_deadline():
         EchoExecutor(duration=5).run(
             jobs.Job(id=1), threading.Event(), deadline=time.time() - 1
         )
+
+
+def test_the_echo_executor_duration_is_configurable(monkeypatch):
+    """
+    Cancelling a RUNNING job and restarting mid-run are the only two
+    behaviours in v3.13 that cannot be exercised by hand: handoff
+    writes a file and returns in milliseconds, so there is no window
+    to cancel inside. A behaviour verified only by its own unit test
+    is one nobody has actually seen work.
+    """
+    monkeypatch.setattr(runner, "DELEGATE_EXECUTOR", "echo")
+    monkeypatch.setattr(runner, "DELEGATE_ECHO_SECONDS", 42.0)
+    executor = runner._configured_executor()
+    assert executor.name == "echo"
+    assert executor.duration == 42.0

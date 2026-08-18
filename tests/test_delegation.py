@@ -159,3 +159,45 @@ def test_the_filled_spec_round_trips_through_the_spec_model():
     delegation.intercept("réparer le cache")
     stored = jobs.get(job.id).spec
     assert set(stored) == set(spec.FIELD_NAMES)
+
+
+def test_a_short_question_is_not_recorded_as_an_answer():
+    """
+    From the first real run: "C'est à dire ?" was filed as the
+    workspace. The interception cannot tell an answer from a question
+    in general -- that is the price of deciding in code -- but this
+    much is decidable, and re-asking costs a turn while recording
+    garbage costs the spec.
+    """
+    job = _waiting_job("workspace")
+    reply = delegation.intercept("C'est à dire ?")
+
+    assert jobs.get(job.id).spec.get("workspace", "") == ""
+    assert jobs.get(job.id).pending_field == "workspace"
+    assert "annule" in reply
+
+
+def test_a_long_answer_ending_in_a_question_mark_is_still_an_answer():
+    job = _waiting_job("objective")
+    delegation.intercept(
+        "est-ce que tu peux regarder pourquoi la pagination casse au-delà de 50 ?"
+    )
+    assert jobs.get(job.id).spec["objective"]
+    assert jobs.get(job.id).pending_field == "workspace"
+
+
+def test_jobs_can_be_listed_from_the_thread():
+    """
+    GET /jobs needs a bearer token and answered 401 from a phone
+    browser. Loosening the auth on an endpoint that exposes queued
+    work would be the wrong fix; the listing belongs where Forge's
+    interface actually is.
+    """
+    jobs.create({"objective": "corriger le cache KV"})
+    reply = delegation.intercept("jobs")
+    assert "corriger le cache KV" in reply
+    assert "draft" in reply
+
+
+def test_listing_jobs_when_there_are_none():
+    assert "Aucun" in delegation.intercept("mes jobs")

@@ -21,11 +21,14 @@ try_unwrap_router_json() the way every other graph does: those exist
 precisely because the router grammar used to apply to every call in
 the process.
 
-The prompt's one hard rule is that an unknown field stays EMPTY. An
-invented workspace path is the worst possible output here -- it reads
-as a complete spec, skips the question that would have caught it, and
-sends an implementer at the wrong directory. An empty field costs one
-question.
+The prompt asks for unknown fields to stay EMPTY, and the first real
+run showed that asking is not enough: on requests specific enough to
+extrapolate from, the model filled every field with plausible
+inventions and the interview was skipped entirely. So the draft is no
+longer believed on its own -- spec.ground() strips everything the
+request does not support before the job is opened. The prompt rule
+stays because it makes the common case cheaper, not because it is
+load-bearing.
 
 Nodes:
   draft_node  -- one grammar-constrained LLM call filling what it can
@@ -59,14 +62,22 @@ jamais vérifié."""
 
 
 def draft_node(state: AgentState) -> AgentState:
-    """One constrained call; an empty spec is a valid outcome."""
+    """
+    One constrained call; an empty spec is a valid outcome.
+
+    The grammar covers spec.DRAFTABLE only, so the fields the model
+    used to invent are not merely discarded afterwards -- it cannot
+    emit them. That also shortens the answer: the two runs that
+    invented acceptance criteria spent 214 and 86 completion tokens on
+    them, at roughly 100 ms per token on this box.
+    """
     prompt = _PROMPT.format(
         request=state.user_input.strip(),
-        fields=spec.prompt_fields(),
+        fields=spec.prompt_fields(spec.DRAFTABLE),
     )
 
     try:
-        raw = call_llm(prompt, grammar=spec.build_spec_grammar())
+        raw = call_llm(prompt, grammar=spec.build_spec_grammar(spec.DRAFTABLE))
         drafted = spec.parse(raw)
     except (ProviderError, ForgeError) as e:
         # Degraded, not failed: the interview can fill every field on
@@ -75,7 +86,9 @@ def draft_node(state: AgentState) -> AgentState:
         log.warning("delegate: could not draft a spec (%s), interviewing instead", e)
         drafted = spec.Spec()
 
-    state.context["spec"] = drafted
+    # Nothing the draft says is trusted on its own: ground() keeps
+    # only what the request actually supports. See spec.ground().
+    state.context["spec"] = spec.ground(drafted, state.user_input)
     return state
 
 

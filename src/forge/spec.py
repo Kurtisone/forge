@@ -26,10 +26,12 @@ does not need a 9B to notice it.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from forge import gbnf
 from forge.errors import SpecParseError
+from forge.logger import log
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,12 @@ class Field:
     required: bool
     question: str
     label: str
+    # "restate" -- the draft may fill this, because a correct value is
+    # a restatement of something in the request.
+    # "ask" -- always asked, whatever the draft said, because a value
+    # here is a JUDGEMENT about the task rather than a restatement of
+    # it. See ground().
+    source: str = "restate"
 
 
 # Ordering is load-bearing twice over: it fixes the order of keys in
@@ -74,6 +82,7 @@ _FIELDS: tuple[Field, ...] = (
         name="acceptance",
         kind="list",
         required=True,
+        source="ask",
         label="Critères d'acceptation",
         question="À quoi verras-tu que c'est fait ? (un critère vérifiable par point)",
     ),
@@ -81,6 +90,7 @@ _FIELDS: tuple[Field, ...] = (
         name="constraints",
         kind="list",
         required=False,
+        source="ask",
         label="Contraintes",
         question="Y a-t-il des contraintes à respecter ? (« aucune » si non)",
     ),
@@ -88,6 +98,7 @@ _FIELDS: tuple[Field, ...] = (
         name="context",
         kind="text",
         required=False,
+        source="ask",
         label="Contexte",
         question="Un contexte utile à connaître ? (« aucun » si non)",
     ),
@@ -95,6 +106,15 @@ _FIELDS: tuple[Field, ...] = (
 
 FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in _FIELDS)
 _BY_NAME = {f.name: f for f in _FIELDS}
+
+#: The only fields the model is allowed to draft, derived from the
+#: field table rather than repeated here -- the same single-source
+#: rule the rest of this module runs on.
+#:
+#: Enforced by the GRAMMAR rather than by filtering afterwards: the
+#: draft call cannot emit a key outside this tuple, so for those
+#: fields there is no invented value to detect in the first place.
+DRAFTABLE: tuple[str, ...] = tuple(f.name for f in _FIELDS if f.source == "restate")
 
 
 @dataclass
@@ -144,7 +164,12 @@ def _check_field_names() -> None:
             )
 
 
-def build_spec_grammar() -> str:
+def field(name: str) -> Field:
+    """The field definition behind a name."""
+    return _BY_NAME[name]
+
+
+def build_spec_grammar(names: tuple[str, ...] | None = None) -> str:
     """
     A GBNF grammar admitting exactly one spec object, keys in _FIELDS
     order.
@@ -172,20 +197,25 @@ def build_spec_grammar() -> str:
     """
     _check_field_names()
 
+    fields = _FIELDS if names is None else tuple(_BY_NAME[n] for n in names)
+
     members = []
-    for f in _FIELDS:
+    for f in fields:
         value_rule = "strlist" if f.kind == "list" else "string"
         members.append(f'"\\"{f.name}\\"" ws ":" ws {value_rule}')
 
     root = 'root ::= ws "{" ws ' + ' ws "," ws '.join(members) + ' ws "}" ws'
-    rules = (
+    rules = [
         root,
-        r'strlist ::= "[" ws (string (ws "," ws string)*)? ws "]"',
         r'string  ::= "\"" schar* "\""',
         r'schar   ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)',
         r"hex     ::= [0-9a-fA-F]",
         r"ws      ::= [ \t\n]*",
-    )
+    ]
+    # Only when a list field is actually in play: an unreferenced rule
+    # is dead weight in a grammar llama.cpp parses on every call.
+    if any(f.kind == "list" for f in fields):
+        rules.insert(1, r'strlist ::= "[" ws (string (ws "," ws string)*)? ws "]"')
     grammar = "\n".join(rules) + "\n"
 
     # Validated here rather than trusted: this grammar is generated
@@ -196,10 +226,11 @@ def build_spec_grammar() -> str:
     return grammar
 
 
-def prompt_fields() -> str:
+def prompt_fields(names: tuple[str, ...] | None = None) -> str:
     """The field list as shown to the model, from the same tuple."""
+    fields = _FIELDS if names is None else tuple(_BY_NAME[n] for n in names)
     lines = []
-    for f in _FIELDS:
+    for f in fields:
         shape = "liste de chaînes" if f.kind == "list" else "chaîne"
         state = "obligatoire" if f.required else "facultatif"
         lines.append(f'- "{f.name}" ({shape}, {state}) : {f.label}')
@@ -240,6 +271,61 @@ def parse(raw: str) -> Spec:
         if name in data and data[name] is not None:
             spec.set(name, data[name])
     return spec
+
+
+_FRAGMENT_RE = re.compile(r"[a-z0-9]{3,}")
+
+
+def ground(drafted: Spec, request: str) -> Spec:
+    """
+    Strip from *drafted* everything the request does not support.
+
+    Written after the first real run, where two jobs out of three
+    skipped the interview entirely because the model had filled every
+    required field with plausible inventions -- a workspace nobody
+    named and acceptance criteria nobody agreed to. The prompt says
+    not to. It obeyed on vague requests ("corriger le cache KV") and
+    ignored the instruction on specific ones ("migrer les tests vers
+    pytest-asyncio"): the more the request gives it to work with, the
+    more it extrapolates. Instructing a 9B not to do something is not
+    a control, which is the same conclusion this repo has now reached
+    seven times.
+
+    The rule is that a draft may RESTATE but never CONCLUDE:
+
+    - objective and workspace restate something in the request, so
+      they survive if the request actually contains them. A workspace
+      is kept only when one of its path fragments appears in the
+      request, which lets "dans le dossier tools" become
+      "src/forge/tools" while dropping a path invented whole.
+    - acceptance, constraints and context are judgements about what
+      "done" means. They are dropped unconditionally and asked. That
+      is a question the user has to own anyway: acceptance criteria
+      are the only thing making the spec checkable, and criteria the
+      user never saw are worse than none.
+
+    The cost is the case the draft was built for -- a complete request
+    in one sentence, answered with no questions. In the first eight
+    real jobs that case never occurred, and the only times the model
+    filled everything it was inventing.
+    """
+    fragments = set(_FRAGMENT_RE.findall(request.lower()))
+    grounded = Spec()
+
+    for f in _FIELDS:
+        if f.source == "ask":
+            continue
+        value = drafted.value(f.name)
+        if not value:
+            continue
+        if f.name == "workspace" and not (
+            fragments & set(_FRAGMENT_RE.findall(str(value).lower()))
+        ):
+            log.info("delegate: dropping ungrounded workspace %r", value)
+            continue
+        grounded.set(f.name, value)
+
+    return grounded
 
 
 def missing(spec: Spec) -> list[str]:

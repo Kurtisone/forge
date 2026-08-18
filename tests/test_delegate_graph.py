@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 import forge.graphs.delegate as delegate_mod
-from forge import delegation, jobs
+from forge import jobs
 from forge.errors import ProviderError
 from forge.executors import HandoffExecutor, JobCancelled
 
@@ -34,10 +34,10 @@ def _draft(monkeypatch, **fields):
     )
 
 
-def test_a_complete_request_goes_straight_to_approval(monkeypatch):
+def test_a_grounded_workspace_survives_the_draft(monkeypatch):
     """
-    Someone who wrote everything in one sentence must not then be
-    interviewed about it.
+    A workspace named in the request is a restatement, so the draft
+    keeps it and no question is asked about it.
     """
     _draft(
         monkeypatch,
@@ -45,11 +45,49 @@ def test_a_complete_request_goes_straight_to_approval(monkeypatch):
         workspace="src/forge",
         acceptance=["les tests passent"],
     )
-    output = delegate_mod.run("corrige le cache KV dans src/forge, tests verts")
+    delegate_mod.run("corrige le cache KV dans src/forge")
 
     job = jobs.all_jobs()[0]
-    assert job.pending_field == delegation.CONFIRM
-    assert "Objectif" in output
+    assert job.spec["workspace"] == "src/forge"
+    assert job.pending_field == "acceptance"
+
+
+def test_acceptance_is_always_asked_however_complete_the_draft(monkeypatch):
+    """
+    The failure this whole lot exists for: on the first real run, two
+    jobs out of three skipped the interview entirely because the model
+    had invented every required field. Acceptance criteria are the
+    only thing making a spec checkable, and criteria the user never
+    saw are worse than none.
+    """
+    _draft(
+        monkeypatch,
+        objective="migrer les tests",
+        workspace="tests",
+        acceptance=["tous les tests passent en asyncio"],
+        constraints=["ne pas toucher aux fixtures"],
+        context="projet Python",
+    )
+    delegate_mod.run("migre les tests vers pytest-asyncio")
+
+    job = jobs.all_jobs()[0]
+    assert job.pending_field == "acceptance"
+    assert job.spec["acceptance"] == []
+    assert job.spec["constraints"] == []
+
+
+def test_an_ungrounded_workspace_is_dropped(monkeypatch):
+    """
+    The model extrapolates more, not less, as the request gets
+    specific -- an invented path reads as a complete spec and points
+    an implementer at the wrong directory.
+    """
+    _draft(monkeypatch, objective="migrer les tests", workspace="src/legacy/api")
+    delegate_mod.run("migre les tests vers pytest-asyncio")
+
+    job = jobs.all_jobs()[0]
+    assert job.spec["workspace"] == ""
+    assert job.pending_field == "workspace"
 
 
 def test_an_incomplete_request_starts_the_interview(monkeypatch):

@@ -276,6 +276,21 @@ JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "1800"))
 # rest of the delegation machinery does not change when one appears.
 DELEGATE_EXECUTOR = os.getenv("DELEGATE_EXECUTOR", "handoff")
 
+# How long the "echo" executor pretends to work, in seconds. Exists so
+# that cancelling a RUNNING job and restarting mid-run can be exercised
+# for real: handoff finishes in milliseconds, so both paths had unit
+# tests and no way to reproduce them against a live Forge.
+DELEGATE_ECHO_SECONDS = float(os.getenv("DELEGATE_ECHO_SECONDS", "0"))
+
+# How long the "echo" executor pretends to work, in seconds. Zero by
+# default. It exists because cancelling a RUNNING job and restarting
+# mid-run are the two behaviours that cannot be exercised by hand
+# otherwise: handoff writes a file and returns in milliseconds, so
+# there is never a window to cancel inside. Unit tests cover both, and
+# a behaviour only ever verified by its own test is one nobody has
+# actually seen work.
+DELEGATE_ECHO_SECONDS = float(os.getenv("DELEGATE_ECHO_SECONDS", "0"))
+
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG = _bool("SHOW_DEBUG")
 

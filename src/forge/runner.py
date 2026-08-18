@@ -21,7 +21,7 @@ import threading
 import time
 
 from forge import jobs
-from forge.config import DELEGATE_EXECUTOR, JOB_TIMEOUT
+from forge.config import DELEGATE_ECHO_SECONDS, DELEGATE_EXECUTOR, JOB_TIMEOUT
 from forge.executors import (
     EchoExecutor,
     Executor,
@@ -33,7 +33,10 @@ from forge.logger import log
 
 _STOP = object()
 
-_EXECUTORS = {"handoff": HandoffExecutor, "echo": EchoExecutor}
+_EXECUTORS = {
+    "handoff": HandoffExecutor,
+    "echo": lambda: EchoExecutor(duration=DELEGATE_ECHO_SECONDS),
+}
 
 
 def _configured_executor() -> Executor:

@@ -601,6 +601,21 @@ GET /traces?n=5
 Each record contains: `run_id`, `timestamp`, `user_input_preview`, per-step tool + duration,
 `total_ms`, `ok`, `error`.
 
+### Delegation Jobs
+
+`GET /jobs` lists every delegation job and its state. Like every other
+endpoint it requires the bearer token, so typing the URL into a browser
+returns 401 -- the address bar cannot send a header. Use curl:
+
+```bash
+curl -s -H "Authorization: Bearer $FORGE_TOKEN" localhost:8000/jobs
+```
+
+This is a debugging view, not the interface. A job is meant to be read and
+answered in the conversation itself; if you find yourself reaching for this
+endpoint to find out what a job is waiting on, that is the thread failing to
+say so, and the fix belongs there.
+
 ---
 
 ### Continuous Integration

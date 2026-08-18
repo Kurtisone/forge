@@ -164,3 +164,63 @@ def test_set_normalises_a_list_field_from_free_text():
     s = spec.Spec()
     s.set("acceptance", "  un  \n\n deux \n")
     assert s.acceptance == ["un", "deux"]
+
+
+def test_the_draft_grammar_cannot_emit_the_judgement_fields():
+    """
+    The fix for the first real run's worst failure. The model did not
+    merely ignore "leave unknown fields empty" -- it ignored it
+    exactly when the request was specific enough to extrapolate from.
+    Removing the keys from the grammar means there is nothing to
+    ignore.
+    """
+    grammar = spec.build_spec_grammar(spec.DRAFTABLE)
+    assert "objective" in grammar
+    assert "acceptance" not in grammar
+    assert "constraints" not in grammar
+    gbnf.validate(grammar)
+
+
+def test_draftable_comes_from_the_field_table():
+    """One source of truth, like everything else in this module."""
+    assert spec.DRAFTABLE == tuple(
+        f.name for f in spec._FIELDS if f.source == "restate"
+    )
+
+
+def test_a_partial_grammar_drops_the_list_rule_it_no_longer_needs():
+    assert "strlist" not in spec.build_spec_grammar(("objective",))
+    assert "strlist" in spec.build_spec_grammar()
+
+
+def test_ground_keeps_a_workspace_the_request_supports():
+    """
+    "dans le dossier tools" is allowed to become "src/forge/tools":
+    the draft restates, it does not conclude.
+    """
+    grounded = spec.ground(
+        spec.Spec(objective="a", workspace="src/forge/tools"),
+        "nettoyer les imports morts dans le dossier tools",
+    )
+    assert grounded.workspace == "src/forge/tools"
+
+
+def test_ground_drops_a_workspace_nothing_in_the_request_backs():
+    """
+    The one-sided cost that decides the rule: clearing a path the user
+    did mean costs one question, keeping one they did not sends an
+    implementer to the wrong directory.
+    """
+    grounded = spec.ground(
+        spec.Spec(objective="a", workspace="src/forge"), "corriger le cache KV"
+    )
+    assert grounded.workspace == ""
+
+
+def test_ground_discards_judgement_fields_whatever_the_draft_said():
+    grounded = spec.ground(
+        spec.Spec(objective="a", acceptance=["les tests passent"], context="inventé"),
+        "corriger le cache KV",
+    )
+    assert grounded.acceptance == []
+    assert grounded.context == ""
