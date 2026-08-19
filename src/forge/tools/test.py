@@ -121,6 +121,11 @@ def _escaping_arg(arg: str, workspace: Path) -> bool:
     return False
 
 
+def _looks_like_a_path(token: str) -> bool:
+    """Is this first token a file to act ON, rather than the runner?"""
+    return "/" in token or bool(Path(token).suffix)
+
+
 def run(content: str) -> str:
     command = content.strip()
     if not command:
@@ -134,6 +139,28 @@ def run(content: str) -> str:
     runner = parts[0]
     if runner not in TEST_ALLOWED_COMMANDS:
         allowed = ", ".join(sorted(TEST_ALLOWED_COMMANDS))
+        # A path in first position is a different mistake from a
+        # forbidden binary, and telling someone to add
+        # "tests/test_x.py" to TEST_ALLOWED_COMMANDS is advice that
+        # cannot work. Observed live 2026-08-19: "Lance les tests dans
+        # tests/test_inexistant_xyz.py" routed to
+        # {"tool":"test","content":"tests/test_inexistant_xyz.py"} and
+        # got exactly that answer.
+        #
+        # Named, never repaired. Prepending a default runner would
+        # mean guessing between pytest and ruff -- the runner IS the
+        # difference between the two intents this tool serves, and it
+        # is not recoverable from the payload. The router now has a
+        # description and two examples for this tool (it had neither);
+        # this message is what happens when they lose.
+        if _looks_like_a_path(runner):
+            return (
+                f"[error] {runner!r} is a path, not a test runner.\n"
+                f"content must start with the runner: e.g. "
+                f'"pytest {runner}" to test it, "ruff check {runner}" '
+                "to lint it.\n"
+                f"Allowed runners: {allowed}"
+            )
         return (
             f"[error] test runner {runner!r} is not in the allowlist.\n"
             f"Allowed: {allowed}\n"
