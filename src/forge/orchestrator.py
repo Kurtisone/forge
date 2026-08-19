@@ -24,6 +24,8 @@ Rules enforced here, by construction:
 
 import json
 import re
+import shlex
+from pathlib import Path
 
 from forge import delegation, memory, metrics, subtrace, trace, turn
 from forge.config import (
@@ -175,8 +177,32 @@ def _decision_paths(decision) -> tuple[tuple[str, str], ...]:
     Keyed by tool payload rather than by tool name: which of these
     tools may reach the guard is the guard's decision to make, not
     this function's.
+
+    `test` is a special case: its content isn't JSON, it's a runner
+    command string ("pytest tests/test_x.py"), so JSON_PAYLOAD_TOOLS
+    never covered it and this function returned () unconditionally --
+    the one tool _is_mutating() already knows deserves this guard
+    (running pytest executes workspace code) was structurally
+    invisible to it. Its arguments are split the same way
+    tools/test.py itself will split them, and any non-flag argument
+    shaped like a path is checked exactly as a JSON payload's path
+    key would be. Observed live 2026-08-19: "pytest
+    tests/test_inexistant_xyz.py", an invented path, reached
+    subprocess.run() with zero grounding check -- saved only by
+    pytest being absent from PATH in that environment.
     """
     tool = getattr(decision, "tool", None)
+    if tool == "test":
+        try:
+            parts = shlex.split(getattr(decision, "content", "") or "")
+        except ValueError:
+            return ()
+        path_args = [
+            part
+            for part in parts[1:]  # parts[0] is the runner, not a path
+            if not part.startswith("-") and ("/" in part or Path(part).suffix)
+        ]
+        return tuple((f"arg{i}", part) for i, part in enumerate(path_args, start=1))
     if tool not in JSON_PAYLOAD_TOOLS:
         return ()
     try:

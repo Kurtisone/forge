@@ -70,6 +70,18 @@ def _state(user_input="", history=None, last_read_path=None):
         # A path-shaped key with a non-path value is not a path.
         ("review", '{"file_path":"a.py","test_path":""}', (("file_path", "a.py"),)),
         ("review", '{"file_path":"a.py","test_path":42}', (("file_path", "a.py"),)),
+        # `test`'s content is a runner command string, not JSON -- it
+        # was invisible to this function entirely before this branch.
+        ("test", "pytest tests/test_x.py", (("arg1", "tests/test_x.py"),)),
+        ("test", "ruff check src/forge/graph.py", (("arg1", "src/forge/graph.py"),)),
+        # The runner itself (parts[0]) is never treated as a path.
+        ("test", "pytest", ()),
+        # Flags are not paths, even when they look path-shaped.
+        ("test", "pytest tests/ -k test_shell", (("arg1", "tests/"),)),
+        # A bare word with no "/" and no suffix isn't shaped like a
+        # path -- same rule tools/test.py itself uses.
+        ("test", "ruff check", ()),
+        ("test", 'not "valid shlex', ()),
     ],
 )
 def test_decision_paths_collects_every_path_in_the_payload(tool, content, expected):
@@ -210,6 +222,56 @@ def test_invented_review_path_is_refused(monkeypatch, tmp_path):
 
     assert result.tool == "chat"
     assert "which file" in result.output.lower()
+
+
+def test_invented_test_path_is_refused(monkeypatch, tmp_path):
+    """
+    The hole this branch closes: `test`'s content is a runner command
+    string, not JSON, so JSON_PAYLOAD_TOOLS never covered it and an
+    invented path reached subprocess.run() with zero grounding check.
+    Observed live 2026-08-19: "pytest tests/test_inexistant_xyz.py"
+    dispatched straight through, saved only by pytest being absent
+    from PATH in that environment -- an accident, not a guarantee.
+    `test` is already in _MUTATING_TOOLS, so the fix is entirely in
+    _decision_paths() seeing this tool at all.
+    """
+    from forge.tools.registry import TOOLS
+
+    # Registered only so the router doesn't fall back to chat before
+    # the guard is reached. It is never called: the point of guarding
+    # before dispatch is that the tool does not run.
+    monkeypatch.setitem(TOOLS, "test", lambda content: pytest.fail("dispatched"))
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {"tool": "test", "content": "pytest tests/test_inexistant_xyz.py"}
+        ),
+    )
+
+    result = Orchestrator(max_steps=1).run("lance les tests")
+
+    assert result.tool == "chat"
+    assert "which" in result.output.lower()
+
+
+def test_grounded_test_path_still_runs(monkeypatch):
+    """A test path the user actually named must not be blocked."""
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setitem(TOOLS, "test", lambda content: "ok")
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {"tool": "test", "content": "pytest tests/test_router.py"}
+        ),
+    )
+
+    result = Orchestrator(max_steps=1).run("lance les tests dans tests/test_router.py")
+
+    assert result.tool == "test"
+    assert result.output == "ok"
 
 
 def test_invented_read_path_still_runs(monkeypatch, tmp_path):
