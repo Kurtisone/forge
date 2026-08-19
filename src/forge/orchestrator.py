@@ -137,6 +137,37 @@ def _is_path_key(key: str) -> bool:
     return key == "path" or key.endswith("_path")
 
 
+# A path key holding a paragraph is not an ungrounded path, it is not
+# a path at all -- and grounding alone will never catch it, because
+# the text came from the user's own message and is therefore grounded
+# BY CONSTRUCTION.
+#
+# Observed live 2026-08-19: "Voici un texte, dis-moi ce que tu en
+# penses : Lorem ipsum dolor sit amet, consectetur ..." routed to
+# review with the pasted paragraph as file_path. Every substring of a
+# user message is grounded, so the guard waved it through and the run
+# spent 36 seconds reaching "File not found:
+# /app/data/workspace/Lorem ipsum dolor sit amet, ...".
+#
+# Conservative on purpose: this must never reject a real path. A path
+# CAN legally contain a space, so a space alone proves nothing -- what
+# is checked is prose punctuation (", ", "; ", ". "), a line or tab
+# break, more words than any filename carries, and a length no
+# workspace path reaches. "mon fichier de notes.md" still passes; a
+# sentence does not.
+_PROSE_PUNCTUATION = re.compile(r"[\n\t]|, |; |\. ")
+_MAX_PATH_CHARS = 255
+_MAX_PATH_WORDS = 4
+
+
+def _looks_like_a_path(value: str) -> bool:
+    return (
+        len(value) <= _MAX_PATH_CHARS
+        and not _PROSE_PUNCTUATION.search(value)
+        and len(value.split()) <= _MAX_PATH_WORDS
+    )
+
+
 def _decision_paths(decision) -> tuple[tuple[str, str], ...]:
     """
     Every (key, path) pair a decision names, in payload order.
@@ -403,23 +434,31 @@ class Orchestrator:
             # first one found: a call whose file_path is grounded and
             # whose test_path was invented is still a call acting on
             # something nobody asked for.
-            ungrounded = next(
-                (
-                    (key, path)
-                    for key, path in _decision_paths(decision)
-                    if not _path_is_grounded(path, state)
-                ),
-                None,
-            )
-            if ungrounded and (
+            problem = None
+            for key, path in _decision_paths(decision):
+                # Shape before provenance: text pasted by the user is
+                # grounded by construction, so asking "where did this
+                # come from" can never catch a paragraph sitting in
+                # file_path.
+                if not _looks_like_a_path(path):
+                    problem = ("shape", key, path)
+                    break
+                if not _path_is_grounded(path, state):
+                    problem = ("grounding", key, path)
+                    break
+            if problem and (
                 decision.tool == "review"
                 or _is_mutating(decision.tool, decision.content)
             ):
-                key, path = ungrounded
+                kind, key, path = problem
                 note = (
-                    f"path grounding guard: tool={decision.tool!r} named "
-                    f"{path!r} in {key!r}, which appears nowhere in this "
-                    "conversation"
+                    f"path {kind} guard: tool={decision.tool!r} put "
+                    f"{path[:60]!r} in {key!r}, which "
+                    + (
+                        "is text, not a path"
+                        if kind == "shape"
+                        else "appears nowhere in this conversation"
+                    )
                 )
                 log.warning(note)
                 ts.abandon(note)
@@ -430,7 +469,12 @@ class Orchestrator:
                 # tests do you want run" -- and the second question is
                 # the one this refusal usually needs to ask.
                 state.final_output = (
-                    f'I don\'t have a real path for "{key}" in this '
+                    f'What the router put in "{key}" is text, not a file '
+                    "path. I work on files in the workspace, not on text "
+                    "pasted into the message -- save it to a file first, "
+                    "or tell me which file you mean."
+                    if kind == "shape"
+                    else f'I don\'t have a real path for "{key}" in this '
                     "conversation, and I won't guess one. Which file do "
                     "you mean?"
                 )

@@ -29,6 +29,7 @@ from forge.orchestrator import (
     Orchestrator,
     _decision_paths,
     _is_path_key,
+    _looks_like_a_path,
     _path_is_grounded,
 )
 from forge.tool_payload import JSON_PAYLOAD_TOOLS
@@ -305,3 +306,65 @@ def test_two_grounded_paths_still_run(monkeypatch):
 
     assert result.tool == "review"
     assert result.output == "[review] ok"
+
+
+@pytest.mark.parametrize(
+    "value,is_path",
+    [
+        ("src/forge/graph.py", True),
+        ("tests/test_graph.py", True),
+        ("./a.py", True),
+        ("/app/data/workspace/x.md", True),
+        # A path may legally contain a space. A space alone proves
+        # nothing, so it must not be what this rejects.
+        ("mon fichier de notes.md", True),
+        # The one observed live: pasted prose sitting in file_path.
+        (
+            (
+                "Lorem ipsum dolor sit amet, consectetur adipiscing elit, "
+                "sed do eiusmod tempor incididunt..."
+            ),
+            False,
+        ),
+        ("Voici un texte, dis-moi ce que tu en penses", False),
+        ("ligne un\nligne deux", False),
+        ("a" * 256, False),
+    ],
+)
+def test_prose_is_not_a_path(value, is_path):
+    assert _looks_like_a_path(value) is is_path
+
+
+def test_pasted_text_in_file_path_is_refused_even_though_it_is_grounded(monkeypatch):
+    """
+    Why shape is checked BEFORE provenance.
+
+    Text the user pasted is grounded by construction -- it is a
+    substring of their own message -- so the grounding guard can never
+    catch it. Observed live 2026-08-19: the run spent 36 seconds
+    reaching "File not found: /app/data/workspace/Lorem ipsum dolor
+    sit amet, ...".
+    """
+    from forge.tools.registry import TOOLS
+
+    pasted = (
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit, "
+        "sed do eiusmod tempor incididunt"
+    )
+    monkeypatch.setitem(TOOLS, "review", lambda content: pytest.fail("dispatched"))
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {"tool": "review", "content": json.dumps({"file_path": pasted})}
+        ),
+    )
+
+    result = Orchestrator(max_steps=1).run(
+        f"Voici un texte, dis-moi ce que tu en penses : {pasted}"
+    )
+
+    assert result.tool == "chat"
+    # It is grounded -- that is the whole point of this test.
+    assert _path_is_grounded(pasted, _state(user_input=f"Voici : {pasted}"))
+    assert "not a file path" in result.output
