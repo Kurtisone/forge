@@ -18,33 +18,102 @@ from forge import compaction, tokens
 from forge.config import MEMORY_FILE, MEMORY_HARD_CAP_SLACK, MEMORY_MAX_HISTORY
 from forge.logger import log
 
-_DEFAULT = {"history": [], "facts": [], "next_id": 1}
-
 
 def _path() -> Path:
     return Path(MEMORY_FILE)
 
 
+def _fresh() -> dict:
+    """
+    An empty memory. Built each call, never a shared module constant
+    copied around: the value holds two lists that callers go on to
+    append to, and a shallow copy of a constant would have every
+    "fresh" memory in the process sharing the same history.
+    """
+    return {"history": [], "facts": [], "next_id": 1}
+
+
 def load_memory() -> dict:
     path = _path()
     if not path.exists():
-        return {"history": [], "facts": [], "next_id": 1}
+        return _fresh()
 
     raw = path.read_text(encoding="utf-8")
     if not raw.strip():
         # Empty file (e.g. freshly created by a volume mount) is not
         # corrupted, just empty -- nothing to warn about.
-        return {"history": [], "facts": [], "next_id": 1}
+        return _fresh()
 
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, OSError) as e:
         log.warning("memory file unreadable (%s), starting fresh: %s", path, e)
-        return {"history": [], "facts": [], "next_id": 1}
+        return _fresh()
 
-    data.setdefault("history", [])
-    data.setdefault("facts", [])
-    data.setdefault("next_id", 1)
+    # Valid JSON of the WRONG TYPE used to walk straight past the
+    # except clause above and die on .setdefault() -- an AttributeError
+    # from a module whose entire contract is "memory is best effort,
+    # never crash a turn", surfacing as a 500 on GET /drawer with the
+    # UI simply not loading.
+    #
+    # `[]` is not a hypothetical: the documented way to start a fresh
+    # conversation is to echo a JSON literal into this file by hand
+    # (there is no reset endpoint), and one bracket typed instead of a
+    # brace produces exactly this. The recovery is the same as for
+    # unparseable JSON -- say so and start fresh -- because a file
+    # that isn't an object holds nothing this module knows how to
+    # read.
+    if not isinstance(data, dict):
+        log.warning(
+            "memory file %s holds a %s, not an object -- starting fresh",
+            path,
+            type(data).__name__,
+        )
+        return _fresh()
+
+    # Same failure one level down, and just as reachable by hand: a
+    # history that isn't a list breaks _migrate_history's loop, and a
+    # non-dict entry inside it breaks the assignment in that loop.
+    # Repaired rather than discarded -- dropping four bad entries is
+    # not a reason to throw away four hundred good ones.
+    for key, kind in (("history", list), ("facts", list)):
+        value = data.setdefault(key, kind())
+        if not isinstance(value, kind):
+            log.warning(
+                "memory file %s: %r is a %s, not a %s -- resetting that field",
+                path,
+                key,
+                type(value).__name__,
+                kind.__name__,
+            )
+            data[key] = kind()
+
+    kept = [entry for entry in data["history"] if isinstance(entry, dict)]
+    if len(kept) != len(data["history"]):
+        log.warning(
+            "memory file %s: dropped %d history entries that were not objects",
+            path,
+            len(data["history"]) - len(kept),
+        )
+        data["history"] = kept
+
+    # bool is an int in Python, and `"next_id": true` would go on to
+    # hand every entry the id 1.
+    next_id = data.setdefault("next_id", 1)
+    if not isinstance(next_id, int) or isinstance(next_id, bool) or next_id < 1:
+        log.warning(
+            "memory file %s: 'next_id' is %r -- recomputing from the history",
+            path,
+            next_id,
+        )
+        data["next_id"] = 1
+
+    # An id already in use would be handed out again by _new_entry,
+    # and ids are what pinning and deletion address messages by.
+    used = [e["id"] for e in data["history"] if isinstance(e.get("id"), int)]
+    if used:
+        data["next_id"] = max(data["next_id"], max(used) + 1)
+
     if _migrate_history(data):
         save_memory(data)
     return data

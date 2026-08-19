@@ -97,6 +97,16 @@ TOOL_DESCRIPTIONS = {
         'dit sur", "rappelle-moi"). Prefer this over "memory" for '
         "anything that isn't storing a new decision/todo/fact."
     ),
+    "test": (
+        "content is the FULL command line, starting with the runner: "
+        '"pytest tests/test_graph.py", "pytest tests/ -k router", '
+        '"ruff check src/forge/graph.py". A bare path is NOT valid '
+        'content -- "tests/test_graph.py" on its own is rejected, '
+        "because the runner is the only thing that says whether to test "
+        "or to lint. Only runners in the allowlist (pytest and ruff by "
+        "default) are accepted, and every path must stay inside the "
+        "workspace."
+    ),
     "review": (
         "content is a JSON object describing a file review: "
         '{"file_path":"...","question":"...","test_path":"..."}. '
@@ -320,6 +330,28 @@ _TOOL_EXAMPLES = {
                 '"src/forge/graph.py","test_path":'
                 '"tests/test_graph.py"}}'
             ),
+        ),
+    ],
+    "test": [
+        # The failure this teaches against, observed live 2026-08-19:
+        # "Lance les tests dans tests/test_inexistant_xyz.py" produced
+        # {"tool":"test","content":"tests/test_inexistant_xyz.py"} --
+        # the path with no runner in front of it. The tool then
+        # reported that "tests/test_inexistant_xyz.py" was not an
+        # allowed RUNNER, which is true and unhelpable. The router had
+        # nothing to go on: "test" had no description and no example
+        # here, so it fell through to the generic "content is the input
+        # this tool expects."
+        (
+            "Lance les tests dans tests/test_graph.py",
+            '{"tool":"test","content":"pytest tests/test_graph.py"}',
+        ),
+        # Second example on purpose: the runner is not decoration, it
+        # carries the difference between the two intents this one tool
+        # serves.
+        (
+            "Lint src/forge/graph.py",
+            '{"tool":"test","content":"ruff check src/forge/graph.py"}',
         ),
     ],
     "web_fetch": [

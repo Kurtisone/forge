@@ -203,3 +203,62 @@ def test_enabling_files_and_test_together_warns_at_import(caplog):
     finally:
         cfg.ENABLED_TOOLS = original
         importlib.reload(test_mod)
+
+
+# ── the runner is not optional, and saying so usefully ───────────────
+#
+# Observed live 2026-08-19: "Lance les tests dans
+# tests/test_inexistant_xyz.py" routed to
+# {"tool":"test","content":"tests/test_inexistant_xyz.py"} -- the path
+# with no runner in front of it. The tool answered that
+# "tests/test_inexistant_xyz.py" was not an allowed RUNNER and
+# suggested adding it to TEST_ALLOWED_COMMANDS, which is advice that
+# cannot work. The router had nothing to go on: "test" had no
+# description and no example in router/prompt.py and fell through to
+# the generic "content is the input this tool expects."
+
+
+def test_a_bare_path_is_named_as_the_mistake_it_is(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "TEST_ALLOWED_COMMANDS", {"pytest", "ruff"})
+    monkeypatch.setattr(test_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(test_mod, "TEST_ALLOWED_COMMANDS", {"pytest", "ruff"})
+
+    r = test_mod.run("tests/test_inexistant_xyz.py")
+
+    assert "is a path, not a test runner" in r
+    # Both intents, because the runner is what distinguishes them --
+    # which is also why this is never repaired by guessing one.
+    assert "pytest tests/test_inexistant_xyz.py" in r
+    assert "ruff check tests/test_inexistant_xyz.py" in r
+    # The advice that cannot work must not be the one given.
+    assert "TEST_ALLOWED_COMMANDS" not in r
+
+
+def test_a_forbidden_binary_still_gets_the_allowlist_message(tmp_path, monkeypatch):
+    """The other mistake, whose fix really is editing the allowlist."""
+    monkeypatch.setattr(cfg, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(cfg, "TEST_ALLOWED_COMMANDS", {"pytest"})
+    monkeypatch.setattr(test_mod, "WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr(test_mod, "TEST_ALLOWED_COMMANDS", {"pytest"})
+
+    r = test_mod.run("mypy src")
+
+    assert "not in the allowlist" in r
+    assert "TEST_ALLOWED_COMMANDS" in r
+
+
+def test_the_router_prompt_teaches_the_runner_first_shape():
+    """
+    The half of this fix that is upstream of the tool: "test" used to
+    have no description and no example at all.
+    """
+    from forge.router.prompt import build_router_prompt
+
+    prompt = build_router_prompt(
+        "lance les tests", history=[], available_tools=["test"]
+    )
+
+    assert "content is the input this tool expects" not in prompt
+    assert '"pytest tests/test_graph.py"' in prompt
+    assert '"ruff check src/forge/graph.py"' in prompt

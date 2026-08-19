@@ -24,6 +24,8 @@ Rules enforced here, by construction:
 
 import json
 import re
+import shlex
+from pathlib import Path
 
 from forge import delegation, memory, metrics, subtrace, trace, turn
 from forge.config import (
@@ -36,7 +38,7 @@ from forge.llm import call_llm
 from forge.logger import log
 from forge.router import build_router_prompt, parse_router_output
 from forge.router.prompt import estimate_history_tokens
-from forge.tool_payload import loads_payload
+from forge.tool_payload import JSON_PAYLOAD_TOOLS, loads_payload
 from forge.tools.registry import get_tool, load_tools
 from forge.types import AgentResult, AgentState, ToolResult
 
@@ -110,26 +112,110 @@ if ALLOW_MUTATION_AFTER_EXTERNAL_DATA:
     )
 
 
-# Tools whose payload names a file to act on. `files` spells the key
-# "path", `review` spells it "file_path"; both are checked.
-_PATH_DECISION_KEYS = ("path", "file_path")
+# A payload can name MORE THAN ONE file, and the guard below has to
+# see all of them.
+#
+# This started life as a two-entry tuple, ("path", "file_path"),
+# returning the first key that matched -- which was every key that
+# existed on the day it was written. `review` had already grown a
+# third one: "test_path", whose value is handed to pytest by
+# graphs/review.py. So a review decision naming a grounded file_path
+# and an invented test_path passed the guard and reached
+# `pytest <invented path>`, which is how the E-1 hazard (pytest
+# executes workspace code, and auto-loads conftest.py before
+# collecting anything) gets reached from a string the model made up.
+# Nothing stopped that in production; the only reason it never fired
+# was that the runs which invented a test_path also invented the
+# file_path, and the first key checked happened to be the one that
+# blocked.
+#
+# So the rule is now on the SHAPE of the key rather than a list of
+# known spellings: "path", or anything ending in "_path". A payload
+# key added later is covered the day it is added rather than the day
+# someone remembers this file exists -- and
+# test_every_path_key_in_the_router_prompt_is_guarded fails if a key
+# is ever taught to the router that this shape doesn't match.
+def _is_path_key(key: str) -> bool:
+    return key == "path" or key.endswith("_path")
 
 
-def _decision_path(decision) -> str | None:
-    """The file path a decision is about, if it names one."""
-    if getattr(decision, "tool", None) not in {"files", "review"}:
-        return None
+# A path key holding a paragraph is not an ungrounded path, it is not
+# a path at all -- and grounding alone will never catch it, because
+# the text came from the user's own message and is therefore grounded
+# BY CONSTRUCTION.
+#
+# Observed live 2026-08-19: "Voici un texte, dis-moi ce que tu en
+# penses : Lorem ipsum dolor sit amet, consectetur ..." routed to
+# review with the pasted paragraph as file_path. Every substring of a
+# user message is grounded, so the guard waved it through and the run
+# spent 36 seconds reaching "File not found:
+# /app/data/workspace/Lorem ipsum dolor sit amet, ...".
+#
+# Conservative on purpose: this must never reject a real path. A path
+# CAN legally contain a space, so a space alone proves nothing -- what
+# is checked is prose punctuation (", ", "; ", ". "), a line or tab
+# break, more words than any filename carries, and a length no
+# workspace path reaches. "mon fichier de notes.md" still passes; a
+# sentence does not.
+_PROSE_PUNCTUATION = re.compile(r"[\n\t]|, |; |\. ")
+_MAX_PATH_CHARS = 255
+_MAX_PATH_WORDS = 4
+
+
+def _looks_like_a_path(value: str) -> bool:
+    return (
+        len(value) <= _MAX_PATH_CHARS
+        and not _PROSE_PUNCTUATION.search(value)
+        and len(value.split()) <= _MAX_PATH_WORDS
+    )
+
+
+def _decision_paths(decision) -> tuple[tuple[str, str], ...]:
+    """
+    Every (key, path) pair a decision names, in payload order.
+
+    Keyed by tool payload rather than by tool name: which of these
+    tools may reach the guard is the guard's decision to make, not
+    this function's.
+
+    `test` is a special case: its content isn't JSON, it's a runner
+    command string ("pytest tests/test_x.py"), so JSON_PAYLOAD_TOOLS
+    never covered it and this function returned () unconditionally --
+    the one tool _is_mutating() already knows deserves this guard
+    (running pytest executes workspace code) was structurally
+    invisible to it. Its arguments are split the same way
+    tools/test.py itself will split them, and any non-flag argument
+    shaped like a path is checked exactly as a JSON payload's path
+    key would be. Observed live 2026-08-19: "pytest
+    tests/test_inexistant_xyz.py", an invented path, reached
+    subprocess.run() with zero grounding check -- saved only by
+    pytest being absent from PATH in that environment.
+    """
+    tool = getattr(decision, "tool", None)
+    if tool == "test":
+        try:
+            parts = shlex.split(getattr(decision, "content", "") or "")
+        except ValueError:
+            return ()
+        path_args = [
+            part
+            for part in parts[1:]  # parts[0] is the runner, not a path
+            if not part.startswith("-") and ("/" in part or Path(part).suffix)
+        ]
+        return tuple((f"arg{i}", part) for i, part in enumerate(path_args, start=1))
+    if tool not in JSON_PAYLOAD_TOOLS:
+        return ()
     try:
-        payload = loads_payload(getattr(decision, "content", "") or "", decision.tool)
+        payload = loads_payload(getattr(decision, "content", "") or "", tool)
     except (ValueError, TypeError):
-        return None
+        return ()
     if not isinstance(payload, dict):
-        return None
-    for key in _PATH_DECISION_KEYS:
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+        return ()
+    return tuple(
+        (str(key), value.strip())
+        for key, value in payload.items()
+        if _is_path_key(str(key)) and isinstance(value, str) and value.strip()
+    )
 
 
 def _path_is_grounded(path: str, state: AgentState) -> bool:
@@ -370,24 +456,51 @@ class Orchestrator:
             # everything -- observed live at 47 s to reach "file not
             # found". files:read and files:list stay exempt because
             # they are how a run legitimately finds out what exists.
-            decision_path = _decision_path(decision)
-            if (
-                decision_path
-                and (
-                    decision.tool == "review"
-                    or _is_mutating(decision.tool, decision.content)
-                )
-                and not _path_is_grounded(decision_path, state)
+            # EVERY path in the payload is checked, not just the
+            # first one found: a call whose file_path is grounded and
+            # whose test_path was invented is still a call acting on
+            # something nobody asked for.
+            problem = None
+            for key, path in _decision_paths(decision):
+                # Shape before provenance: text pasted by the user is
+                # grounded by construction, so asking "where did this
+                # come from" can never catch a paragraph sitting in
+                # file_path.
+                if not _looks_like_a_path(path):
+                    problem = ("shape", key, path)
+                    break
+                if not _path_is_grounded(path, state):
+                    problem = ("grounding", key, path)
+                    break
+            if problem and (
+                decision.tool == "review"
+                or _is_mutating(decision.tool, decision.content)
             ):
+                kind, key, path = problem
                 note = (
-                    f"path grounding guard: tool={decision.tool!r} named "
-                    f"{decision_path!r}, which appears nowhere in this "
-                    "conversation"
+                    f"path {kind} guard: tool={decision.tool!r} put "
+                    f"{path[:60]!r} in {key!r}, which "
+                    + (
+                        "is text, not a path"
+                        if kind == "shape"
+                        else "appears nowhere in this conversation"
+                    )
                 )
                 log.warning(note)
                 ts.abandon(note)
+                # Naming the field rather than saying "a path": with a
+                # bare message the router guesses, and it guesses by
+                # repeating itself. "test_path" is the whole difference
+                # between "which file do you want reviewed" and "which
+                # tests do you want run" -- and the second question is
+                # the one this refusal usually needs to ask.
                 state.final_output = (
-                    "I don't have a real file path for that in this "
+                    f'What the router put in "{key}" is text, not a file '
+                    "path. I work on files in the workspace, not on text "
+                    "pasted into the message -- save it to a file first, "
+                    "or tell me which file you mean."
+                    if kind == "shape"
+                    else f'I don\'t have a real path for "{key}" in this '
                     "conversation, and I won't guess one. Which file do "
                     "you mean?"
                 )
