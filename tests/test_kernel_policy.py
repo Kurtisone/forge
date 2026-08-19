@@ -476,3 +476,67 @@ def test_a_denied_capability_leaves_no_trace_in_the_prompt(monkeypatch):
     assert "pytest" not in withheld
     assert "ruff check" not in withheld
     assert len(withheld) < len(offered)
+
+
+def test_the_default_config_leaves_the_router_prompt_byte_identical():
+    """
+    The strongest guarantee this branch can offer, and the reason no
+    A/B bench is needed for the default deployment.
+
+    With all three flags on -- the shipped default -- allowed_names()
+    must return exactly what the tool registry would have returned, so
+    the bytes the model sees are the ones it saw before the capability
+    layer existed. Routing behaviour cannot change if the input does
+    not change.
+
+    That matters more here than the usual "no behaviour change" claim.
+    Four times on this codebase a prompt edit lost to a deterministic
+    check, twice with the failure only visible in a real run: the
+    escaped-string payload shape, and the GBNF rule name that killed
+    routing outright. A prompt diff of zero is checkable here, in
+    seconds, instead of being discovered on the Deck.
+
+    If this fails, the branch has started changing what the model sees
+    by default and needs an A/B run before it goes anywhere near main.
+    """
+    from forge.kernel.registry import allowed_names
+    from forge.router import build_router_prompt
+    from forge.tools import registry as tool_registry
+
+    def _noop(content: str) -> str:
+        return content
+
+    every_tool = {
+        name: _noop
+        for name in (
+            "chat",
+            "code",
+            "delegate",
+            "files",
+            "git",
+            "memory",
+            "recall",
+            "research",
+            "review",
+            "shell",
+            "sysadmin",
+            "test",
+            "web_fetch",
+            "web_search",
+        )
+    }
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(tool_registry, "TOOLS", every_tool)
+    try:
+        assert allowed_names() == tool_registry.available_tools()
+
+        # Built the old way (the raw enabled set) and the new way
+        # (whatever the policy permits) -- byte for byte the same.
+        old_way = build_router_prompt(
+            "x", available_tools=tool_registry.available_tools()
+        )
+        new_way = build_router_prompt("x")
+        assert new_way == old_way
+    finally:
+        mp.undo()
