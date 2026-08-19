@@ -24,6 +24,7 @@ Special commands (prefix with !):
   !clear                              wipe conversation history so the next turn starts fresh
   !compact                            force a compaction pass now (pinned messages excluded, v3.9)
   !trace                              show the last 5 execution traces
+  !capabilities                       what Forge can do right now, and what the policy blocks
   !remember <decision|todo|fact> <project|-> <content>
                                        store a decision/todo/fact in vector memory (v3.7)
   !recall <query>                     semantic search over remembered entries
@@ -137,6 +138,43 @@ def _read_input() -> str | None:
     return first_line
 
 
+def _handle_capabilities() -> None:
+    """
+    Show what is actually reachable right now, denials included.
+
+    Same information as `forge capabilities`, in the place someone
+    hits the question: a capability the policy is subtracting is not
+    mentioned in the router prompt, so from inside the conversation it
+    simply does not exist. Without this, the only symptom of a
+    restrictive policy is Forge quietly not doing something.
+    """
+    from forge.kernel import policy
+    from forge.kernel.registry import candidates, capability_names
+
+    names = capability_names()
+    if not names:
+        print("[no capabilities -- check ENABLED_TOOLS]\n")
+        return
+
+    allowed, denied = [], []
+    for name in names:
+        providers = candidates(name)
+        verdict = policy.check(providers[0]) if providers else policy.ALLOWED
+        if verdict:
+            allowed.append(name)
+        else:
+            # The verdict's reason is written to stand alone in a tool
+            # result; here the policy line below already says what is
+            # switched off, so only the requirement is worth repeating.
+            needs = verdict.reason.split("requires ")[-1].split(", which")[0]
+            denied.append(f"{name} (needs {needs})")
+
+    print(f"[available] {', '.join(allowed)}")
+    if denied:
+        print(f"[blocked]   {'; '.join(denied)}")
+    print(f"[policy]    {policy.active_summary()}\n")
+
+
 def _handle_remember(arg: str) -> None:
     parts = arg.split(maxsplit=2)
     if len(parts) < 3:
@@ -209,6 +247,8 @@ def _handle_command(raw: str) -> None:
             print("[nothing to compact]\n")
     elif cmd == "!trace":
         print(trace.format_for_display(trace.read_last(5)) + "\n")
+    elif cmd == "!capabilities":
+        _handle_capabilities()
     elif cmd == "!remember":
         _handle_remember(arg)
     elif cmd == "!recall":

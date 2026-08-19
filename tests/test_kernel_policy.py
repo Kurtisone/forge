@@ -413,3 +413,30 @@ def test_the_review_graph_runs_tests_when_test_is_not_a_capability(monkeypatch):
     review_graph._run_tests_node(state)
 
     assert spawned, "no registered `test` capability means no opinion, not a denial"
+
+
+def test_the_repl_command_names_what_is_blocked_and_why(capsys, monkeypatch):
+    """
+    A denied capability is not in the router prompt, so from inside the
+    conversation it simply does not exist. Without somewhere to ask,
+    the only symptom of a restrictive policy is Forge quietly not doing
+    something -- which is indistinguishable from it being bad at its
+    job.
+    """
+    from forge.main import _handle_capabilities
+    from forge.tools import registry as tool_registry
+
+    monkeypatch.setattr(
+        tool_registry,
+        "TOOLS",
+        {"chat": lambda c: c, "web_search": lambda c: c},
+    )
+    _deny(monkeypatch, network=False)
+
+    _handle_capabilities()
+    out = capsys.readouterr().out
+
+    assert "chat" in out
+    assert "web_search" in out
+    assert "network" in out
+    assert "denying network" in out
