@@ -156,16 +156,26 @@ mistaken for harmlessness.
 
 ```
 $ forge capabilities
-11 capabilities registered
+14 capabilities registered
 policy: denying network
 
    CAPABILITY  PROVIDER    REQUIRES
    chat        chat        local, read-only
+   code        code        local, read-only
+   delegate    delegate    llm
    files       files       writes
    git         git         subprocess
+   memory      memory      local, read-only
+   recall      recall      llm
  x research    research    network, llm
    review      review      llm
+ x shell       shell       network, llm, writes, subprocess
+   sysadmin    sysadmin    llm, subprocess
+   test        test        writes, subprocess
+ x web_fetch   web_fetch   network
  x web_search  web_search  network
+
+x 4 capabilities are blocked by the active policy and will refuse to run.
 ```
 
 The Policy Engine is a deny gate over those declarations, and it only ever

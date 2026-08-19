@@ -268,3 +268,79 @@ def test_the_shipped_defaults_are_permissive(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(config_mod)
+
+
+# --- The router is not offered what the policy will refuse ------------------
+
+
+def test_allowed_names_drops_denied_capabilities(monkeypatch):
+    from forge.kernel import registry as capabilities
+
+    _deny(monkeypatch, network=False)
+    names = capabilities.allowed_names()
+
+    assert "chat" in names
+    assert "web_search" not in names
+    assert "research" not in names
+
+
+def test_allowed_names_is_everything_when_unrestricted():
+    from forge.kernel import registry as capabilities
+    from forge.tools import registry as tool_registry
+
+    tool_registry.load_tools()
+    assert capabilities.allowed_names() == capabilities.capability_names()
+
+
+def test_the_router_prompt_never_offers_a_denied_capability(monkeypatch):
+    """
+    The point of the whole thing: a capability the policy refuses must
+    not appear in the router prompt at all.
+
+    Offering it costs a full routing call -- the dominant per-call cost
+    on this box -- to reach a refusal that was knowable before the call
+    was made, and it tells the model mid-conversation that a named tool
+    does not work, which is what destabilises a 9B router.
+    """
+    from forge.router import build_router_prompt
+    from forge.tools import registry as tool_registry
+
+    def _noop(content: str) -> str:
+        return content
+
+    monkeypatch.setattr(
+        tool_registry,
+        "TOOLS",
+        {"chat": _noop, "code": _noop, "web_search": _noop, "research": _noop},
+    )
+
+    offered = build_router_prompt("cherche des infos sur les lunettes AR")
+    assert "web_search" in offered
+
+    _deny(monkeypatch, network=False)
+    withheld = build_router_prompt("cherche des infos sur les lunettes AR")
+    assert "web_search" not in withheld
+    assert "research" not in withheld
+    assert "chat" in withheld
+
+
+def test_a_fully_denied_tool_set_still_leaves_a_usable_prompt(monkeypatch):
+    """
+    The filter must degrade, never empty out. build_router_prompt falls
+    back to a fixed pair when nothing is allowed, so a maximally
+    restrictive policy yields a router that can still answer rather
+    than one with no tools at all.
+    """
+    from forge.router import build_router_prompt
+    from forge.tools import registry as tool_registry
+
+    def _noop(content: str) -> str:
+        return content
+
+    monkeypatch.setattr(tool_registry, "TOOLS", {"shell": _noop})
+    _deny(monkeypatch, network=False, writes=False, subprocess=False)
+
+    prompt = build_router_prompt("fais quelque chose")
+    assert "shell" not in prompt
+    assert prompt.strip()
+    assert "chat" in prompt

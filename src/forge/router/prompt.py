@@ -937,9 +937,15 @@ def build_router_prompt(
     path it will invent.
     """
     if available_tools is None:
-        from forge.tools import registry
+        # Capability names permitted by the active policy, not the raw
+        # enabled tool set: a tool the policy will refuse must never be
+        # offered here. Otherwise every turn in a degraded context
+        # spends a full routing call to reach a refusal that was
+        # knowable beforehand, and the model is told a tool exists that
+        # then does not work.
+        from forge.kernel.registry import allowed_names
 
-        available_tools = registry.available_tools() or list(_FALLBACK_TOOLS)
+        available_tools = allowed_names() or list(_FALLBACK_TOOLS)
 
     template = _build_template(available_tools)
 

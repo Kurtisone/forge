@@ -150,3 +150,28 @@ def undeclared() -> list[Capability]:
         for cap in candidates(name)
         if not cap.declared
     ]
+
+
+def allowed_names() -> list[str]:
+    """
+    Capability names that are both registered AND permitted right now.
+
+    The router asks for this rather than for the raw enabled tool set.
+    Offering a capability the policy will refuse costs a full routing
+    call -- roughly 3900 prompt tokens and ~50s on the Deck -- to
+    produce a refusal that was knowable before the call was made. It
+    also teaches the model, mid-conversation, that a named tool does
+    not work, which is exactly the kind of contradiction that makes a
+    9B router unstable.
+
+    Imported lazily: forge.kernel.policy reads its flags from
+    forge.config at import time, and the router prompt is built on
+    paths that must not acquire a config import cycle.
+    """
+    from forge.kernel import policy
+
+    return [
+        name
+        for name in capability_names()
+        if any(policy.check(cap) for cap in candidates(name))
+    ]
