@@ -440,3 +440,39 @@ def test_the_repl_command_names_what_is_blocked_and_why(capsys, monkeypatch):
     assert "web_search" in out
     assert "network" in out
     assert "denying network" in out
+
+
+def test_a_denied_capability_leaves_no_trace_in_the_prompt(monkeypatch):
+    """
+    Withholding the NAME is not enough. Each tool also contributes a
+    description and few-shot examples to the router prompt, and those
+    are what actually cost tokens -- `test` alone carries a paragraph
+    on runners plus two worked examples.
+
+    Leaving them in would be worse than merely wasteful: it teaches
+    the model a call shape for a tool it is simultaneously not offered,
+    which is the contradiction this whole filter exists to remove.
+    """
+    import re
+
+    from forge.router import build_router_prompt
+    from forge.tools import registry as tool_registry
+
+    def _noop(content: str) -> str:
+        return content
+
+    monkeypatch.setattr(
+        tool_registry, "TOOLS", {"chat": _noop, "code": _noop, "test": _noop}
+    )
+
+    offered = build_router_prompt("lance les tests")
+    assert re.search(r'"test"', offered), "sanity: test must be offered here"
+    assert "pytest" in offered, "sanity: its examples ride along"
+
+    _deny(monkeypatch, subprocess=False)
+    withheld = build_router_prompt("lance les tests")
+
+    assert not re.search(r'"test"', withheld)
+    assert "pytest" not in withheld
+    assert "ruff check" not in withheld
+    assert len(withheld) < len(offered)
