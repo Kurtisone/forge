@@ -37,7 +37,11 @@ def test_dispatch_attaches_sub_steps_published_by_graph_based_tools(monkeypatch)
         )
         return "diagnosis text"
 
-    monkeypatch.setattr(orch_mod, "get_tool", lambda name: fake_tool)
+    # Pinned in TOOLS rather than by patching the orchestrator's lookup:
+    # dispatch resolves capabilities through the registry now, and the
+    # registry is a view over TOOLS. Patching here exercises the real
+    # resolution path instead of bypassing it.
+    monkeypatch.setitem(tool_registry.TOOLS, "sysadmin", fake_tool)
     monkeypatch.setattr(
         orch_mod,
         "call_llm",
