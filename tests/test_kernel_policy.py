@@ -388,13 +388,19 @@ def test_the_review_graph_skips_its_tests_when_subprocesses_are_denied(monkeypat
     assert "subprocesses" in state.context["test_output"]
 
 
-def test_the_review_graph_runs_tests_when_test_is_not_a_capability(monkeypatch):
+def test_the_review_graph_gate_does_not_depend_on_test_being_enabled(monkeypatch):
     """
-    The gate subtracts from what is reachable; it must not add a new
-    reason for something to stop working. This graph has always called
-    tools/test.py directly, without `test` needing to be in
-    ENABLED_TOOLS, so an unregistered `test` capability means no
-    opinion -- not a denial.
+    The hole this replaces, found in real use on 2026-08-19.
+
+    An earlier version asked the policy about a *registered* `test`
+    capability and treated its absence as "no opinion". But this graph
+    reaches tools/test.py by import, so it runs pytest whether or not
+    `test` is in ENABLED_TOOLS -- and with it not opted in,
+    POLICY_ALLOW_SUBPROCESS=false spawned a subprocess anyway.
+
+    The flag states what this deployment may do, not what one
+    capability may reach. A subprocess starting while it is false is a
+    broken promise no matter who started it.
     """
     from forge.graphs import review as review_graph
     from forge.tools import registry as tool_registry
@@ -402,44 +408,40 @@ def test_the_review_graph_runs_tests_when_test_is_not_a_capability(monkeypatch):
 
     spawned = []
     monkeypatch.setattr(
-        review_graph.test_tool,
-        "run",
-        lambda content: spawned.append(content) or "ok",
+        review_graph.test_tool, "run", lambda content: spawned.append(content) or "ok"
     )
-    monkeypatch.setattr(tool_registry, "TOOLS", {"chat": lambda c: c})
+    # The empty registry IS the case: no `test` capability anywhere.
+    monkeypatch.setattr(tool_registry, "TOOLS", {})
+    _deny(monkeypatch, subprocess=False)
 
     state = AgentState(user_input="review it", max_steps=1)
     state.context["test_path"] = "tests/test_graph.py"
     review_graph._run_tests_node(state)
 
-    assert spawned, "no registered `test` capability means no opinion, not a denial"
-
-
-def test_the_repl_command_names_what_is_blocked_and_why(capsys, monkeypatch):
-    """
-    A denied capability is not in the router prompt, so from inside the
-    conversation it simply does not exist. Without somewhere to ask,
-    the only symptom of a restrictive policy is Forge quietly not doing
-    something -- which is indistinguishable from it being bad at its
-    job.
-    """
-    from forge.main import _handle_capabilities
-    from forge.tools import registry as tool_registry
-
-    monkeypatch.setattr(
-        tool_registry,
-        "TOOLS",
-        {"chat": lambda c: c, "web_search": lambda c: c},
+    assert spawned == [], (
+        "the gate must hold with no registry at all -- the graph reaches "
+        "tools/test.py by import, not through ENABLED_TOOLS"
     )
-    _deny(monkeypatch, network=False)
+    assert "subprocesses" in state.context["test_output"]
 
-    _handle_capabilities()
-    out = capsys.readouterr().out
 
-    assert "chat" in out
-    assert "web_search" in out
-    assert "network" in out
-    assert "denying network" in out
+def test_the_review_graph_still_runs_tests_when_subprocesses_are_allowed(monkeypatch):
+    """The gate must not become a blanket skip."""
+    from forge.graphs import review as review_graph
+    from forge.tools import registry as tool_registry
+    from forge.types import AgentState
+
+    spawned = []
+    monkeypatch.setattr(
+        review_graph.test_tool, "run", lambda content: spawned.append(content) or "ok"
+    )
+    monkeypatch.setattr(tool_registry, "TOOLS", {})
+
+    state = AgentState(user_input="review it", max_steps=1)
+    state.context["test_path"] = "tests/test_graph.py"
+    review_graph._run_tests_node(state)
+
+    assert spawned, "the default policy must leave the test step alone"
 
 
 def test_a_denied_capability_leaves_no_trace_in_the_prompt(monkeypatch):

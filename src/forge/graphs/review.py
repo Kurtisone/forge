@@ -224,20 +224,41 @@ def _read_file_node(state: AgentState) -> AgentState:
 
 def _test_capability_verdict():
     """
-    Ask the policy about `test`, the capability this node actually
-    uses. Falls back to allowed when `test` is not a registered
-    capability at all: this graph calls tools/test.py directly and has
-    always worked without `test` being in ENABLED_TOOLS, and the gate
-    is meant to subtract from what is reachable, never to add a new
-    reason for something to stop working.
+    Ask the policy about what this node actually does.
+
+    Checked against tools/test.py's DECLARED requirements, not against
+    a registered `test` capability. The distinction matters because
+    this graph reaches the module by import: it runs pytest whether or
+    not `test` is in ENABLED_TOOLS.
+
+    An earlier version keyed off registration and left a hole, found in
+    real use -- with `test` not opted in, POLICY_ALLOW_SUBPROCESS=false
+    still spawned a subprocess. The reasoning behind it was that an
+    unregistered capability means "no opinion, not a denial", and that
+    the gate must never add new reasons for things to stop working.
+    The first half was a category error: the flag is a statement about
+    what this deployment may do, not about one capability's
+    reachability, so a subprocess starting while it is false breaks the
+    promise regardless of who started it. The second half confused an
+    operator's explicit instruction with an incidental restriction --
+    honouring what was asked is not "a new reason".
+
+    REQUIREMENTS is a module constant, so this works with no registry
+    and no ENABLED_TOOLS at all.
     """
     from forge.kernel import policy
-    from forge.kernel.registry import candidates
+    from forge.kernel.capability import ToolCapability
+    from forge.tools import test as test_tool_module
 
-    providers = candidates("test")
-    if not providers:
-        return policy.ALLOWED
-    return policy.check(providers[0])
+    return policy.check(
+        ToolCapability(
+            name="test",
+            provider="test",
+            handler=test_tool_module.run,
+            requirements=test_tool_module.REQUIREMENTS,
+            declared=True,
+        )
+    )
 
 
 def _run_tests_node(state: AgentState) -> AgentState:
