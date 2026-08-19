@@ -431,11 +431,21 @@ async def list_jobs():
 
 @app.get("/tools", dependencies=[Depends(require_token), Depends(rate_limit)])
 async def list_tools():
-    """Return the list of currently enabled tools and available graphs."""
-    from forge.tools.registry import available_tools
+    """
+    Return the currently enabled tools and available graphs.
 
+    "tools" reports what is enabled AND permitted right now, matching
+    what the router is actually offered -- a caller checking whether a
+    capability is usable should get the same answer the router gets.
+    "denied" names what the active policy is subtracting, so a tool
+    missing from the list is explained rather than merely absent.
+    """
+    from forge.kernel.registry import allowed_names, capability_names
+
+    allowed = allowed_names()
     return {
-        "tools": available_tools(),
+        "tools": allowed,
+        "denied": [name for name in capability_names() if name not in allowed],
         "graphs": list(_graph_registry().keys()),
     }
 

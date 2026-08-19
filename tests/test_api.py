@@ -91,6 +91,34 @@ def test_tools_open_when_no_token_configured(monkeypatch):
     assert r.status_code == 200
 
 
+def test_tools_reports_what_the_policy_denies(monkeypatch):
+    """
+    /tools must agree with the router. A caller asking what Forge can
+    do should not be told about a capability the router is no longer
+    offered -- and a tool missing from the list should be explained
+    rather than silently absent.
+    """
+    from forge.kernel import policy
+    from forge.tools import registry as tool_registry
+
+    monkeypatch.setattr(api_mod, "API_TOKEN", "")
+    monkeypatch.setattr(
+        tool_registry,
+        "TOOLS",
+        {"chat": lambda c: c, "web_search": lambda c: c},
+    )
+
+    body = _client().get("/tools").json()
+    assert "web_search" in body["tools"]
+    assert body["denied"] == []
+
+    monkeypatch.setattr(policy, "POLICY_ALLOW_NETWORK", False)
+    body = _client().get("/tools").json()
+    assert "web_search" not in body["tools"]
+    assert body["denied"] == ["web_search"]
+    assert "chat" in body["tools"]
+
+
 # ── Gated when API_TOKEN is set ──────────────────────────────────────
 
 
