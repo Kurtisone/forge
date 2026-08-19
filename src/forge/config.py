@@ -433,6 +433,16 @@ RESEARCH_FETCH_CHARS_PER_RESULT = int(
 # multi-source summary, so its cap is far smaller than research's.
 RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 
+# Recall answering a French question in English is the failure this
+# guards. The prompt names the detected language (forge/lang.py); this
+# knob controls the half that doesn't trust the prompt -- checking the
+# answer and, when it is demonstrably in the wrong language, spending
+# ONE more call to ask again. Priced deliberately: the retry only ever
+# fires on a run that was already wrong, and never fires at all when
+# the language of either text is uncertain. Set false to keep the
+# naming and drop the retry.
+RECALL_ENFORCE_LANGUAGE = os.getenv("RECALL_ENFORCE_LANGUAGE", "true").lower() == "true"
+
 # --- Sysadmin graph (discover -> collect -> synthesize) ---------------------
 # Deliberately read-only, always: no command in graphs/sysadmin.py can
 # mutate anything (no systemctl restart/stop, no podman stop/rm) -- this

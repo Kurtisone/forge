@@ -42,8 +42,8 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import rag
-from forge.config import RECALL_MAX_ANSWER_CHARS
+from forge import lang, rag
+from forge.config import RECALL_ENFORCE_LANGUAGE, RECALL_MAX_ANSWER_CHARS
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
@@ -102,9 +102,9 @@ _SYNTHESIS_PROMPT = """/no_think
 You are answering a question using entries retrieved from memory,
 listed below. Write ONE short, natural sentence in plain text that
 answers the question -- do not just copy the bullet list verbatim,
-and don't pad it with anything the entries don't say. Write in the
-same language as the question. If none of the entries actually answer
-the question, say plainly that you don't have that information yet.
+and don't pad it with anything the entries don't say. If none of the
+entries actually answer the question, say plainly that you don't have
+that information yet.
 
 Question: {query}
 
@@ -126,7 +126,26 @@ Now write your own answer using ONLY what actually appears in the
 memory entries above -- the words "exemple-hôte" and "modèle-fictif"
 must never appear in your answer. Same plain format as GOOD ANSWER,
 not the NEVER DO THIS shape. Be concise.
-"""
+{language_line}"""
+
+
+# Named language, in last position, and only ever a language forge.lang
+# was sure about. The instruction it replaces ("Write in the same
+# language as the question") sat mid-paragraph and asked the model to
+# infer the target for itself; it answered French questions in English
+# anyway. Naming it removes the inference, and last position is the
+# one thing measurably worth having in this prompt -- everything above
+# competes with an English prompt body pulling the answer toward
+# English.
+_LANGUAGE_LINE = "\nWrite your answer in {language}. Every word of it.\n"
+
+# Second pass only. Says what was wrong, because "do it again" on its
+# own is what the model just did.
+_LANGUAGE_RETRY_LINE = (
+    "\nYour previous answer was in the wrong language. The question is "
+    "in {language}. Write the answer again, in {language}, every word "
+    "of it -- same content, same length.\n"
+)
 
 
 def _recall_node(state: AgentState) -> AgentState:
@@ -187,25 +206,67 @@ def _clean_synthesis_response(raw: str) -> str:
     return cleaned
 
 
+def _build_prompt(query: str, entries_block: str, language_line: str = "") -> str:
+    return _SYNTHESIS_PROMPT.format(
+        query=query, entries_block=entries_block, language_line=language_line
+    )
+
+
 def _synthesize_node(state: AgentState) -> AgentState:
     query = state.context.get("query", state.user_input.strip())
     results = state.context.get("results", [])
 
     entries_block = memory_tool.format_results(results)
 
-    prompt = _SYNTHESIS_PROMPT.format(query=query, entries_block=entries_block)
+    language = lang.name(lang.detect(query))
+    language_line = _LANGUAGE_LINE.format(language=language) if language else ""
+    prompt = _build_prompt(query, entries_block, language_line)
 
-    log.event("recall.llm_call", query=query[:120], prompt_chars=len(prompt))
+    log.event(
+        "recall.llm_call",
+        query=query[:120],
+        prompt_chars=len(prompt),
+        language=language or "unknown",
+    )
     try:
         raw = call_llm(prompt)
+        log.event("recall.raw_output", raw=raw)
+        answer = _clean_synthesis_response(raw)
+
+        # The deterministic half. Naming the language in the prompt is
+        # still a wording fix, and wording fixes have lost six times on
+        # this codebase; this is the part that doesn't depend on the
+        # model having complied. It costs one extra call, and only on
+        # the runs that were already wrong.
+        wanted = None if answer.startswith("[error]") else lang.mismatch(query, answer)
+        if wanted and RECALL_ENFORCE_LANGUAGE:
+            log.warning(
+                "recall: answered in the wrong language (question is %s) -- retrying",
+                wanted,
+            )
+            retry = _build_prompt(
+                query,
+                entries_block,
+                _LANGUAGE_RETRY_LINE.format(language=wanted),
+            )
+            second = _clean_synthesis_response(call_llm(retry))
+            # Keep the first answer unless the second is both usable
+            # and actually in the right language. A retry that fails
+            # the same way twice is the model's limit, not a reason to
+            # hand back the worse of two answers -- and an answer whose
+            # LANGUAGE is wrong still has the right CONTENT, which is
+            # more than an error message has.
+            if not second.startswith("[error]") and not lang.mismatch(query, second):
+                answer = second
+            else:
+                log.warning("recall: retry did not fix the language, keeping the first")
     except ProviderError as e:
         state.ok = False
         state.error = str(e)
         state.final_output = f"[error] LLM unavailable: {e}"
         return state
 
-    log.event("recall.raw_output", raw=raw)
-    state.final_output = _clean_synthesis_response(raw)
+    state.final_output = answer
     state.final_tool = "recall"
     log.event("recall.done", chars=len(state.final_output))
     return state
