@@ -344,3 +344,72 @@ def test_a_fully_denied_tool_set_still_leaves_a_usable_prompt(monkeypatch):
     assert "shell" not in prompt
     assert prompt.strip()
     assert "chat" in prompt
+
+
+# --- Paths that reach a capability without dispatching ----------------------
+
+
+def test_the_review_graph_skips_its_tests_when_subprocesses_are_denied(monkeypatch):
+    """
+    graphs/review reaches the `test` capability by importing the module,
+    not by dispatching, so the orchestrator's gate never saw it. Under
+    POLICY_ALLOW_SUBPROCESS=false it would have spawned pytest anyway.
+
+    Checked against the capability it actually uses rather than review's
+    own profile: review still runs (it declares subprocess=False and
+    that stays true), and only the step that really spawns a process is
+    withheld -- with a reason that reaches the review itself.
+    """
+    from forge.graphs import review as review_graph
+    from forge.tools import registry as tool_registry
+    from forge.types import AgentState
+
+    spawned = []
+    monkeypatch.setattr(
+        review_graph.test_tool,
+        "run",
+        lambda content: spawned.append(content) or "all tests passed",
+    )
+    monkeypatch.setitem(tool_registry.TOOLS, "test", lambda c: c)
+
+    state = AgentState(user_input="review it", max_steps=1)
+    state.context["test_path"] = "tests/test_graph.py"
+
+    review_graph._run_tests_node(state)
+    assert spawned, "with subprocesses allowed the tests must actually run"
+
+    spawned.clear()
+    _deny(monkeypatch, subprocess=False)
+    state.context["test_output"] = None
+    review_graph._run_tests_node(state)
+
+    assert spawned == [], "a denied subprocess must not be spawned"
+    assert "skipped" in state.context["test_output"]
+    assert "subprocesses" in state.context["test_output"]
+
+
+def test_the_review_graph_runs_tests_when_test_is_not_a_capability(monkeypatch):
+    """
+    The gate subtracts from what is reachable; it must not add a new
+    reason for something to stop working. This graph has always called
+    tools/test.py directly, without `test` needing to be in
+    ENABLED_TOOLS, so an unregistered `test` capability means no
+    opinion -- not a denial.
+    """
+    from forge.graphs import review as review_graph
+    from forge.tools import registry as tool_registry
+    from forge.types import AgentState
+
+    spawned = []
+    monkeypatch.setattr(
+        review_graph.test_tool,
+        "run",
+        lambda content: spawned.append(content) or "ok",
+    )
+    monkeypatch.setattr(tool_registry, "TOOLS", {"chat": lambda c: c})
+
+    state = AgentState(user_input="review it", max_steps=1)
+    state.context["test_path"] = "tests/test_graph.py"
+    review_graph._run_tests_node(state)
+
+    assert spawned, "no registered `test` capability means no opinion, not a denial"

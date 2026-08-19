@@ -222,12 +222,50 @@ def _read_file_node(state: AgentState) -> AgentState:
     return state
 
 
+def _test_capability_verdict():
+    """
+    Ask the policy about `test`, the capability this node actually
+    uses. Falls back to allowed when `test` is not a registered
+    capability at all: this graph calls tools/test.py directly and has
+    always worked without `test` being in ENABLED_TOOLS, and the gate
+    is meant to subtract from what is reachable, never to add a new
+    reason for something to stop working.
+    """
+    from forge.kernel import policy
+    from forge.kernel.registry import candidates
+
+    providers = candidates("test")
+    if not providers:
+        return policy.ALLOWED
+    return policy.check(providers[0])
+
+
 def _run_tests_node(state: AgentState) -> AgentState:
     test_path = state.context.get("test_path")
     if not test_path:
         # Not reached in practice -- build()'s conditional edges skip
         # straight to llm_review when there's no test_path. Kept as a
         # defensive no-op in case this node is ever called directly.
+        return state
+
+    # The test step is the `test` capability, so it answers to the
+    # policy that governs `test` -- not to review's own profile.
+    #
+    # This matters in both directions. review declares subprocess=False
+    # because reading a file and calling the LLM spawns nothing; that
+    # stays true, and review is not denied wholesale on a box where
+    # subprocesses are off. But running pytest here IS a subprocess,
+    # and it reached one by importing the module rather than by
+    # dispatching, so the gate never saw it. Checking here closes that
+    # without widening review's own declaration, which would deny the
+    # far more common no-tests review for a step it never takes.
+    #
+    # It also covers POST /run?graph=review, which enters this graph
+    # directly and never passes the tool-level check at all.
+    verdict = _test_capability_verdict()
+    if not verdict:
+        log.warning("review: skipping tests, %s", verdict.reason)
+        state.context["test_output"] = f"[skipped] {verdict.reason}"
         return state
 
     # Dedicated test tool (own allowlist/timeout, WORKSPACE_DIR
