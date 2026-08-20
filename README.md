@@ -15,19 +15,21 @@ User Input
    ↓
 LLM Router  (structured JSON decision)
    ↓
-Tool Dispatcher
+Capability Registry  →  Policy Engine
    ├── chat        (conversational response)
    ├── code        (code generation)
    ├── files       (sandboxed read/write/list)
    ├── shell       (sandboxed subprocess)
    ├── git         (read-only git operations)
    ├── memory      (remember/recall, vector search)
+   ├── recall      (search memory → synthesize, one call)
    ├── test        (sandboxed pytest/ruff runner)
    ├── review      (read a file, optionally test it, analyze)
    ├── web_fetch   (fetch a known URL)
    ├── web_search  (SearXNG links/snippets, no synthesis)
    ├── research    (search → fetch → synthesize, one call)
-   └── sysadmin    (discover → collect → synthesize, read-only diagnosis)
+   ├── sysadmin    (discover → collect → synthesize, read-only diagnosis)
+   └── delegate    (draft a spec, hand off to Claude Code)
 ```
 
 The model must output a strict JSON instruction (`{"tool": "...", "content": "..."}`)
@@ -53,7 +55,7 @@ flowchart TD
     subgraph Orchestrator["Orchestrator (single entry point)"]
         direction TB
         R["Router<br/>(LLM prompt → JSON decision)"]
-        D["Tool Dispatcher"]
+        D["Dispatch"]
         LG["Loop guard<br/>(seen_calls, MAX_STEPS)"]
         R --> D
         D -->|"done: false<br/>(optional, opt-in)"| R
@@ -62,13 +64,24 @@ flowchart TD
 
     U --> R
 
-    D --> T1[chat]
-    D --> T2[code]
-    D --> T3["files<br/>(sandboxed)"]
-    D --> T4["shell<br/>(sandboxed)"]
-    D --> T5["git<br/>(read-only)"]
-    D --> T6["memory<br/>(remember / recall)"]
-    D --> T7["sysadmin<br/>(read-only, v3.11)"]
+    subgraph Kernel["Kernel (ARCHITECTURE.md)"]
+        direction TB
+        CR["Capability Registry<br/>(lists candidates, never chooses)"]
+        PE["Policy Engine<br/>(deny gate, explained verdicts)"]
+        CR --> PE
+    end
+
+    D --> CR
+    PE -->|"allowed"| T1[chat]
+    PE --> T2[code]
+    PE --> T3["files<br/>(sandboxed)"]
+    PE --> T4["shell<br/>(sandboxed)"]
+    PE --> T5["git<br/>(read-only)"]
+    PE --> T6["memory<br/>(remember / recall)"]
+    PE --> T7["sysadmin<br/>(read-only, v3.11)"]
+    PE --> T8["recall · research<br/>web_search · web_fetch<br/>test · review · delegate"]
+
+    PE -.->|"denied: reason,<br/>and withheld from the<br/>router prompt entirely"| R
 
     subgraph Providers["LLM providers (llm.py)"]
         direction LR
@@ -81,7 +94,7 @@ flowchart TD
     O --> TR["TraceStep / AgentState<br/>→ traces.jsonl"]
     O --> MEM["Conversation memory<br/>(rolling JSON history)"]
 
-    G["Graph engine<br/>(Node / Edge / conditional Edge)"] -.->|POST /run| D
+    G["Graph engine<br/>(Node / Edge / conditional Edge)"] -.->|POST /run| CR
     style G stroke-dasharray: 4 3
 
     subgraph RAG["Vector memory / RAG (v3.7)"]
