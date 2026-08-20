@@ -18,6 +18,15 @@ in ENABLED_TOOLS.
 """
 
 from forge.graphs.research import run as research_run
+from forge.kernel.capability import Requirements
+
+# search -> fetch top N -> one synthesis call.
+REQUIREMENTS = Requirements(
+    network=True,
+    llm=True,
+    mutates_workspace=False,
+    spawns_process=False,
+)
 
 
 def run(content: str) -> str:

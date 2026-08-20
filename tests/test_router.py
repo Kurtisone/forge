@@ -40,6 +40,11 @@ def _example_line(prompt: str, *fragments: str) -> str:
 # ── parser: dynamic tool validation ─────────────────────────────────
 
 
+def _noop(content: str) -> str:
+    """Stand-in handler: these tests care about the prompt, not dispatch."""
+    return content
+
+
 def test_unlisted_tool_falls_back_to_chat(monkeypatch):
     monkeypatch.setattr(registry_mod, "available_tools", lambda: ["chat", "code"])
     decision = _validate_json_obj({"tool": "shell", "content": "ls"}, "raw")
@@ -311,8 +316,11 @@ def test_prompt_with_only_chat_and_code_omits_memory():
 
 
 def test_prompt_defaults_to_registry_when_available_tools_not_passed(monkeypatch):
+    # Pinned on TOOLS rather than on available_tools(): the prompt now
+    # resolves through the capability registry, which is a view over
+    # TOOLS, so TOOLS is the source of truth both paths agree on.
     monkeypatch.setattr(
-        registry_mod, "available_tools", lambda: ["chat", "code", "git"]
+        registry_mod, "TOOLS", {"chat": _noop, "code": _noop, "git": _noop}
     )
     prompt = build_router_prompt("hi")
     assert '"git"' in prompt
@@ -714,7 +722,7 @@ def test_delegate_is_described_when_enabled(monkeypatch):
     ships with two examples rather than the six it could have had.
     """
     monkeypatch.setattr(
-        registry_mod, "available_tools", lambda: ["chat", "code", "delegate"]
+        registry_mod, "TOOLS", {"chat": _noop, "code": _noop, "delegate": _noop}
     )
     prompt = build_router_prompt("délègue la correction du cache KV")
     assert "delegate" in prompt

@@ -48,8 +48,15 @@ import json
 
 from forge import rag
 from forge.config import MEMORY_RECALL_MAX_CHARS
+from forge.kernel.capability import LOCAL_READONLY
 from forge.logger import log
 from forge.tool_payload import loads_payload
+
+# Writes to RAG_DB_FILE, not to WORKSPACE_DIR, and the embedding
+# call goes to EMBEDDING_URL on the host -- neither is Internet
+# access nor an LLM generation.
+REQUIREMENTS = LOCAL_READONLY
+
 
 _VALID_KINDS = ("decision", "todo", "fact")
 

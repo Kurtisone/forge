@@ -32,8 +32,18 @@ import json
 from pathlib import Path
 
 from forge.config import WORKSPACE_DIR
+from forge.kernel.capability import Requirements
 from forge.logger import log
 from forge.tool_payload import loads_payload
+
+# write/append actions modify files under WORKSPACE_DIR.
+REQUIREMENTS = Requirements(
+    network=False,
+    llm=False,
+    mutates_workspace=True,
+    spawns_process=False,
+)
+
 
 _MAX_READ_BYTES = 64 * 1024  # 64 KB — refuse to read huge files
 

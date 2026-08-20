@@ -222,12 +222,71 @@ def _read_file_node(state: AgentState) -> AgentState:
     return state
 
 
+def _test_capability_verdict():
+    """
+    Ask the policy about what this node actually does.
+
+    Checked against tools/test.py's DECLARED requirements, not against
+    a registered `test` capability. The distinction matters because
+    this graph reaches the module by import: it runs pytest whether or
+    not `test` is in ENABLED_TOOLS.
+
+    An earlier version keyed off registration and left a hole, found in
+    real use -- with `test` not opted in, POLICY_ALLOW_SUBPROCESS=false
+    still spawned a subprocess. The reasoning behind it was that an
+    unregistered capability means "no opinion, not a denial", and that
+    the gate must never add new reasons for things to stop working.
+    The first half was a category error: the flag is a statement about
+    what this deployment may do, not about one capability's
+    reachability, so a subprocess starting while it is false breaks the
+    promise regardless of who started it. The second half confused an
+    operator's explicit instruction with an incidental restriction --
+    honouring what was asked is not "a new reason".
+
+    REQUIREMENTS is a module constant, so this works with no registry
+    and no ENABLED_TOOLS at all.
+    """
+    from forge.kernel import policy
+    from forge.kernel.capability import ToolCapability
+    from forge.tools import test as test_tool_module
+
+    return policy.check(
+        ToolCapability(
+            name="test",
+            provider="test",
+            handler=test_tool_module.run,
+            requirements=test_tool_module.REQUIREMENTS,
+            declared=True,
+        )
+    )
+
+
 def _run_tests_node(state: AgentState) -> AgentState:
     test_path = state.context.get("test_path")
     if not test_path:
         # Not reached in practice -- build()'s conditional edges skip
         # straight to llm_review when there's no test_path. Kept as a
         # defensive no-op in case this node is ever called directly.
+        return state
+
+    # The test step is the `test` capability, so it answers to the
+    # policy that governs `test` -- not to review's own profile.
+    #
+    # This matters in both directions. review declares subprocess=False
+    # because reading a file and calling the LLM spawns nothing; that
+    # stays true, and review is not denied wholesale on a box where
+    # subprocesses are off. But running pytest here IS a subprocess,
+    # and it reached one by importing the module rather than by
+    # dispatching, so the gate never saw it. Checking here closes that
+    # without widening review's own declaration, which would deny the
+    # far more common no-tests review for a step it never takes.
+    #
+    # It also covers POST /run?graph=review, which enters this graph
+    # directly and never passes the tool-level check at all.
+    verdict = _test_capability_verdict()
+    if not verdict:
+        log.warning("review: skipping tests, %s", verdict.reason)
+        state.context["test_output"] = f"[skipped] {verdict.reason}"
         return state
 
     # Dedicated test tool (own allowlist/timeout, WORKSPACE_DIR

@@ -16,6 +16,17 @@ delegation.py, above the router -- they are not tool calls, and adding
 """
 
 from forge.graphs.delegate import run as delegate_run
+from forge.kernel.capability import Requirements
+
+# Calls the LLM to draft the spec, and persists the job to JOBS_FILE
+# -- which is data/, not WORKSPACE_DIR, so it is not a workspace write.
+# The handoff to Claude Code happens outside this process.
+REQUIREMENTS = Requirements(
+    network=False,
+    llm=True,
+    mutates_workspace=False,
+    spawns_process=False,
+)
 
 
 def run(content: str) -> str:

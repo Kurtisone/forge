@@ -6,6 +6,11 @@ Forge is a lightweight LLM-based agent runtime built around a router + tool exec
 Instead of relying on a monolithic prompt or complex reasoning loops, Forge delegates actions
 to explicit tools selected by a structured LLM router.
 
+It runs on the machines it is written on — a Steam Deck and a small home server —
+which is what most of the design decisions here are downstream of.
+[ARCHITECTURE.md](ARCHITECTURE.md) covers the long-term direction, kept separate
+from the version roadmap below because the two advance at different speeds.
+
 ---
 
 ### Core Concept
@@ -15,19 +20,21 @@ User Input
    ↓
 LLM Router  (structured JSON decision)
    ↓
-Tool Dispatcher
+Capability Registry  →  Policy Engine
    ├── chat        (conversational response)
    ├── code        (code generation)
    ├── files       (sandboxed read/write/list)
    ├── shell       (sandboxed subprocess)
    ├── git         (read-only git operations)
    ├── memory      (remember/recall, vector search)
+   ├── recall      (search memory → synthesize, one call)
    ├── test        (sandboxed pytest/ruff runner)
    ├── review      (read a file, optionally test it, analyze)
    ├── web_fetch   (fetch a known URL)
    ├── web_search  (SearXNG links/snippets, no synthesis)
    ├── research    (search → fetch → synthesize, one call)
-   └── sysadmin    (discover → collect → synthesize, read-only diagnosis)
+   ├── sysadmin    (discover → collect → synthesize, read-only diagnosis)
+   └── delegate    (draft a spec, hand off to Claude Code)
 ```
 
 The model must output a strict JSON instruction (`{"tool": "...", "content": "..."}`)
@@ -53,7 +60,7 @@ flowchart TD
     subgraph Orchestrator["Orchestrator (single entry point)"]
         direction TB
         R["Router<br/>(LLM prompt → JSON decision)"]
-        D["Tool Dispatcher"]
+        D["Dispatch"]
         LG["Loop guard<br/>(seen_calls, MAX_STEPS)"]
         R --> D
         D -->|"done: false<br/>(optional, opt-in)"| R
@@ -62,13 +69,24 @@ flowchart TD
 
     U --> R
 
-    D --> T1[chat]
-    D --> T2[code]
-    D --> T3["files<br/>(sandboxed)"]
-    D --> T4["shell<br/>(sandboxed)"]
-    D --> T5["git<br/>(read-only)"]
-    D --> T6["memory<br/>(remember / recall)"]
-    D --> T7["sysadmin<br/>(read-only, v3.11)"]
+    subgraph Kernel["Kernel (ARCHITECTURE.md)"]
+        direction TB
+        CR["Capability Registry<br/>(lists candidates, never chooses)"]
+        PE["Policy Engine<br/>(deny gate, explained verdicts)"]
+        CR --> PE
+    end
+
+    D --> CR
+    PE -->|"allowed"| T1[chat]
+    PE --> T2[code]
+    PE --> T3["files<br/>(sandboxed)"]
+    PE --> T4["shell<br/>(sandboxed)"]
+    PE --> T5["git<br/>(read-only)"]
+    PE --> T6["memory<br/>(remember / recall)"]
+    PE --> T7["sysadmin<br/>(read-only, v3.11)"]
+    PE --> T8["recall · research<br/>web_search · web_fetch<br/>test · review · delegate"]
+
+    PE -.->|"denied: reason,<br/>and withheld from the<br/>router prompt entirely"| R
 
     subgraph Providers["LLM providers (llm.py)"]
         direction LR
@@ -81,7 +99,7 @@ flowchart TD
     O --> TR["TraceStep / AgentState<br/>→ traces.jsonl"]
     O --> MEM["Conversation memory<br/>(rolling JSON history)"]
 
-    G["Graph engine<br/>(Node / Edge / conditional Edge)"] -.->|POST /run| D
+    G["Graph engine<br/>(Node / Edge / conditional Edge)"] -.->|POST /run| CR
     style G stroke-dasharray: 4 3
 
     subgraph RAG["Vector memory / RAG (v3.7)"]
@@ -117,6 +135,74 @@ flowchart TD
     Sysadmin -.-> JRNL
     style HostProxies stroke-dasharray: 4 3
 ```
+
+#### The Kernel layer
+
+Dispatch does not look tools up directly any more. Both execution paths — the
+orchestrator and the graph engine — ask the **Capability Registry** which
+providers answer for a capability name, then consult the **Policy Engine**
+before running one. This is Niveau 2 of the trajectory in
+[ARCHITECTURE.md](ARCHITECTURE.md), and it is deliberately the whole of it:
+there is no Scheduler yet, because nothing yet needs one.
+
+```
+Router decision
+      │
+      ▼
+Capability Registry ──► candidates(name)
+      │                 (lists; never chooses)
+      ▼
+Policy Engine ────────► Verdict(allowed, reason)
+      │
+      ▼
+capability.execute(content) ──► ToolResult
+```
+
+The Registry is a **view**, not a snapshot: it derives capabilities from the
+enabled tool set at call time and resolves the handler at execution time, so
+it cannot go stale. It has no `resolve()` / `best()` / `pick()` — listing and
+choosing are different jobs, and choosing belongs to the Cognitive Scheduler
+that does not exist yet. A capability with two providers is a hard error today
+rather than an implicit pick of the first.
+
+Each tool declares a `REQUIREMENTS` constant: four statically knowable facts
+(reaches the Internet, calls the LLM itself, writes to the workspace, spawns a
+process). They are declarations, not measurements — cost, latency and quality
+scores arrive when something measures them, not before. A tool that declares
+nothing gets the most demanding profile and is flagged, so omission is never
+mistaken for harmlessness.
+
+```
+$ forge capabilities
+14 capabilities registered
+policy: denying network
+
+   CAPABILITY  PROVIDER    REQUIRES
+   chat        chat        local, read-only
+   code        code        local, read-only
+   delegate    delegate    llm
+   files       files       writes
+   git         git         subprocess
+   memory      memory      local, read-only
+   recall      recall      llm
+ x research    research    network, llm
+   review      review      llm
+ x shell       shell       network, llm, writes, subprocess
+   sysadmin    sysadmin    llm, subprocess
+   test        test        writes, subprocess
+ x web_fetch   web_fetch   network
+ x web_search  web_search  network
+
+x 4 capabilities are blocked by the active policy and will refuse to run.
+```
+
+The Policy Engine is a deny gate over those declarations, and it only ever
+subtracts from what `ENABLED_TOOLS` already allows. Its use is context, not
+containment — the real sandboxing stays in the tools themselves (`web_fetch`'s
+SSRF guard, `files`' workspace confinement, `shell`'s allowlist). Off the
+network that hosts SearXNG, `POLICY_ALLOW_NETWORK=false` makes `research` and
+`web_search` refuse with a stated reason instead of failing later with a
+connection error, while `chat`, `code`, `memory` and `review` keep working.
 
 GitHub renders this diagram automatically; if you're reading this elsewhere, the ASCII
 directory tree below covers the same layering.
@@ -159,13 +245,37 @@ src/forge/
 │   ├── web_fetch.py      # fetch a known URL, SSRF-guarded (v3.10)
 │   ├── web_search.py    # SearXNG-backed search, links/snippets only (v3.10)
 │   ├── research.py      # dispatchable wrapper around graphs/research.py (v3.10)
-│   └── sysadmin.py      # dispatchable wrapper around graphs/sysadmin.py (v3.11)
+│   ├── sysadmin.py      # dispatchable wrapper around graphs/sysadmin.py (v3.11)
+│   ├── recall.py        # dispatchable wrapper around graphs/recall.py
+│   └── delegate.py      # dispatchable wrapper around graphs/delegate.py (v3.13) — entry point only
 │
 ├── memory.py            # JSON-backed rolling conversation history + key/value facts
 ├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
-├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search)
-├── cli.py               # forge review <file> [--tests <path>] / forge replay <run_id>
-├── main.py              # REPL — !clear, !trace, !remember, !recall, !help
+├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search, context, drawer)
+├── cli.py               # forge review <file> [--tests <path>] / forge replay <run_id> / forge capabilities
+├── main.py              # REPL — !clear, !compact, !trace, !remember, !recall, !capabilities, !help
+│
+├── turn.py              # one conversational turn, shared by the API and the REPL
+├── tokens.py            # local token estimation, checked against llama-server's own counts (v3.12)
+├── metrics.py           # per-run inference accounting, surfaced in the trace (v3.12)
+├── subtrace.py          # channel letting a graph publish its own node steps to the trace
+├── tool_payload.py      # JSON_PAYLOAD_TOOLS + the tolerant payload parse, one source of truth
+├── gbnf.py              # grammar checks shared by the router and the delegation spec
+├── lang.py              # closed-vocabulary fr/en detection — stays silent when the evidence is thin
+├── text_cleaning.py     # strips think blocks and unwraps router-style JSON from a synthesis answer
+├── context_info.py      # today's date and other context lines injected into prompts
+├── ratelimit.py         # API rate limiting with expiring keys
+│
+├── delegation.py        # the delegation flow ABOVE the router — answers, approval, cancellation (v3.13)
+├── jobs.py              # persisted delegation jobs, its own file rather than a key in memory.json (v3.13)
+├── spec.py              # the delegation spec, one source of truth for its fields (v3.13)
+├── executors.py         # how a ready job is handed off (v3.13)
+├── runner.py            # the thread that runs jobs without blocking the conversation (v3.13)
+│
+├── kernel/              # Capability layer — see ARCHITECTURE.md
+│   ├── capability.py    # Capability interface, Requirements, ToolCapability
+│   ├── registry.py      # Capability Registry — lists candidates, never chooses
+│   └── policy.py        # Policy Engine — deterministic deny gate, explained verdicts
 │
 └── providers/
     ├── llama_cpp.py
@@ -184,7 +294,7 @@ user_input
    ↓
 Orchestrator._route()      →  RouterDecision   (LLM layer)
    ↓
-Orchestrator._dispatch()   →  ToolResult       (tools layer)
+Orchestrator._dispatch()   →  ToolResult       (capability + policy, then tools layer)
    ↓
 done? ──no──→  fold result into history  ──→  route again (up to MAX_STEPS)
    │
@@ -314,6 +424,9 @@ python -m forge.cli review src/forge/graph.py --tests tests/test_graph.py
 
 # Replay a past execution trace
 python -m forge.cli replay <run_id>
+
+# What Forge can do right now, and what the active policy is blocking
+python -m forge.cli capabilities
 ```
 
 ---
@@ -327,7 +440,7 @@ python -m forge.cli replay <run_id>
 | `POST` | `/chat` | optional | Single conversation turn |
 | `POST` | `/review` | optional | File content analysis, optionally running its tests first (`test_path` field, v3.10) |
 | `POST` | `/run` | optional | Run any graph by name |
-| `GET` | `/tools` | optional | Active tools + available graphs |
+| `GET` | `/tools` | optional | Tools that are enabled **and** permitted right now, what the active policy is subtracting (`denied`), and available graphs — the same answer the router is given |
 | `GET` | `/traces?n=10` | optional | Recent execution traces |
 | `POST` | `/remember` | optional | Store a decision/todo in vector memory (v3.7) |
 | `GET` | `/search?q=...` | optional | Semantic search over remembered decisions/todos |
@@ -336,6 +449,8 @@ python -m forge.cli replay <run_id>
 | `POST` | `/drawer/pin` | optional | Pin a message by id — pins its exchange partner too (v3.9) |
 | `POST` | `/drawer/unpin` | optional | Unpin a message by id, independently of its partner (v3.9) |
 | `POST` | `/compact` | optional | Force a context compaction pass now (v3.9) |
+| `GET` | `/context` | optional | What the next prompt will weigh — the gauge behind the header readout (v3.12) |
+| `GET` | `/jobs` | optional | Every delegation job and its state (v3.13). Deliberately not the day-to-day way to read one: the conversation thread is, per the zero-tab rule. This exists so a job can be inspected without reading `data/jobs.json` over SSH |
 | `GET` | `/docs` | open | Interactive API docs (Swagger) |
 
 **Auth:** set `API_TOKEN` in the environment to require
@@ -408,6 +523,28 @@ e.g. behind a proxy that already rate-limits.
 | `SEARXNG_MAX_RESULTS` | Max results returned per search | `5` |
 | `RESEARCH_FETCH_TOP_N` | How many top search results `research` fetches in full before synthesizing | `3` |
 | `RESEARCH_FETCH_CHARS_PER_RESULT` | Per-result fetched-content cap fed into the synthesis prompt | `1500` |
+| `SYSADMIN_DISCOVERY_TIMEOUT` | Timeout for the discovery step (seconds) | `10` |
+| `SYSADMIN_COLLECT_TIMEOUT` | Timeout for each log-collection command (seconds) | `15` |
+| `SYSADMIN_LOG_CHARS_BUDGET` | Hard cap on the log block inserted into the synthesis prompt, independent of line count — truncates keeping the **end** of the log, since that is where the recent events are | `2000` |
+| `RECALL_MAX_ANSWER_CHARS` | Cap on a `recall` answer. Far smaller than `research`'s: a recall answer is one or two facts restated as a sentence, not a multi-source summary | `800` |
+| `RECALL_ENFORCE_LANGUAGE` | After answering, check the language deterministically and retry **once** if it is demonstrably wrong. Never twice, never when either language is uncertain, and a failed retry keeps the first answer — wrong language with the right content beats an error message | `true` |
+| `MEMORY_RECALL_MAX_CHARS` | Cap on what a `memory` recall feeds back into the router prompt | `500` |
+| `MEMORY_HARD_CAP_SLACK` | Headroom above `MEMORY_MAX_HISTORY` before the hard cap fires — sized so it fires rarely rather than every turn | `20` |
+| `COMPACTION_TOKEN_THRESHOLD` | Prompt-token budget above which compaction triggers, alongside the message-count trigger (v3.12) | `6000` |
+| `COMPACTION_TOKEN_TARGET` | What compaction aims to bring the history down to | `3000` |
+| `EMBEDDING_MAX_CHARS` | Text longer than this is split before embedding, rather than truncated | `1500` |
+| `EMBEDDING_MAX_CHUNKS` | Ceiling on chunks per embedded entry | `16` |
+| `DELEGATE_EXECUTOR` | How a ready delegation job is executed. `handoff` writes the spec and stops there | `handoff` |
+| `DELEGATE_DRAFT` | Ask the LLM to draft the spec before showing it. Off by default: on requests specific enough to act on, the draft invented detail the user never gave | `false` |
+| `DELEGATE_ECHO_SECONDS` | Artificial delay in the echo executor, for testing the job lifecycle without a real handoff | `0` |
+| `JOBS_FILE` | Persisted delegation jobs. Its own file rather than a key in `memory.json`: compaction rewrites that file wholesale, and two writers with one whole-file write means the job is what gets lost | `data/jobs.json` |
+| `JOB_TIMEOUT` | Seconds before a running job is considered stuck | `1800` |
+| `API_ALLOW_UNAUTHENTICATED` | Opt in to starting without an `API_TOKEN`. Refuses by default — the API dispatches tools on your machine | `false` |
+| `API_DOCS_ENABLED` | Mount `/docs` and `/redoc`. Off by default | `false` |
+| `ALLOW_MUTATION_AFTER_EXTERNAL_DATA` | Allow `shell`/`test`/`files:write` in the same run **after** external data was fetched. Off by default: the escalation guard is deterministic rather than asked of the model. `files:read` is deliberately non-tainting, to preserve the read-then-write flow | `false` |
+| `POLICY_ALLOW_NETWORK` | Policy Engine: allow capabilities that reach the Internet (`research`, `web_fetch`, `web_search`, `shell`). A deny gate — it only subtracts from what `ENABLED_TOOLS` already permits, and a denied capability is not offered to the router at all | `true` |
+| `POLICY_ALLOW_WORKSPACE_WRITES` | Policy Engine: allow capabilities that can write under `WORKSPACE_DIR` | `true` |
+| `POLICY_ALLOW_SUBPROCESS` | Policy Engine: allow capabilities that spawn a process (`git`, `test`, `sysadmin`, `shell`) | `true` |
 
 ---
 
@@ -427,6 +564,8 @@ e.g. behind a proxy that already rate-limits.
 | `web_search` | `ENABLED_TOOLS=chat,code,web_search` | Ranked links/snippets from a self-hosted SearXNG instance — no synthesis, just the list |
 | `research` | `ENABLED_TOOLS=chat,code,research` | Search → fetch top results → synthesize one answer, as a single deterministic call (see below) |
 | `sysadmin` | `ENABLED_TOOLS=chat,code,sysadmin` | Discover → collect → synthesize: diagnoses a service/system problem from real logs, read-only always — never restarts/stops anything. Works kernel-log-only out of the box; see [`deploy/README.md`](deploy/README.md) for read-only proxies giving it real `journalctl`/`systemctl`/`podman` access |
+| `recall` | `ENABLED_TOOLS=chat,code,memory,recall` | Search vector memory → synthesize an answer, as one deterministic call. Same reasoning as `research` versus `web_search`: `memory`'s own recall returns entries, this returns a sentence. Calls `memory.search()` directly, so `memory` need not also be in `ENABLED_TOOLS` — but its embedding server does need to be reachable |
+| `delegate` | `ENABLED_TOOLS=chat,code,delegate` | Opens a delegation to Claude Code (v3.13): drafts a spec, asks follow-up questions when detail is missing, and hands off once you approve. Only the *entry* point is a tool — answering the questions, approving and cancelling happen above the router in `delegation.py`, so adding `delegate` here does not change how those are handled |
 
 A tool is only dispatchable if it has a `run()` function **and** appears in `ENABLED_TOOLS`.
 Implementing `run()` in a module is not enough — the opt-in is intentional for tools with side effects.
@@ -513,6 +652,15 @@ message instead of being dropped outright. Two interchangeable strategies (`COMP
 short pointer, searchable via `!recall`/`/search`) or `llm_summary` (one LLM call, condenses the
 block into prose kept inline). Both share the same signature, so switching is a config change,
 not a rewrite. `POST /compact` (or `!compact` in the REPL) forces a pass on demand.
+
+A message count turned out to be the wrong unit, though, so v3.12 added a
+second trigger alongside it: compaction also fires when the rendered prompt
+crosses `COMPACTION_TOKEN_THRESHOLD` tokens, aiming to bring it back to
+`COMPACTION_TOKEN_TARGET`. Twenty short messages and twenty pasted stack
+traces are the same number and nowhere near the same prompt, and it is the
+prompt that costs. Either trigger can fire; whichever comes first wins.
+`GET /context` reports what the next prompt currently weighs, which is what
+the header gauge in the web UI reads.
 
 Any message can be pinned — the "tiroir" (`GET /drawer`, `POST /drawer/pin`/`unpin`) — which
 exempts it from both compaction and the `MEMORY_MAX_HISTORY` hard cap. The web UI pins a
@@ -726,7 +874,10 @@ by hand even when it changed from fail to pass.
 | **v3.9** | done | Context compaction + drawer: `rag_pointer`/`llm_summary` strategies, pin/unpin, `/history` `/drawer` `/compact` endpoints, `!compact` REPL command, files write-diff |
 | **v3.10** | done | Hardening + new tools: dedicated `test` tool, `web_fetch` (SSRF-guarded), `web_search` + `research` (self-hosted SearXNG), review graph gains an optional test-run step and chat-dispatch; router disambiguation fixes (files vs review, tool descriptions/examples for every new tool) found through real usage |
 | **v3.11** | done | Sysadmin: `discover → collect → synthesize` graph diagnosing real service/system problems from logs, read-only always (no restart/stop path exists in the code); UI gains expandable per-step detail (`forge.subtrace`) for every graph-based tool; read-only host access via three independent proxies (`xdg-dbus-proxy` for systemd, a hand-rolled GET-only proxy for podman.sock, a plain bind mount for the journal) rather than raw socket access — real production debugging found and fixed a prompt-injection-shaped example-leak, a context-overflow crash, `systemctl`'s undocumented refusal to honor `DBUS_SYSTEM_BUS_ADDRESS` (switched discovery to `busctl`), and a rootless-podman supplementary-groups gap blocking `journalctl -u` on root-owned services (`--group-add keep-groups`) |
-| **v3.12** | in progress | Router prompt latency: lot 1 adds per-call instrumentation (`ms_per_token` from llama-server's own timings, a cache-reuse signal that does not rely on `tokens_cached`); lot 2 makes the prompt a **pure append** over the previous turn -- closing instructions hoisted above the conversation, a persisted user turn rendered byte-identically to the live one -- taking warm prompt processing from 3.12 to 0.81 ms/token (~3.9x, ~8.4s to ~2.2s per routing call) with zero routing regressions across a 29-fixture A/B (`bench/router_ab.py`) |
+| **v3.12** | done | Instrumentation + router prompt latency, five batches: per-call token accounting from llama-server's own timings; the router prompt made a **pure append** over the previous turn, taking warm prompt processing from 3.12 to 0.81 ms/token (~3.9x, ~8.4s to ~2.2s per routing call) with zero regressions across a 29-fixture A/B (`bench/router_ab.py`); a permanent context gauge in the header with `GET /context`; compaction triggered on a token budget rather than a message count; and file-path grounding in the orchestrator, refusing a write or a review on a path the model invented |
+| **v3.13** | done | Delegation to Claude Code: a spec drafted under its own GBNF grammar, persisted jobs with a checked lifecycle (`draft → awaiting_user → ready → running → done`), the model asking follow-up questions rather than inventing missing detail, cancellation, and a runner thread that hands off without blocking the conversation. Entry is a `delegate` tool, so it stays reachable from the chat thread like everything else |
+| **fix/dettes-v3.12** | done | Six fixes found by running the previous two versions in anger: `test_path` was invisible to the path guard (and so was a raw `pytest <path>` command string), a pasted paragraph in `file_path` is text rather than an unfounded path, `load_memory()` died on valid JSON of the wrong shape, `recall` answered in the wrong language (new `forge/lang.py`, closed-vocabulary fr/en detection that stays silent when unsure), and the `test` tool had neither a description nor an example in the router prompt |
+| **Kernel L2** | this branch | Capability layer and a deterministic Policy Engine — see [ARCHITECTURE.md](ARCHITECTURE.md) and [The Kernel layer](#the-kernel-layer) above. Sits on the architectural maturity axis, not this product roadmap |
 
 ---
 

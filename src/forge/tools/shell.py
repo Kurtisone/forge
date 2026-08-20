@@ -44,7 +44,14 @@ from forge.config import (
     SHELL_TIMEOUT,
     WORKSPACE_DIR,
 )
+from forge.kernel.capability import Requirements
 from forge.logger import log
+
+# Intentionally the conservative default, spelled out: the allowlist
+# is SHELL_ALLOWED_COMMANDS, so what a command may reach is a
+# deployment-time choice and cannot be known statically here.
+REQUIREMENTS = Requirements()
+
 
 _MAX_OUTPUT_CHARS = 8_000
 

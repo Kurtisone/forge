@@ -18,6 +18,17 @@ ENABLED_TOOLS.
 """
 
 from forge.graphs.recall import run as recall_run
+from forge.kernel.capability import Requirements
+
+# Searches vector memory, then calls the LLM to synthesize an answer.
+# The embedding call goes to EMBEDDING_URL on the host, which is not
+# Internet access -- same reasoning as tools/memory.py.
+REQUIREMENTS = Requirements(
+    network=False,
+    llm=True,
+    mutates_workspace=False,
+    spawns_process=False,
+)
 
 
 def run(content: str) -> str:

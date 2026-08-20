@@ -33,13 +33,20 @@ from forge.config import (
     MAX_STEPS,
     MEMORY_ENABLED,
 )
-from forge.errors import LoopGuardError, ProviderError, ToolExecutionError
+from forge.errors import (
+    CapabilityAmbiguousError,
+    LoopGuardError,
+    ProviderError,
+    ToolExecutionError,
+)
+from forge.kernel import policy
+from forge.kernel.registry import candidates
 from forge.llm import call_llm
 from forge.logger import log
 from forge.router import build_router_prompt, parse_router_output
 from forge.router.prompt import estimate_history_tokens
 from forge.tool_payload import JSON_PAYLOAD_TOOLS, loads_payload
-from forge.tools.registry import get_tool, load_tools
+from forge.tools.registry import load_tools
 from forge.types import AgentResult, AgentState, ToolResult
 
 load_tools()
@@ -600,16 +607,47 @@ class Orchestrator:
         return decision
 
     def _dispatch(self, tool: str, content: str) -> ToolResult:
-        handler = get_tool(tool)
-        if handler is None:
-            log.warning("no handler for tool %r, returning content as-is", tool)
+        providers = candidates(tool)
+
+        if not providers:
+            log.warning(
+                "no capability registered for %r, returning content as-is", tool
+            )
             subtrace.clear()  # discard any stale publish, same as every other exit path
             return ToolResult(tool=tool, output=content, ok=True)
 
-        log.event("tool.dispatch", tool=tool)
+        if len(providers) > 1:
+            # Unreachable today: every capability has exactly one
+            # provider. Kept as a hard stop rather than "take the
+            # first" because the day a second one appears, silently
+            # picking is the failure that hides the missing component.
+            # Choosing belongs to the Cognitive Scheduler
+            # (ARCHITECTURE.md, Niveau 3).
+            err = CapabilityAmbiguousError(
+                f"capability {tool!r} has {len(providers)} providers "
+                f"({', '.join(p.provider for p in providers)}) and no "
+                "Cognitive Scheduler to choose between them"
+            )
+            log.error(str(err))
+            subtrace.clear()  # discard any stale publish, same as every other exit path
+            return ToolResult(
+                tool=tool, output=f"Tool error: {tool}", ok=False, error=str(err)
+            )
+
+        capability = providers[0]
+
+        verdict = policy.check(capability)
+        if not verdict:
+            log.warning("policy denied %r: %s", tool, verdict.reason)
+            subtrace.clear()  # discard any stale publish, same as every other exit path
+            return ToolResult(
+                tool=tool, output=verdict.reason, ok=False, error=verdict.reason
+            )
+
+        log.event("tool.dispatch", tool=tool, provider=capability.provider)
         subtrace.clear()  # start every dispatch on a clean slate -- see subtrace.clear()
         try:
-            output = handler(content)
+            output = capability.execute(content)
             output = self._validate_tool_output(tool, output)
         except ToolExecutionError as e:
             log.error("tool %r violated its contract: %s", tool, e)

@@ -32,7 +32,19 @@ To activate: ENABLED_TOOLS=chat,code,sysadmin in .env.local
 import json
 
 from forge.graphs.sysadmin import run as sysadmin_run
+from forge.kernel.capability import Requirements
 from forge.tool_payload import loads_payload
+
+# Runs journalctl/busctl/podman through subprocesses, then calls the
+# LLM to synthesize. Read-only by construction (it discovers, reads
+# logs and proposes) but reading host state is still a subprocess, and
+# subprocess=True is what a policy denying them is meant to catch.
+REQUIREMENTS = Requirements(
+    network=False,
+    llm=True,
+    mutates_workspace=False,
+    spawns_process=True,
+)
 
 
 def run(content: str) -> str:
