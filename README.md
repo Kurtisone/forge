@@ -419,6 +419,9 @@ python -m forge.cli review src/forge/graph.py --tests tests/test_graph.py
 
 # Replay a past execution trace
 python -m forge.cli replay <run_id>
+
+# What Forge can do right now, and what the active policy is blocking
+python -m forge.cli capabilities
 ```
 
 ---
@@ -432,7 +435,7 @@ python -m forge.cli replay <run_id>
 | `POST` | `/chat` | optional | Single conversation turn |
 | `POST` | `/review` | optional | File content analysis, optionally running its tests first (`test_path` field, v3.10) |
 | `POST` | `/run` | optional | Run any graph by name |
-| `GET` | `/tools` | optional | Active tools + available graphs |
+| `GET` | `/tools` | optional | Tools that are enabled **and** permitted right now, what the active policy is subtracting (`denied`), and available graphs — the same answer the router is given |
 | `GET` | `/traces?n=10` | optional | Recent execution traces |
 | `POST` | `/remember` | optional | Store a decision/todo in vector memory (v3.7) |
 | `GET` | `/search?q=...` | optional | Semantic search over remembered decisions/todos |
@@ -441,6 +444,8 @@ python -m forge.cli replay <run_id>
 | `POST` | `/drawer/pin` | optional | Pin a message by id — pins its exchange partner too (v3.9) |
 | `POST` | `/drawer/unpin` | optional | Unpin a message by id, independently of its partner (v3.9) |
 | `POST` | `/compact` | optional | Force a context compaction pass now (v3.9) |
+| `GET` | `/context` | optional | What the next prompt will weigh — the gauge behind the header readout (v3.12) |
+| `GET` | `/jobs` | optional | Every delegation job and its state (v3.13). Deliberately not the day-to-day way to read one: the conversation thread is, per the zero-tab rule. This exists so a job can be inspected without reading `data/jobs.json` over SSH |
 | `GET` | `/docs` | open | Interactive API docs (Swagger) |
 
 **Auth:** set `API_TOKEN` in the environment to require
