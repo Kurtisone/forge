@@ -6,6 +6,11 @@ Forge is a lightweight LLM-based agent runtime built around a router + tool exec
 Instead of relying on a monolithic prompt or complex reasoning loops, Forge delegates actions
 to explicit tools selected by a structured LLM router.
 
+It runs on the machines it is written on — a Steam Deck and a small home server —
+which is what most of the design decisions here are downstream of.
+[ARCHITECTURE.md](ARCHITECTURE.md) covers the long-term direction, kept separate
+from the version roadmap below because the two advance at different speeds.
+
 ---
 
 ### Core Concept
