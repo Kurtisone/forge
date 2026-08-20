@@ -648,6 +648,15 @@ short pointer, searchable via `!recall`/`/search`) or `llm_summary` (one LLM cal
 block into prose kept inline). Both share the same signature, so switching is a config change,
 not a rewrite. `POST /compact` (or `!compact` in the REPL) forces a pass on demand.
 
+A message count turned out to be the wrong unit, though, so v3.12 added a
+second trigger alongside it: compaction also fires when the rendered prompt
+crosses `COMPACTION_TOKEN_THRESHOLD` tokens, aiming to bring it back to
+`COMPACTION_TOKEN_TARGET`. Twenty short messages and twenty pasted stack
+traces are the same number and nowhere near the same prompt, and it is the
+prompt that costs. Either trigger can fire; whichever comes first wins.
+`GET /context` reports what the next prompt currently weighs, which is what
+the header gauge in the web UI reads.
+
 Any message can be pinned — the "tiroir" (`GET /drawer`, `POST /drawer/pin`/`unpin`) — which
 exempts it from both compaction and the `MEMORY_MAX_HISTORY` hard cap. The web UI pins a
 question and its answer together by default (an answer read back without its question, or vice
