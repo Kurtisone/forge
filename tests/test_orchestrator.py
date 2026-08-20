@@ -711,7 +711,7 @@ def test_recall_is_a_single_dispatch_that_never_reaches_the_loop_guard(
     )
     calls = []
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         calls.append(prompt)
         if len(calls) == 1:
             return route_call  # the orchestrator's routing call

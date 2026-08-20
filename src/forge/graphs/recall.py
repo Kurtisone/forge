@@ -42,7 +42,7 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import lang, rag
+from forge import lang, prose_grammar, rag
 from forge.config import RECALL_ENFORCE_LANGUAGE, RECALL_MAX_ANSWER_CHARS
 from forge.errors import ProviderError
 from forge.graph import Graph
@@ -229,7 +229,12 @@ def _synthesize_node(state: AgentState) -> AgentState:
         language=language or "unknown",
     )
     try:
-        raw = call_llm(prompt)
+        # Without a grammar, providers/llama_cpp._grammar_for() falls
+        # back to the ROUTER's -- so the sampler admitted only
+        # {"tool":...,"content":...} and the four paragraphs of this
+        # prompt asking for plain text were asking for something the
+        # decoder could not produce. See forge/prose_grammar.py.
+        raw = call_llm(prompt, grammar=prose_grammar.SENTENCE)
         log.event("recall.raw_output", raw=raw)
         answer = _clean_synthesis_response(raw)
 
@@ -249,7 +254,9 @@ def _synthesize_node(state: AgentState) -> AgentState:
                 entries_block,
                 _LANGUAGE_RETRY_LINE.format(language=wanted),
             )
-            second = _clean_synthesis_response(call_llm(retry))
+            second = _clean_synthesis_response(
+                call_llm(retry, grammar=prose_grammar.SENTENCE)
+            )
             # Keep the first answer unless the second is both usable
             # and actually in the right language. A retry that fails
             # the same way twice is the model's limit, not a reason to
