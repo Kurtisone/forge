@@ -441,7 +441,17 @@ RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 # fires on a run that was already wrong, and never fires at all when
 # the language of either text is uncertain. Set false to keep the
 # naming and drop the retry.
-RECALL_ENFORCE_LANGUAGE = os.getenv("RECALL_ENFORCE_LANGUAGE", "true").lower() == "true"
+# Named ENFORCE_ANSWER_LANGUAGE since v3.14, when review, research and
+# sysadmin joined recall in needing it. RECALL_ENFORCE_LANGUAGE is
+# still honoured: it is set in deployed .env files, and silently
+# ignoring a knob someone set is worse than carrying a second name.
+ENFORCE_ANSWER_LANGUAGE = (
+    os.getenv(
+        "ENFORCE_ANSWER_LANGUAGE",
+        os.getenv("RECALL_ENFORCE_LANGUAGE", "true"),
+    ).lower()
+    == "true"
+)
 
 # --- Sysadmin graph (discover -> collect -> synthesize) ---------------------
 # Deliberately read-only, always: no command in graphs/sysadmin.py can

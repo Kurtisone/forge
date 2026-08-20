@@ -29,6 +29,8 @@ else in here is per-language.
 import re
 import unicodedata
 
+from forge.logger import log
+
 UNKNOWN = None
 
 # Function words, not vocabulary: they are the words a sentence can't
@@ -308,3 +310,75 @@ def mismatch(expected_from: str, answer: str) -> str | None:
     if want is None or got is None or want == got:
         return None
     return _NAMES[want]
+
+
+# ---------------------------------------------------------------------
+# The two halves of "answer in the question's language", shared.
+#
+# recall shipped these as module-local strings in v3.12's dettes batch.
+# review, research and sysadmin need the same thing -- their synthesis
+# prompts are English prose bodies pulling a French answer toward
+# English exactly the way recall's was -- and four copies of a wording
+# that has to stay identical is how a fix drifts. The strings live
+# here; each graph keeps its own prompt building, because they differ.
+# ---------------------------------------------------------------------
+
+# Last position, and only ever a language detect() was sure about. The
+# instruction this replaced ("Write in the same language as the
+# question") sat mid-paragraph and asked the model to infer the target
+# for itself; it answered French questions in English anyway.
+_LINE = "\nWrite your answer in {language}. Every word of it.\n"
+
+# Second pass only. Says what was wrong, because "do it again" on its
+# own is what the model just did.
+_RETRY_LINE = (
+    "\nYour previous answer was in the wrong language. The question is "
+    "in {language}. Write the answer again, in {language}, every word "
+    "of it -- same content, same length.\n"
+)
+
+
+def line_for(question: str) -> str:
+    """
+    The instruction to append LAST to a synthesis prompt, or "" when
+    the question's language is uncertain.
+
+    Empty rather than a default, and that is the whole design: forcing
+    an answer into the wrong language is worse than the bug, because
+    the model complies.
+    """
+    language = name(detect(question))
+    return _LINE.format(language=language) if language else ""
+
+
+def enforce(question: str, answer: str, retry, *, enabled: bool = True) -> str:
+    """
+    The deterministic half. `retry` is called with a replacement
+    language line and must return a cleaned answer, so each caller
+    keeps its own prompt shape and its own response cleaning.
+
+    Naming the language in the prompt is still a wording fix, and
+    wording fixes have lost seven times on this codebase. This is the
+    part that does not depend on the model having complied. It costs
+    one extra call, and only on the runs that were already wrong.
+
+    At most one retry, never on an "[error] ..." answer, never when
+    either language is uncertain, and the FIRST answer is kept unless
+    the second is both usable and actually in the right language: an
+    answer whose language is wrong still has the right content, which
+    is more than an error message has.
+    """
+    if not enabled or answer.startswith("[error]"):
+        return answer
+
+    wanted = mismatch(question, answer)
+    if not wanted:
+        return answer
+
+    log.warning("answered in the wrong language (question is %s) -- retrying", wanted)
+    second = retry(_RETRY_LINE.format(language=wanted))
+    if not second.startswith("[error]") and not mismatch(question, second):
+        return second
+
+    log.warning("retry did not fix the language, keeping the first")
+    return answer

@@ -49,8 +49,9 @@ Usage (Python):
 import json
 import subprocess
 
-from forge import prose_grammar, subtrace
+from forge import lang, prose_grammar, subtrace
 from forge.config import (
+    ENFORCE_ANSWER_LANGUAGE,
     SYSADMIN_COLLECT_TIMEOUT,
     SYSADMIN_DBUS_ADDRESS,
     SYSADMIN_DISCOVERY_TIMEOUT,
@@ -418,20 +419,41 @@ def _synthesize_node(state: AgentState) -> AgentState:
         log_block=log_block,
     )
 
+    # Language named in LAST position, and only when forge.lang is
+    # sure -- same treatment recall got in the v3.12 dettes batch, for
+    # the same reason: this prompt body is English prose, and it pulls
+    # a French answer toward English all on its own. Appended rather
+    # than templated in, so "last" cannot drift as the template grows.
+    language_line = lang.line_for(question)
+
     log.event("sysadmin.llm_call", source=source, prompt_chars=len(prompt))
     try:
         # PROSE, not the router grammar -- see forge/prose_grammar.py.
         # This graph has logged "model wrapped a substantive answer in
         # router-style JSON" since v3.11; that was the cause.
-        raw = call_llm(prompt, grammar=prose_grammar.PROSE)
+        raw = call_llm(prompt + language_line, grammar=prose_grammar.PROSE)
+        log.event("sysadmin.raw_output", raw=raw)
+        answer = _clean_diagnosis_response(raw)
+        # The deterministic half. Naming the language in the prompt is
+        # still a wording fix, and wording fixes have lost seven times
+        # on this codebase. The retry re-sends the same prompt with a
+        # different final line, so the KV prefix survives and only the
+        # tail is recomputed.
+        answer = lang.enforce(
+            question,
+            answer,
+            retry=lambda line: _clean_diagnosis_response(
+                call_llm(prompt + line, grammar=prose_grammar.PROSE)
+            ),
+            enabled=ENFORCE_ANSWER_LANGUAGE,
+        )
     except ProviderError as e:
         state.ok = False
         state.error = str(e)
         state.final_output = f"[error] LLM unavailable: {e}"
         return state
 
-    log.event("sysadmin.raw_output", raw=raw)
-    state.final_output = _clean_diagnosis_response(raw)
+    state.final_output = answer
     state.final_tool = "sysadmin"
     log.event("sysadmin.done", chars=len(state.final_output))
     return state

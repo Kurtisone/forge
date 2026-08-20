@@ -46,8 +46,12 @@ Usage (Python):
   print(run("actualités jeu vidéo"))
 """
 
-from forge import prose_grammar
-from forge.config import RESEARCH_FETCH_CHARS_PER_RESULT, RESEARCH_FETCH_TOP_N
+from forge import lang, prose_grammar
+from forge.config import (
+    ENFORCE_ANSWER_LANGUAGE,
+    RESEARCH_FETCH_CHARS_PER_RESULT,
+    RESEARCH_FETCH_TOP_N,
+)
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
@@ -208,20 +212,41 @@ def _synthesize_node(state: AgentState) -> AgentState:
         fetch_block=fetch_block,
     )
 
+    # Language named in LAST position, and only when forge.lang is
+    # sure -- same treatment recall got in the v3.12 dettes batch, for
+    # the same reason: this prompt body is English prose, and it pulls
+    # a French answer toward English all on its own. Appended rather
+    # than templated in, so "last" cannot drift as the template grows.
+    language_line = lang.line_for(query)
+
     log.event("research.llm_call", query=query[:120], prompt_chars=len(prompt))
     try:
         # PROSE, not the router grammar: without one,
         # _grammar_for() supplies the router's and this synthesis can
         # only come back as {"tool":...}. See forge/prose_grammar.py.
-        raw = call_llm(prompt, grammar=prose_grammar.PROSE)
+        raw = call_llm(prompt + language_line, grammar=prose_grammar.PROSE)
+        log.event("research.raw_output", raw=raw)
+        answer = _clean_synthesis_response(raw)
+        # The deterministic half. Naming the language in the prompt is
+        # still a wording fix, and wording fixes have lost seven times
+        # on this codebase. The retry re-sends the same prompt with a
+        # different final line, so the KV prefix survives and only the
+        # tail is recomputed.
+        answer = lang.enforce(
+            query,
+            answer,
+            retry=lambda line: _clean_synthesis_response(
+                call_llm(prompt + line, grammar=prose_grammar.PROSE)
+            ),
+            enabled=ENFORCE_ANSWER_LANGUAGE,
+        )
     except ProviderError as e:
         state.ok = False
         state.error = str(e)
         state.final_output = f"[error] LLM unavailable: {e}"
         return state
 
-    log.event("research.raw_output", raw=raw)
-    state.final_output = _clean_synthesis_response(raw)
+    state.final_output = answer
     state.final_tool = "research"
     log.event("research.done", chars=len(state.final_output))
     return state
