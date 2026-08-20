@@ -227,13 +227,32 @@ src/forge/
 │   ├── web_fetch.py      # fetch a known URL, SSRF-guarded (v3.10)
 │   ├── web_search.py    # SearXNG-backed search, links/snippets only (v3.10)
 │   ├── research.py      # dispatchable wrapper around graphs/research.py (v3.10)
-│   └── sysadmin.py      # dispatchable wrapper around graphs/sysadmin.py (v3.11)
+│   ├── sysadmin.py      # dispatchable wrapper around graphs/sysadmin.py (v3.11)
+│   ├── recall.py        # dispatchable wrapper around graphs/recall.py
+│   └── delegate.py      # dispatchable wrapper around graphs/delegate.py (v3.13) — entry point only
 │
 ├── memory.py            # JSON-backed rolling conversation history + key/value facts
 ├── rag.py               # SQLite-vec vector memory for decisions/todos (v3.7) — separate concern from memory.py
-├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search)
+├── api.py               # FastAPI HTTP server (chat, review, run, traces, tools, remember, search, context, drawer)
 ├── cli.py               # forge review <file> [--tests <path>] / forge replay <run_id> / forge capabilities
-├── main.py              # REPL — !clear, !trace, !remember, !recall, !help
+├── main.py              # REPL — !clear, !compact, !trace, !remember, !recall, !capabilities, !help
+│
+├── turn.py              # one conversational turn, shared by the API and the REPL
+├── tokens.py            # local token estimation, checked against llama-server's own counts (v3.12)
+├── metrics.py           # per-run inference accounting, surfaced in the trace (v3.12)
+├── subtrace.py          # channel letting a graph publish its own node steps to the trace
+├── tool_payload.py      # JSON_PAYLOAD_TOOLS + the tolerant payload parse, one source of truth
+├── gbnf.py              # grammar checks shared by the router and the delegation spec
+├── lang.py              # closed-vocabulary fr/en detection — stays silent when the evidence is thin
+├── text_cleaning.py     # strips think blocks and unwraps router-style JSON from a synthesis answer
+├── context_info.py      # today's date and other context lines injected into prompts
+├── ratelimit.py         # API rate limiting with expiring keys
+│
+├── delegation.py        # the delegation flow ABOVE the router — answers, approval, cancellation (v3.13)
+├── jobs.py              # persisted delegation jobs, its own file rather than a key in memory.json (v3.13)
+├── spec.py              # the delegation spec, one source of truth for its fields (v3.13)
+├── executors.py         # how a ready job is handed off (v3.13)
+├── runner.py            # the thread that runs jobs without blocking the conversation (v3.13)
 │
 ├── kernel/              # Capability layer — see ARCHITECTURE.md
 │   ├── capability.py    # Capability interface, Requirements, ToolCapability
@@ -481,6 +500,28 @@ e.g. behind a proxy that already rate-limits.
 | `SEARXNG_MAX_RESULTS` | Max results returned per search | `5` |
 | `RESEARCH_FETCH_TOP_N` | How many top search results `research` fetches in full before synthesizing | `3` |
 | `RESEARCH_FETCH_CHARS_PER_RESULT` | Per-result fetched-content cap fed into the synthesis prompt | `1500` |
+| `SYSADMIN_DISCOVERY_TIMEOUT` | Timeout for the discovery step (seconds) | `10` |
+| `SYSADMIN_COLLECT_TIMEOUT` | Timeout for each log-collection command (seconds) | `15` |
+| `SYSADMIN_LOG_CHARS_BUDGET` | Hard cap on the log block inserted into the synthesis prompt, independent of line count — truncates keeping the **end** of the log, since that is where the recent events are | `2000` |
+| `RECALL_MAX_ANSWER_CHARS` | Cap on a `recall` answer. Far smaller than `research`'s: a recall answer is one or two facts restated as a sentence, not a multi-source summary | `800` |
+| `RECALL_ENFORCE_LANGUAGE` | After answering, check the language deterministically and retry **once** if it is demonstrably wrong. Never twice, never when either language is uncertain, and a failed retry keeps the first answer — wrong language with the right content beats an error message | `true` |
+| `MEMORY_RECALL_MAX_CHARS` | Cap on what a `memory` recall feeds back into the router prompt | `500` |
+| `MEMORY_HARD_CAP_SLACK` | Headroom above `MEMORY_MAX_HISTORY` before the hard cap fires — sized so it fires rarely rather than every turn | `20` |
+| `COMPACTION_TOKEN_THRESHOLD` | Prompt-token budget above which compaction triggers, alongside the message-count trigger (v3.12) | `6000` |
+| `COMPACTION_TOKEN_TARGET` | What compaction aims to bring the history down to | `3000` |
+| `EMBEDDING_MAX_CHARS` | Text longer than this is split before embedding, rather than truncated | `1500` |
+| `EMBEDDING_MAX_CHUNKS` | Ceiling on chunks per embedded entry | `16` |
+| `DELEGATE_EXECUTOR` | How a ready delegation job is executed. `handoff` writes the spec and stops there | `handoff` |
+| `DELEGATE_DRAFT` | Ask the LLM to draft the spec before showing it. Off by default: on requests specific enough to act on, the draft invented detail the user never gave | `false` |
+| `DELEGATE_ECHO_SECONDS` | Artificial delay in the echo executor, for testing the job lifecycle without a real handoff | `0` |
+| `JOBS_FILE` | Persisted delegation jobs. Its own file rather than a key in `memory.json`: compaction rewrites that file wholesale, and two writers with one whole-file write means the job is what gets lost | `data/jobs.json` |
+| `JOB_TIMEOUT` | Seconds before a running job is considered stuck | `1800` |
+| `API_ALLOW_UNAUTHENTICATED` | Opt in to starting without an `API_TOKEN`. Refuses by default — the API dispatches tools on your machine | `false` |
+| `API_DOCS_ENABLED` | Mount `/docs` and `/redoc`. Off by default | `false` |
+| `ALLOW_MUTATION_AFTER_EXTERNAL_DATA` | Allow `shell`/`test`/`files:write` in the same run **after** external data was fetched. Off by default: the escalation guard is deterministic rather than asked of the model. `files:read` is deliberately non-tainting, to preserve the read-then-write flow | `false` |
+| `POLICY_ALLOW_NETWORK` | Policy Engine: allow capabilities that reach the Internet (`research`, `web_fetch`, `web_search`, `shell`). A deny gate — it only subtracts from what `ENABLED_TOOLS` already permits, and a denied capability is not offered to the router at all | `true` |
+| `POLICY_ALLOW_WORKSPACE_WRITES` | Policy Engine: allow capabilities that can write under `WORKSPACE_DIR` | `true` |
+| `POLICY_ALLOW_SUBPROCESS` | Policy Engine: allow capabilities that spawn a process (`git`, `test`, `sysadmin`, `shell`) | `true` |
 
 ---
 
@@ -500,6 +541,8 @@ e.g. behind a proxy that already rate-limits.
 | `web_search` | `ENABLED_TOOLS=chat,code,web_search` | Ranked links/snippets from a self-hosted SearXNG instance — no synthesis, just the list |
 | `research` | `ENABLED_TOOLS=chat,code,research` | Search → fetch top results → synthesize one answer, as a single deterministic call (see below) |
 | `sysadmin` | `ENABLED_TOOLS=chat,code,sysadmin` | Discover → collect → synthesize: diagnoses a service/system problem from real logs, read-only always — never restarts/stops anything. Works kernel-log-only out of the box; see [`deploy/README.md`](deploy/README.md) for read-only proxies giving it real `journalctl`/`systemctl`/`podman` access |
+| `recall` | `ENABLED_TOOLS=chat,code,memory,recall` | Search vector memory → synthesize an answer, as one deterministic call. Same reasoning as `research` versus `web_search`: `memory`'s own recall returns entries, this returns a sentence. Calls `memory.search()` directly, so `memory` need not also be in `ENABLED_TOOLS` — but its embedding server does need to be reachable |
+| `delegate` | `ENABLED_TOOLS=chat,code,delegate` | Opens a delegation to Claude Code (v3.13): drafts a spec, asks follow-up questions when detail is missing, and hands off once you approve. Only the *entry* point is a tool — answering the questions, approving and cancelling happen above the router in `delegation.py`, so adding `delegate` here does not change how those are handled |
 
 A tool is only dispatchable if it has a `run()` function **and** appears in `ENABLED_TOOLS`.
 Implementing `run()` in a module is not enough — the opt-in is intentional for tools with side effects.
@@ -799,7 +842,10 @@ by hand even when it changed from fail to pass.
 | **v3.9** | done | Context compaction + drawer: `rag_pointer`/`llm_summary` strategies, pin/unpin, `/history` `/drawer` `/compact` endpoints, `!compact` REPL command, files write-diff |
 | **v3.10** | done | Hardening + new tools: dedicated `test` tool, `web_fetch` (SSRF-guarded), `web_search` + `research` (self-hosted SearXNG), review graph gains an optional test-run step and chat-dispatch; router disambiguation fixes (files vs review, tool descriptions/examples for every new tool) found through real usage |
 | **v3.11** | done | Sysadmin: `discover → collect → synthesize` graph diagnosing real service/system problems from logs, read-only always (no restart/stop path exists in the code); UI gains expandable per-step detail (`forge.subtrace`) for every graph-based tool; read-only host access via three independent proxies (`xdg-dbus-proxy` for systemd, a hand-rolled GET-only proxy for podman.sock, a plain bind mount for the journal) rather than raw socket access — real production debugging found and fixed a prompt-injection-shaped example-leak, a context-overflow crash, `systemctl`'s undocumented refusal to honor `DBUS_SYSTEM_BUS_ADDRESS` (switched discovery to `busctl`), and a rootless-podman supplementary-groups gap blocking `journalctl -u` on root-owned services (`--group-add keep-groups`) |
-| **v3.12** | in progress | Router prompt latency: lot 1 adds per-call instrumentation (`ms_per_token` from llama-server's own timings, a cache-reuse signal that does not rely on `tokens_cached`); lot 2 makes the prompt a **pure append** over the previous turn -- closing instructions hoisted above the conversation, a persisted user turn rendered byte-identically to the live one -- taking warm prompt processing from 3.12 to 0.81 ms/token (~3.9x, ~8.4s to ~2.2s per routing call) with zero routing regressions across a 29-fixture A/B (`bench/router_ab.py`) |
+| **v3.12** | done | Instrumentation + router prompt latency, five batches: per-call token accounting from llama-server's own timings; the router prompt made a **pure append** over the previous turn, taking warm prompt processing from 3.12 to 0.81 ms/token (~3.9x, ~8.4s to ~2.2s per routing call) with zero regressions across a 29-fixture A/B (`bench/router_ab.py`); a permanent context gauge in the header with `GET /context`; compaction triggered on a token budget rather than a message count; and file-path grounding in the orchestrator, refusing a write or a review on a path the model invented |
+| **v3.13** | done | Delegation to Claude Code: a spec drafted under its own GBNF grammar, persisted jobs with a checked lifecycle (`draft → awaiting_user → ready → running → done`), the model asking follow-up questions rather than inventing missing detail, cancellation, and a runner thread that hands off without blocking the conversation. Entry is a `delegate` tool, so it stays reachable from the chat thread like everything else |
+| **fix/dettes-v3.12** | done | Six fixes found by running the previous two versions in anger: `test_path` was invisible to the path guard (and so was a raw `pytest <path>` command string), a pasted paragraph in `file_path` is text rather than an unfounded path, `load_memory()` died on valid JSON of the wrong shape, `recall` answered in the wrong language (new `forge/lang.py`, closed-vocabulary fr/en detection that stays silent when unsure), and the `test` tool had neither a description nor an example in the router prompt |
+| **Kernel L2** | this branch | Capability layer and a deterministic Policy Engine — see [ARCHITECTURE.md](ARCHITECTURE.md) and [The Kernel layer](#the-kernel-layer) above. Sits on the architectural maturity axis, not this product roadmap |
 
 ---
 
