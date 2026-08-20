@@ -49,7 +49,7 @@ Usage (Python):
 import json
 import subprocess
 
-from forge import subtrace
+from forge import prose_grammar, subtrace
 from forge.config import (
     SYSADMIN_COLLECT_TIMEOUT,
     SYSADMIN_DBUS_ADDRESS,
@@ -420,7 +420,10 @@ def _synthesize_node(state: AgentState) -> AgentState:
 
     log.event("sysadmin.llm_call", source=source, prompt_chars=len(prompt))
     try:
-        raw = call_llm(prompt)
+        # PROSE, not the router grammar -- see forge/prose_grammar.py.
+        # This graph has logged "model wrapped a substantive answer in
+        # router-style JSON" since v3.11; that was the cause.
+        raw = call_llm(prompt, grammar=prose_grammar.PROSE)
     except ProviderError as e:
         state.ok = False
         state.error = str(e)

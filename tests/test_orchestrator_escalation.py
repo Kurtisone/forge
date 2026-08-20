@@ -21,7 +21,7 @@ def _router(*decisions):
     """Replay a fixed sequence of router decisions, one per call."""
     seq = iter(decisions)
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         return json.dumps(next(seq))
 
     return fake_llm

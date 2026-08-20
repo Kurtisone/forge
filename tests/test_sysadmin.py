@@ -60,7 +60,7 @@ def _fake_run_fixed(cmd, timeout):
 
 def test_sysadmin_discover_lists_units_and_containers(monkeypatch):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "diagnosis")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
 
     state = build_sysadmin().run(
         "", initial_context={"target_hint": None, "question": None}
@@ -72,7 +72,7 @@ def test_sysadmin_discover_lists_units_and_containers(monkeypatch):
 
 def test_sysadmin_collect_uses_unit_when_target_hint_matches_unit(monkeypatch):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "diagnosis")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
 
     state = build_sysadmin().run(
         "", initial_context={"target_hint": "searxng.service", "question": None}
@@ -86,7 +86,7 @@ def test_sysadmin_collect_uses_container_when_target_hint_matches_container(
     monkeypatch,
 ):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "diagnosis")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
 
     state = build_sysadmin().run(
         "", initial_context={"target_hint": "test-container", "question": None}
@@ -103,7 +103,7 @@ def test_sysadmin_collect_falls_back_to_kernel_when_target_not_discovered(
     run's own discovery output must never reach a log command -- it
     silently falls back to kernel logs instead of being trusted."""
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "diagnosis")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
 
     state = build_sysadmin().run(
         "",
@@ -116,7 +116,7 @@ def test_sysadmin_collect_falls_back_to_kernel_when_target_not_discovered(
 
 def test_sysadmin_collect_falls_back_to_kernel_when_no_target_hint(monkeypatch):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "diagnosis")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
 
     state = build_sysadmin().run(
         "", initial_context={"target_hint": None, "question": None}
@@ -145,7 +145,7 @@ def test_sysadmin_never_passes_unvalidated_name_to_subprocess(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, stdout="kernel log", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "diagnosis")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
 
     hostile = "searxng; rm -rf / #"
     build_sysadmin().run("", initial_context={"target_hint": hostile, "question": None})
@@ -162,7 +162,7 @@ def test_sysadmin_prompt_includes_todays_date(monkeypatch):
 
     captured = {}
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         captured["prompt"] = prompt
         return "diagnosis"
 
@@ -184,7 +184,7 @@ def test_sysadmin_happy_path(monkeypatch):
     monkeypatch.setattr(
         sysadmin_mod,
         "call_llm",
-        lambda p: "Le service redémarre car le port est déjà occupé.",
+        lambda p, grammar=None: "Le service redémarre car le port est déjà occupé.",
     )
 
     state = build_sysadmin().run(
@@ -203,7 +203,7 @@ def test_sysadmin_llm_unavailable(monkeypatch):
     monkeypatch.setattr(
         sysadmin_mod,
         "call_llm",
-        lambda p: (_ for _ in ()).throw(ProviderError("down")),
+        lambda p, grammar=None: (_ for _ in ()).throw(ProviderError("down")),
     )
 
     state = build_sysadmin().run(
@@ -217,7 +217,9 @@ def test_sysadmin_llm_unavailable(monkeypatch):
 def test_sysadmin_strips_think_blocks(monkeypatch):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
     monkeypatch.setattr(
-        sysadmin_mod, "call_llm", lambda p: "<think>thinking...</think>Diagnosis."
+        sysadmin_mod,
+        "call_llm",
+        lambda p, grammar=None: "<think>thinking...</think>Diagnosis.",
     )
 
     state = build_sysadmin().run(
@@ -237,7 +239,9 @@ def test_sysadmin_unwraps_substantive_json_wrapped_answer(monkeypatch):
         '{"tool":"chat","content":"Le service redémarre en boucle car '
         'le disque /var est plein à 100%."}'
     )
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: substantive_wrapped)
+    monkeypatch.setattr(
+        sysadmin_mod, "call_llm", lambda p, grammar=None: substantive_wrapped
+    )
 
     state = build_sysadmin().run(
         "", initial_context={"target_hint": None, "question": None}
@@ -271,7 +275,7 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
 
     captured = {}
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         captured["prompt"] = prompt
         return "diagnosis"
 
@@ -343,7 +347,7 @@ def test_sysadmin_discover_handles_nonzero_exit_gracefully(monkeypatch):
         return "kernel log line"
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_nonzero_exit)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "Diagnostic.")
 
     from forge import subtrace
 
@@ -380,7 +384,7 @@ def test_sysadmin_collect_flags_error_in_sub_steps(monkeypatch):
         return "kernel log"
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "Diagnostic.")
 
     from forge import subtrace
 
@@ -409,7 +413,9 @@ def test_sysadmin_discover_handles_missing_executables_gracefully(monkeypatch):
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_missing_binaries)
     monkeypatch.setattr(
-        sysadmin_mod, "call_llm", lambda p: "Diagnostic sur les logs kernel."
+        sysadmin_mod,
+        "call_llm",
+        lambda p, grammar=None: "Diagnostic sur les logs kernel.",
     )
 
     from forge import subtrace
@@ -451,7 +457,7 @@ def test_sysadmin_uses_configured_journal_dir(monkeypatch):
         return "kernel log"
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "Diagnostic.")
 
     sysadmin_mod.run("forge.service", None)
 
@@ -479,7 +485,7 @@ def test_sysadmin_uses_configured_podman_url(monkeypatch):
         return "container log"
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "Diagnostic.")
 
     sysadmin_mod.run("test-container", None)
 
@@ -586,7 +592,9 @@ def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
     from forge import subtrace
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic clair.")
+    monkeypatch.setattr(
+        sysadmin_mod, "call_llm", lambda p, grammar=None: "Diagnostic clair."
+    )
 
     sysadmin_mod.run("searxng.service", None)
 
@@ -618,7 +626,7 @@ def test_sysadmin_discover_detail_caps_long_lists(monkeypatch):
         return "kernel log"
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake_run_fixed_many)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p: "Diagnostic.")
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "Diagnostic.")
 
     from forge import subtrace
 
@@ -643,7 +651,7 @@ def test_sysadmin_rejects_verbatim_example_leak(monkeypatch):
     monkeypatch.setattr(
         sysadmin_mod,
         "call_llm",
-        lambda p: (
+        lambda p, grammar=None: (
             "Le service searxng redémarre en boucle car le port 8888 "
             "est déjà occupé au démarrage d'après les lignes \"address "
             'already in use". Je te propose de vérifier quel processus '
@@ -664,7 +672,9 @@ def test_sysadmin_rejects_verbatim_example_leak(monkeypatch):
 def test_sysadmin_cleans_json_wrapped_response_like_review(monkeypatch):
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
     monkeypatch.setattr(
-        sysadmin_mod, "call_llm", lambda p: '{"tool":"chat","content":"query"}'
+        sysadmin_mod,
+        "call_llm",
+        lambda p, grammar=None: '{"tool":"chat","content":"query"}',
     )
 
     state = build_sysadmin().run(

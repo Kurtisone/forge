@@ -229,7 +229,7 @@ def test_review_prompt_includes_todays_date(tmp_path, monkeypatch):
 
     captured = {}
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         captured["prompt"] = prompt
         return "ok"
 
@@ -243,7 +243,9 @@ def test_review_reads_file_and_calls_llm(tmp_path, monkeypatch):
     test_file = tmp_path / "sample.py"
     test_file.write_text("def add(a, b):\n    return a + b\n")
 
-    monkeypatch.setattr(review_mod, "call_llm", lambda p: "Simple and readable.")
+    monkeypatch.setattr(
+        review_mod, "call_llm", lambda p, grammar=None: "Simple and readable."
+    )
 
     state = build_review().run(
         str(test_file),
@@ -256,7 +258,7 @@ def test_review_reads_file_and_calls_llm(tmp_path, monkeypatch):
 
 
 def test_review_missing_file_is_graceful(monkeypatch):
-    monkeypatch.setattr(review_mod, "call_llm", lambda p: "ok")
+    monkeypatch.setattr(review_mod, "call_llm", lambda p, grammar=None: "ok")
 
     state = build_review().run(
         "/nonexistent/file.py",
@@ -273,7 +275,9 @@ def test_review_provider_failure(tmp_path, monkeypatch):
     test_file.write_text("x = 1")
 
     monkeypatch.setattr(
-        review_mod, "call_llm", lambda p: (_ for _ in ()).throw(ProviderError("down"))
+        review_mod,
+        "call_llm",
+        lambda p, grammar=None: (_ for _ in ()).throw(ProviderError("down")),
     )
     state = build_review().run(
         str(test_file),
@@ -305,7 +309,7 @@ def test_review_shows_degenerate_json_echo_instead_of_silently_truncating(
     src_file.write_text("package main")
 
     degenerate_raw = '{"tool":"chat","content":"hello.go"}'
-    monkeypatch.setattr(review_mod, "call_llm", lambda p: degenerate_raw)
+    monkeypatch.setattr(review_mod, "call_llm", lambda p, grammar=None: degenerate_raw)
 
     state = build_review().run(
         str(src_file),
@@ -339,7 +343,9 @@ def test_review_unwraps_substantive_json_wrapped_answer(tmp_path, monkeypatch):
         "Hello World program. There are no performance, security, or "
         'correctness issues to address." }'
     )
-    monkeypatch.setattr(review_mod, "call_llm", lambda p: substantive_wrapped)
+    monkeypatch.setattr(
+        review_mod, "call_llm", lambda p, grammar=None: substantive_wrapped
+    )
 
     state = build_review().run(
         str(src_file),
@@ -358,7 +364,9 @@ def test_review_does_not_unwrap_degenerate_short_json_content(tmp_path, monkeypa
     src_file.write_text("package main")
 
     degenerate_wrapped = '{"tool":"chat","content":"hello.go"}'
-    monkeypatch.setattr(review_mod, "call_llm", lambda p: degenerate_wrapped)
+    monkeypatch.setattr(
+        review_mod, "call_llm", lambda p, grammar=None: degenerate_wrapped
+    )
 
     state = build_review().run(
         str(src_file),
@@ -397,7 +405,9 @@ def test_review_strips_think_blocks_from_response(tmp_path, monkeypatch):
     monkeypatch.setattr(
         review_mod,
         "call_llm",
-        lambda p: "<think>reasoning about the code...</think>Looks fine overall.",
+        lambda p, grammar=None: (
+            "<think>reasoning about the code...</think>Looks fine overall."
+        ),
     )
 
     state = build_review().run(
@@ -423,7 +433,7 @@ def test_review_long_response_is_not_capped_at_400_chars(tmp_path, monkeypatch):
 
     long_answer = "This is a detailed review point. " * 20  # ~700 chars
     assert len(long_answer) > 400
-    monkeypatch.setattr(review_mod, "call_llm", lambda p: long_answer)
+    monkeypatch.setattr(review_mod, "call_llm", lambda p, grammar=None: long_answer)
 
     state = build_review().run(
         str(src_file),
@@ -442,7 +452,7 @@ def test_review_with_test_path_runs_tests_first(tmp_path, monkeypatch):
     monkeypatch.setattr(test_tool_mod, "run", lambda cmd: "2 passed")
     captured_prompt = {}
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         captured_prompt["prompt"] = prompt
         return "Looks correct, tests pass."
 
@@ -469,7 +479,7 @@ def test_review_without_test_path_skips_run_tests_node(tmp_path, monkeypatch):
     src_file = tmp_path / "f.py"
     src_file.write_text("x = 1")
 
-    monkeypatch.setattr(review_mod, "call_llm", lambda p: "ok")
+    monkeypatch.setattr(review_mod, "call_llm", lambda p, grammar=None: "ok")
 
     state = build_review().run(
         str(src_file),

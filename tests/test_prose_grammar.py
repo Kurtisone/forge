@@ -108,3 +108,48 @@ def test_recall_asks_for_a_sentence_grammar(monkeypatch):
 
     assert state.final_output == "Tu as un Steam Deck."
     assert seen == [prose_grammar.SENTENCE]
+
+
+# The two places a routing decision is genuinely what is wanted, so
+# inheriting the router grammar is correct. Everything else that calls
+# the model wants prose and must say so.
+_ROUTER_CALLERS = {"forge/orchestrator.py", "forge/graphs/default.py"}
+
+
+def _call_llm_sites():
+    import ast
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "src"
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            if name == "call_llm":
+                yield str(path.relative_to(root)), node
+
+
+def test_every_model_call_says_which_shape_it_wants():
+    """
+    The invariant, rather than the four fixes.
+
+    A new graph that calls call_llm(prompt) inherits the router's
+    grammar silently -- nothing at the call site says so, which is how
+    recall, review, research and sysadmin all ended up sampling a
+    routing decision while their prompts begged for plain text. This
+    fails on the next one instead of shipping the fifth instance.
+    """
+    unconstrained = [
+        module
+        for module, node in _call_llm_sites()
+        if module not in _ROUTER_CALLERS
+        and not any(kw.arg == "grammar" for kw in node.keywords)
+        and len(node.args) < 2
+    ]
+    assert not unconstrained, (
+        "these call the model without saying what shape they expect, so "
+        f"they get the router's grammar: {unconstrained}"
+    )

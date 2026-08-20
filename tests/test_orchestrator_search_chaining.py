@@ -38,7 +38,9 @@ _RESULTS = "[web_search] 1. Qwen3.5 release notes - https://example.org/q - ..."
 def _scripted(monkeypatch, decisions):
     """Feed the router one canned decision per step, in order."""
     calls = iter(decisions)
-    monkeypatch.setattr(orch_mod, "call_llm", lambda p: json.dumps(next(calls)))
+    monkeypatch.setattr(
+        orch_mod, "call_llm", lambda p, grammar=None: json.dumps(next(calls))
+    )
 
 
 @pytest.fixture(autouse=True)

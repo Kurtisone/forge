@@ -148,7 +148,7 @@ def test_default_graph_successful_run(monkeypatch):
     monkeypatch.setattr(
         default_mod,
         "call_llm",
-        lambda p: json.dumps({"tool": "chat", "content": "Bonjour !"}),
+        lambda p, grammar=None: json.dumps({"tool": "chat", "content": "Bonjour !"}),
     )
     state = build().run("Salut")
     assert state.ok
@@ -161,7 +161,9 @@ def test_default_graph_successful_run(monkeypatch):
 def test_default_graph_provider_failure_triggers_fallback(monkeypatch):
     load_tools()
     monkeypatch.setattr(
-        default_mod, "call_llm", lambda p: (_ for _ in ()).throw(ProviderError("down"))
+        default_mod,
+        "call_llm",
+        lambda p, grammar=None: (_ for _ in ()).throw(ProviderError("down")),
     )
     state = build().run("hello")
     assert state.ok  # fallback recovered
@@ -172,7 +174,9 @@ def test_default_graph_provider_failure_triggers_fallback(monkeypatch):
 def test_default_graph_to_result(monkeypatch):
     load_tools()
     monkeypatch.setattr(
-        default_mod, "call_llm", lambda p: json.dumps({"tool": "chat", "content": "hi"})
+        default_mod,
+        "call_llm",
+        lambda p, grammar=None: json.dumps({"tool": "chat", "content": "hi"}),
     )
     result = build().run("hello").to_result()
     assert result.ok

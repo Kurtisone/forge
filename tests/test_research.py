@@ -25,7 +25,7 @@ def test_research_prompt_includes_todays_date(monkeypatch):
 
     captured = {}
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         captured["prompt"] = prompt
         return "answer"
 
@@ -53,7 +53,9 @@ def test_research_happy_path(monkeypatch):
         research_mod.web_fetch, "run", lambda url: f"Full content of {url}"
     )
     monkeypatch.setattr(
-        research_mod, "call_llm", lambda p: "Zig est un langage moderne et rapide."
+        research_mod,
+        "call_llm",
+        lambda p, grammar=None: "Zig est un langage moderne et rapide.",
     )
 
     state = build_research().run("Zig", initial_context={"query": "Zig"})
@@ -106,7 +108,7 @@ def test_research_partial_fetch_failure_does_not_block_synthesis(monkeypatch):
 
     captured_prompt = {}
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         captured_prompt["prompt"] = prompt
         return "Synthesized answer."
 
@@ -136,7 +138,7 @@ def test_research_respects_fetch_top_n(monkeypatch):
         return f"content of {url}"
 
     monkeypatch.setattr(research_mod.web_fetch, "run", fake_fetch)
-    monkeypatch.setattr(research_mod, "call_llm", lambda p: "answer")
+    monkeypatch.setattr(research_mod, "call_llm", lambda p, grammar=None: "answer")
 
     build_research().run("query", initial_context={"query": "query"})
 
@@ -155,7 +157,7 @@ def test_research_llm_unavailable(monkeypatch):
     monkeypatch.setattr(
         research_mod,
         "call_llm",
-        lambda p: (_ for _ in ()).throw(ProviderError("down")),
+        lambda p, grammar=None: (_ for _ in ()).throw(ProviderError("down")),
     )
 
     state = build_research().run("query", initial_context={"query": "query"})
@@ -186,7 +188,9 @@ def test_research_unwraps_substantive_json_wrapped_answer(monkeypatch):
         "attendues cette année, dont plusieurs titres AAA et des "
         'suites tres attendues par la communaute des joueurs."}'
     )
-    monkeypatch.setattr(research_mod, "call_llm", lambda p: substantive_wrapped)
+    monkeypatch.setattr(
+        research_mod, "call_llm", lambda p, grammar=None: substantive_wrapped
+    )
 
     state = build_research().run("query", initial_context={"query": "query"})
 
@@ -206,7 +210,9 @@ def test_research_cleans_json_wrapped_response_like_review(monkeypatch):
     )
     monkeypatch.setattr(research_mod.web_fetch, "run", lambda url: "content")
     monkeypatch.setattr(
-        research_mod, "call_llm", lambda p: '{"tool":"chat","content":"query"}'
+        research_mod,
+        "call_llm",
+        lambda p, grammar=None: '{"tool":"chat","content":"query"}',
     )
 
     state = build_research().run("query", initial_context={"query": "query"})
@@ -224,7 +230,7 @@ def test_research_strips_think_blocks(monkeypatch):
     monkeypatch.setattr(
         research_mod,
         "call_llm",
-        lambda p: "<think>thinking...</think>Final answer.",
+        lambda p, grammar=None: "<think>thinking...</think>Final answer.",
     )
 
     state = build_research().run("query", initial_context={"query": "query"})

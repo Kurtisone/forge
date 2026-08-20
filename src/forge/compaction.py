@@ -25,7 +25,7 @@ copy of that arithmetic would be a second definition of the same fact,
 free to drift from the one that matters.
 """
 
-from forge import rag
+from forge import prose_grammar, rag
 from forge.config import (
     COMPACTION_ENABLED,
     COMPACTION_KEEP_RECENT,
@@ -238,7 +238,11 @@ def _strategy_llm_summary(messages: list[dict]) -> dict:
     )
 
     try:
-        summary = call_llm(prompt)
+        # A summary is prose too. Under the router grammar this
+        # strategy could only ever produce a routing decision, which
+        # would then be pasted into the history as the compacted
+        # block -- and COMPACTION_STRATEGY is one config line away.
+        summary = call_llm(prompt, grammar=prose_grammar.PROSE)
     except ProviderError as e:
         log.error("compaction: llm_summary strategy failed: %s", e)
         raise CompactionError(str(e)) from e

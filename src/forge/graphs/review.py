@@ -47,6 +47,7 @@ Usage (Python):
 
 from pathlib import Path
 
+from forge import prose_grammar
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
@@ -328,7 +329,8 @@ def _llm_review_node(state: AgentState) -> AgentState:
 
     log.event("review.llm_call", filename=filename, prompt_chars=len(prompt))
     try:
-        raw = call_llm(prompt)
+        # PROSE, not the router grammar -- see forge/prose_grammar.py.
+        raw = call_llm(prompt, grammar=prose_grammar.PROSE)
     except ProviderError as e:
         state.ok = False
         state.error = str(e)

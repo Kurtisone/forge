@@ -46,6 +46,7 @@ Usage (Python):
   print(run("actualités jeu vidéo"))
 """
 
+from forge import prose_grammar
 from forge.config import RESEARCH_FETCH_CHARS_PER_RESULT, RESEARCH_FETCH_TOP_N
 from forge.context_info import today_line
 from forge.errors import ProviderError
@@ -209,7 +210,10 @@ def _synthesize_node(state: AgentState) -> AgentState:
 
     log.event("research.llm_call", query=query[:120], prompt_chars=len(prompt))
     try:
-        raw = call_llm(prompt)
+        # PROSE, not the router grammar: without one,
+        # _grammar_for() supplies the router's and this synthesis can
+        # only come back as {"tool":...}. See forge/prose_grammar.py.
+        raw = call_llm(prompt, grammar=prose_grammar.PROSE)
     except ProviderError as e:
         state.ok = False
         state.error = str(e)

@@ -145,7 +145,9 @@ def test_llm_summary_strategy(monkeypatch):
     monkeypatch.setattr(compaction, "COMPACTION_STRATEGY", "llm_summary")
     monkeypatch.setattr(compaction, "COMPACTION_THRESHOLD", 1)
     monkeypatch.setattr(compaction, "COMPACTION_KEEP_RECENT", 1)
-    monkeypatch.setattr("forge.llm.call_llm", lambda prompt: "résumé condensé")
+    monkeypatch.setattr(
+        "forge.llm.call_llm", lambda prompt, grammar=None: "résumé condensé"
+    )
     history = _messages(5)
 
     result = compaction.maybe_compact(history)

@@ -36,7 +36,9 @@ def scripted(monkeypatch):
     monkeypatch.setattr(
         orch_mod,
         "call_llm",
-        lambda p: json.dumps({"tool": "chat", "content": "ok", "done": True}),
+        lambda p, grammar=None: json.dumps(
+            {"tool": "chat", "content": "ok", "done": True}
+        ),
     )
 
 
