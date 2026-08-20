@@ -20,6 +20,38 @@ def isolated_memory_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def memory_enabled(monkeypatch):
+    """
+    Pin MEMORY_ENABLED on for every test.
+
+    Same class of bug as permissive_policy below, and found the same
+    way: five tests write a turn and then read it back, so with
+    MEMORY_ENABLED=false in the developer's environment they fail on an
+    empty history for a reason no assertion mentions. Nothing was
+    broken in the product -- the tests were simply not hermetic, and
+    they had been failing on `main` since before the kernel branch.
+
+    Both importers are patched, not just the config module. api.py and
+    orchestrator.py do `from forge.config import MEMORY_ENABLED`, which
+    copies the VALUE at import time, so setting it on forge.config
+    afterwards changes nothing they read. Three tests in
+    test_orchestrator.py already did exactly this by hand; this makes
+    it the default instead of something each new test has to remember.
+
+    The cost of pinning it here is that no test would exercise the
+    `false` branch any more -- so tests/test_memory_disabled.py exists
+    to cover it explicitly, by switching the flag off itself. A
+    monkeypatch applied inside a test overrides this one and is undone
+    first.
+    """
+    from forge import api, config, orchestrator
+
+    for module in (config, api, orchestrator):
+        monkeypatch.setattr(module, "MEMORY_ENABLED", True)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def permissive_policy(monkeypatch):
     """
     Pin the Policy Engine open for every test.
