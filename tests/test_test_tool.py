@@ -262,3 +262,39 @@ def test_the_router_prompt_teaches_the_runner_first_shape():
     assert "content is the input this tool expects" not in prompt
     assert '"pytest tests/test_graph.py"' in prompt
     assert '"ruff check src/forge/graph.py"' in prompt
+
+
+def test_a_missing_runner_is_reported_as_a_deployment_gap(monkeypatch):
+    """
+    The shipped image installs requirements.txt only, and pytest/ruff
+    live in requirements-dev.txt -- so in the container this tool
+    cannot run at all. Two real runs on 2026-08-19 came back with the
+    old "executable not found (not on PATH)" wording and it was read
+    as the path-grounding guard refusing them. It was the deployment.
+    """
+    monkeypatch.setattr(test_mod.shutil, "which", lambda name: None)
+
+    out = test_mod.run("pytest tests/")
+
+    assert out.startswith("[error]")
+    assert "not installed" in out
+    assert "requirements-dev.txt" in out
+    # Must not read as a refusal: nothing was blocked here.
+    assert "not allowed" not in out
+    assert "allowlist" not in out
+
+
+def test_the_startup_tripwire_names_the_runners_that_are_absent(monkeypatch):
+    monkeypatch.setattr(test_mod, "TEST_ALLOWED_COMMANDS", {"pytest", "ruff", "sh"})
+    monkeypatch.setattr(
+        test_mod.shutil, "which", lambda name: None if name != "sh" else "/bin/sh"
+    )
+
+    assert test_mod._missing_runners() == ["pytest", "ruff"]
+
+
+def test_the_tripwire_stays_quiet_when_the_runners_are_there(monkeypatch):
+    monkeypatch.setattr(test_mod, "TEST_ALLOWED_COMMANDS", {"pytest"})
+    monkeypatch.setattr(test_mod.shutil, "which", lambda name: "/usr/bin/pytest")
+
+    assert test_mod._missing_runners() == []
