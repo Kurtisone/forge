@@ -30,6 +30,8 @@ Interface: run(content: str) -> str
   content is the search query, e.g. "actualités bourse aujourd'hui"
 """
 
+import threading
+
 import requests
 
 from forge.config import SEARXNG_MAX_RESULTS, SEARXNG_TIMEOUT, SEARXNG_URL
@@ -46,6 +48,63 @@ REQUIREMENTS = Requirements(
 
 
 _MAX_SNIPPET_CHARS = 300
+
+# Names of the engines SearXNG itself reported as down on the last
+# search, as a side channel rather than a second return value.
+#
+# SearXNG answers 200 with results:[] when every engine behind it
+# failed, which is byte-identical to a query that genuinely matched
+# nothing. Forge was throwing away the one field that tells them
+# apart, so a dead backend read as "aucun résultat" -- and on
+# 2026-08-19 that cost a diagnosis: all five engines were timing out
+# on a DNS fault and nothing said so.
+#
+# A side channel, because search() returning a tuple would change the
+# contract of the one function graphs/research.py depends on, for
+# information most callers have no use for. Thread-local for the same
+# reason turn.py is: api.py serves turns from a two-worker pool, and a
+# plain module global would let one run report the other run's dead
+# engines.
+_local = threading.local()
+
+
+def last_unresponsive() -> list[str]:
+    """Engines that failed during the most recent search() ON THIS
+    THREAD, or [] outside a search. Only meaningful immediately after
+    a search() call -- it is not a health history."""
+    return list(getattr(_local, "unresponsive", ()))
+
+
+def _normalize_unresponsive(raw: object) -> list[str]:
+    """
+    SearXNG's unresponsive_engines is not one shape. Depending on the
+    version it holds ["google", ...], [["google", "timeout"], ...] or
+    [{"engine": "google", ...}, ...]. All three are read here, and
+    anything else is reduced to str() rather than dropped: an engine
+    name Forge failed to parse is still evidence the backend fell
+    over, which is the whole point of reading this field.
+
+    Never raises. This runs on the success path of every search, and a
+    diagnostic that can break the thing it diagnoses is worse than no
+    diagnostic.
+    """
+    if not isinstance(raw, list):
+        return []
+
+    names: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            name = entry
+        elif isinstance(entry, dict):
+            name = str(entry.get("engine") or entry.get("name") or entry)
+        elif isinstance(entry, (list, tuple)) and entry:
+            name = str(entry[0])
+        else:
+            name = str(entry)
+        name = name.strip()
+        if name:
+            names.append(name)
+    return names
 
 
 class SearchError(Exception):
@@ -64,6 +123,10 @@ def search(query: str) -> list[dict]:
     dispatch.
     """
     query = query.strip()
+    # Cleared first, not on the way out: every path below can raise,
+    # and a stale list from an earlier search on this thread would
+    # blame engines that had nothing to do with this query.
+    _local.unresponsive = []
     if not query:
         raise SearchError("empty search query")
 
@@ -91,13 +154,42 @@ def search(query: str) -> list[dict]:
             "in its settings.yml (disabled by default upstream)"
         ) from None
 
+    unresponsive = _normalize_unresponsive(data.get("unresponsive_engines"))
+    _local.unresponsive = unresponsive
+
     results = data.get("results", [])[:SEARXNG_MAX_RESULTS]
-    log.event("web_search.done", query=query[:120], results=len(results))
+    log.event(
+        "web_search.done",
+        query=query[:120],
+        results=len(results),
+        unresponsive=len(unresponsive),
+    )
+    if unresponsive:
+        # Warning even when results came back: a partial outage still
+        # narrows what was searched, and the ranking above is not the
+        # ranking the query would have had.
+        log.warning(
+            "web_search: SearXNG reported %d unresponsive engine(s): %s",
+            len(unresponsive),
+            ", ".join(unresponsive),
+        )
     return results
 
 
 def _format_results(query: str, results: list[dict]) -> str:
     if not results:
+        down = last_unresponsive()
+        if down:
+            # Deliberately not "[no results]". The two are the same
+            # HTTP response and mean opposite things: one says the web
+            # has no answer, the other says Forge did not get to look.
+            # Told the first, the model answers from its own weights
+            # and sounds just as confident.
+            return (
+                f"[error] search backend failure for query {query!r}: "
+                f"no engine answered ({len(down)} down: {', '.join(down)}). "
+                "This is not an empty result -- the search did not run."
+            )
         return f"[no results] for query: {query!r}"
 
     lines = [f"Search results for {query!r}:"]
