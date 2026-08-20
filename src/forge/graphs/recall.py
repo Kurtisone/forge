@@ -146,7 +146,42 @@ def _recall_node(state: AgentState) -> AgentState:
         return state
 
     state.context["results"] = results
-    log.event("recall.search", query=query[:120], results=len(results))
+    # What the RAG actually returned, not just how many.
+    #
+    # On 2026-08-19 a recall answer welded two unrelated memories into
+    # one invented causality ("corriger le cache KV en réparant la
+    # pagination du journal"). From the log of the day it was not
+    # possible to tell which of two very different bugs that was: the
+    # retrieval handing the synthesis two entries with nothing in
+    # common, or the synthesis inventing a link between two entries
+    # that were legitimately related. Those want opposite fixes.
+    #
+    # rag.search has always selected v.distance and nothing has ever
+    # read it. It is the number that separates "the second hit was a
+    # close match" from "the second hit was the least bad of five",
+    # which is the question here.
+    #
+    # Observation only, deliberately. A distance cutoff is the obvious
+    # next move and would be step three of Primitive -> Observable ->
+    # Optimisable taken without step two: nobody can pick that
+    # threshold from first principles, and picking it off no
+    # measurement is how COMPACTION_THRESHOLD got its first value.
+    log.event(
+        "recall.search",
+        query=query[:120],
+        results=len(results),
+        entries=[
+            {
+                "id": r.get("id"),
+                "kind": r.get("kind"),
+                "distance": round(d, 4)
+                if isinstance(d := r.get("distance"), float)
+                else d,
+                "head": (r.get("content") or "")[:80],
+            }
+            for r in results
+        ],
+    )
     return state
 
 
