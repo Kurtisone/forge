@@ -58,6 +58,7 @@ from forge.config import (
     LLM_MODEL,
     MEMORY_ENABLED,
 )
+from forge.logger import log
 from forge.orchestrator import Orchestrator
 from forge.router import build_router_prompt
 from forge.tokens import estimate_tokens
@@ -94,9 +95,44 @@ def check_auth_configuration() -> None:
     )
 
 
+def log_effective_settings() -> None:
+    """
+    Print the settings whose wrong value has no symptom other than
+    latency, once, at startup.
+
+    LLAMA_CPP_CACHE_PROMPT sat at false in the container for weeks
+    while config.py's default said true, costing roughly 75% of every
+    run's wall time. Nothing was broken, nothing was logged, and the
+    hunt went through the model architecture and three llama-server
+    flags before reaching the .env. The compaction thresholds are in
+    the same class: a value nobody remembers setting produces passes
+    that look inexplicable in the log and one slow turn afterwards.
+
+    Reads the modules' own attributes rather than re-importing the
+    constants, so what is printed is what the code will actually use.
+    """
+    from forge import compaction
+    from forge.providers import llama_cpp
+
+    log.event(
+        "config.effective",
+        provider=FORGE_PROVIDER,
+        cache_prompt=llama_cpp.LLAMA_CPP_CACHE_PROMPT,
+        use_grammar=llama_cpp.LLAMA_CPP_USE_GRAMMAR,
+        memory_enabled=MEMORY_ENABLED,
+        compaction_enabled=compaction.COMPACTION_ENABLED,
+        compaction_threshold=compaction.COMPACTION_THRESHOLD,
+        compaction_token_threshold=compaction.COMPACTION_TOKEN_THRESHOLD,
+        compaction_token_target=compaction.COMPACTION_TOKEN_TARGET,
+        compaction_keep_recent=compaction.COMPACTION_KEEP_RECENT,
+        compaction_strategy=compaction.COMPACTION_STRATEGY,
+    )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     check_auth_configuration()
+    log_effective_settings()
     # A job left RUNNING on disk is a lie as soon as this process is
     # new: whatever was executing it died with the previous one.
     jobs.reconcile()

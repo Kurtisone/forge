@@ -81,22 +81,60 @@ def maybe_compact(history: list[dict], force: bool = False) -> list[dict]:
     to_compact, to_keep = unpinned[:split], unpinned[split:]
 
     summary_message = _run_strategy(to_compact)
+    compacted = [*pinned, summary_message, *to_keep]
+
+    # Everything needed to answer "why did this fire?" from one line.
+    #
+    # This exists because a compaction was seen firing on 2026-08-19
+    # with the message threshold nowhere near reached, and the log of
+    # the day could not settle it: it named a trigger but neither the
+    # message count nor the thresholds in force. The two likeliest
+    # explanations -- the token trigger doing its job invisibly, or a
+    # deployed .env holding a threshold nobody remembers setting --
+    # look identical when the only numbers logged are the ones the code
+    # computed.
+    #
+    # The second is not hypothetical here. LLAMA_CPP_CACHE_PROMPT sat
+    # at false in the container for weeks, costing about 75% of every
+    # run, precisely because the effective value was never printed
+    # anywhere. Log what was measured AND what it was measured against.
+    #
+    # rendered_after says what the pass bought, which is the number
+    # that predicts whether it runs again next turn -- landing just
+    # under the threshold is the per-turn eviction MEMORY_HARD_CAP_SLACK
+    # exists to record, and it has no symptom other than latency.
+    triggers = [
+        name
+        for name, fired in (
+            ("messages", over_messages),
+            ("tokens", over_tokens),
+            ("forced", force),
+        )
+        if fired
+    ]
     log.event(
         "compaction.run",
         strategy=COMPACTION_STRATEGY,
-        trigger="tokens"
-        if over_tokens
-        else ("messages" if over_messages else "forced"),
+        # A list, not the first match: a pass at 100 messages AND 7000
+        # tokens used to be labelled "tokens", hiding the fact that the
+        # count threshold had been crossed too.
+        trigger="+".join(triggers) or "none",
+        messages=len(history),
         rendered_tokens=rendered,
+        rendered_after=estimate_history_tokens(compacted),
         compacted=len(to_compact),
         kept=len(to_keep),
         pinned=len(pinned),
+        threshold_messages=COMPACTION_THRESHOLD,
+        threshold_tokens=COMPACTION_TOKEN_THRESHOLD,
+        target_tokens=COMPACTION_TOKEN_TARGET,
+        keep_recent=COMPACTION_KEEP_RECENT,
     )
 
     # Pinned messages are the "tiroir": kept as a distinct block ahead
     # of the summary rather than re-threaded back into strict
     # chronological order.
-    return [*pinned, summary_message, *to_keep]
+    return compacted
 
 
 def _split_for_token_target(pinned: list[dict], unpinned: list[dict]) -> int:
