@@ -391,6 +391,7 @@ def test_review_prompt_includes_json_warning_and_worked_example():
         question="Q?",
         content="x=1",
         test_section="",
+        truncation_note="",
     )
     assert "GOOD ANSWER" in prompt
     assert "NEVER DO THIS" in prompt
