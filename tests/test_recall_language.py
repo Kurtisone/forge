@@ -33,7 +33,7 @@ def _run(monkeypatch, replies, question=FR_QUESTION):
     """Run the graph over a scripted list of model replies."""
     calls = []
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         calls.append(prompt)
         return replies[min(len(calls) - 1, len(replies) - 1)]
 
@@ -89,7 +89,7 @@ def test_a_retry_that_fails_the_same_way_keeps_the_first_answer(monkeypatch):
 
 
 def test_the_retry_can_be_turned_off(monkeypatch):
-    monkeypatch.setattr(recall_mod, "RECALL_ENFORCE_LANGUAGE", False)
+    monkeypatch.setattr(recall_mod, "ENFORCE_ANSWER_LANGUAGE", False)
     state, calls = _run(monkeypatch, [EN_ANSWER, FR_ANSWER])
 
     assert len(calls) == 1
@@ -115,7 +115,7 @@ def test_a_provider_failure_during_the_retry_is_still_a_provider_failure(monkeyp
 
     calls = []
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         calls.append(prompt)
         if len(calls) == 1:
             return EN_ANSWER

@@ -199,7 +199,7 @@ def test_persisted_user_turn_is_rendered_exactly_like_the_live_turn(monkeypatch)
     """
     captured = {}
 
-    def capture_and_answer(prompt):
+    def capture_and_answer(prompt, grammar=None):
         captured["prompt"] = prompt
         return json.dumps({"tool": "chat", "content": "ok"})
 
@@ -380,7 +380,7 @@ def test_read_then_write_flow_actually_updates_the_file(monkeypatch, tmp_path):
 
     calls = {"n": 0}
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return json.dumps(
@@ -439,7 +439,7 @@ def test_multi_step_run_persists_exactly_one_clean_exchange(monkeypatch, tmp_pat
 
     calls = {"n": 0}
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return json.dumps(
@@ -476,7 +476,7 @@ def test_multi_step_run_keeps_history_untouched_by_step_context(monkeypatch):
     calls = {"n": 0}
     seen_history_by_call = []
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return json.dumps({"tool": "code", "content": "print(1)", "done": False})
@@ -504,7 +504,7 @@ def test_multi_step_run_keeps_history_untouched_by_step_context(monkeypatch):
 def test_provider_failure_is_reported_not_raised(monkeypatch):
     from forge.errors import ProviderError
 
-    def boom(prompt):
+    def boom(prompt, grammar=None):
         raise ProviderError("backend down")
 
     monkeypatch.setattr(orch_mod, "call_llm", boom)
@@ -549,7 +549,7 @@ def test_done_false_continues_to_a_second_step(monkeypatch):
     """
     calls = {"n": 0}
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return json.dumps({"tool": "code", "content": "print(1)", "done": False})
@@ -586,7 +586,7 @@ def test_memory_recall_done_false_rephrases_naturally(monkeypatch, tmp_path):
 
     calls = {"n": 0}
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return json.dumps(
@@ -674,7 +674,7 @@ def test_memory_repeated_call_now_hard_fails_like_any_other_tool(monkeypatch, tm
             "done": False,
         }
     )
-    monkeypatch.setattr(orch_mod, "call_llm", lambda p: remember_call)
+    monkeypatch.setattr(orch_mod, "call_llm", lambda p, grammar=None: remember_call)
 
     result = Orchestrator(max_steps=2).run("mémorise deux fois la même chose")
 
@@ -711,7 +711,7 @@ def test_recall_is_a_single_dispatch_that_never_reaches_the_loop_guard(
     )
     calls = []
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         calls.append(prompt)
         if len(calls) == 1:
             return route_call  # the orchestrator's routing call
@@ -754,7 +754,7 @@ def test_web_search_repeated_call_degrades_gracefully_instead_of_erroring(
         {"tool": "web_search", "content": "langage Zig", "done": False}
     )
     # Always returns the identical call -> the loop guard trips on step 2.
-    monkeypatch.setattr(orch_mod, "call_llm", lambda p: search_call)
+    monkeypatch.setattr(orch_mod, "call_llm", lambda p, grammar=None: search_call)
 
     result = Orchestrator(max_steps=2).run("Cherche des infos sur Zig")
 
@@ -772,7 +772,9 @@ def test_non_memory_non_web_search_tool_repeat_still_hard_fails(monkeypatch):
     monkeypatch.setattr(
         orch_mod,
         "call_llm",
-        lambda p: json.dumps({"tool": "code", "content": "print(1)", "done": False}),
+        lambda p, grammar=None: json.dumps(
+            {"tool": "code", "content": "print(1)", "done": False}
+        ),
     )
     result = Orchestrator(max_steps=3).run("write code")
 
@@ -790,7 +792,7 @@ def test_done_false_stops_at_max_steps_without_crashing(monkeypatch):
     additional failure mode on top of it.
     """
 
-    def fake_llm(prompt):
+    def fake_llm(prompt, grammar=None):
         # Vary content so the loop-guard (seen_calls) never triggers.
         n = fake_llm.n
         fake_llm.n += 1

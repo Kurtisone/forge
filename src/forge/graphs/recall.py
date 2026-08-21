@@ -43,7 +43,7 @@ Usage (Python):
 """
 
 from forge import lang, rag
-from forge.config import RECALL_ENFORCE_LANGUAGE, RECALL_MAX_ANSWER_CHARS
+from forge.config import ENFORCE_ANSWER_LANGUAGE, RECALL_MAX_ANSWER_CHARS
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
@@ -129,25 +129,6 @@ not the NEVER DO THIS shape. Be concise.
 {language_line}"""
 
 
-# Named language, in last position, and only ever a language forge.lang
-# was sure about. The instruction it replaces ("Write in the same
-# language as the question") sat mid-paragraph and asked the model to
-# infer the target for itself; it answered French questions in English
-# anyway. Naming it removes the inference, and last position is the
-# one thing measurably worth having in this prompt -- everything above
-# competes with an English prompt body pulling the answer toward
-# English.
-_LANGUAGE_LINE = "\nWrite your answer in {language}. Every word of it.\n"
-
-# Second pass only. Says what was wrong, because "do it again" on its
-# own is what the model just did.
-_LANGUAGE_RETRY_LINE = (
-    "\nYour previous answer was in the wrong language. The question is "
-    "in {language}. Write the answer again, in {language}, every word "
-    "of it -- same content, same length.\n"
-)
-
-
 def _recall_node(state: AgentState) -> AgentState:
     query = state.context.get("query", state.user_input.strip())
     try:
@@ -165,7 +146,42 @@ def _recall_node(state: AgentState) -> AgentState:
         return state
 
     state.context["results"] = results
-    log.event("recall.search", query=query[:120], results=len(results))
+    # What the RAG actually returned, not just how many.
+    #
+    # On 2026-08-19 a recall answer welded two unrelated memories into
+    # one invented causality ("corriger le cache KV en réparant la
+    # pagination du journal"). From the log of the day it was not
+    # possible to tell which of two very different bugs that was: the
+    # retrieval handing the synthesis two entries with nothing in
+    # common, or the synthesis inventing a link between two entries
+    # that were legitimately related. Those want opposite fixes.
+    #
+    # rag.search has always selected v.distance and nothing has ever
+    # read it. It is the number that separates "the second hit was a
+    # close match" from "the second hit was the least bad of five",
+    # which is the question here.
+    #
+    # Observation only, deliberately. A distance cutoff is the obvious
+    # next move and would be step three of Primitive -> Observable ->
+    # Optimisable taken without step two: nobody can pick that
+    # threshold from first principles, and picking it off no
+    # measurement is how COMPACTION_THRESHOLD got its first value.
+    log.event(
+        "recall.search",
+        query=query[:120],
+        results=len(results),
+        entries=[
+            {
+                "id": r.get("id"),
+                "kind": r.get("kind"),
+                "distance": round(d, 4)
+                if isinstance(d := r.get("distance"), float)
+                else d,
+                "head": (r.get("content") or "")[:80],
+            }
+            for r in results
+        ],
+    )
     return state
 
 
@@ -218,48 +234,36 @@ def _synthesize_node(state: AgentState) -> AgentState:
 
     entries_block = memory_tool.format_results(results)
 
-    language = lang.name(lang.detect(query))
-    language_line = _LANGUAGE_LINE.format(language=language) if language else ""
+    # Wording half and deterministic half both live in forge.lang now:
+    # review, research and sysadmin need the identical instruction, and
+    # four copies of a string that has to stay identical is how a fix
+    # drifts.
+    language_line = lang.line_for(query)
     prompt = _build_prompt(query, entries_block, language_line)
 
     log.event(
         "recall.llm_call",
         query=query[:120],
         prompt_chars=len(prompt),
-        language=language or "unknown",
+        language=(lang.name(lang.detect(query)) or "unknown"),
     )
     try:
+        # No grammar, so _grammar_for() supplies the ROUTER's -- and
+        # that is deliberate. See the header of forge/prose_grammar.py:
+        # sampling this prompt as free prose was measured on the Deck
+        # and made recall return '<answer>' and nothing else.
         raw = call_llm(prompt)
         log.event("recall.raw_output", raw=raw)
         answer = _clean_synthesis_response(raw)
 
-        # The deterministic half. Naming the language in the prompt is
-        # still a wording fix, and wording fixes have lost six times on
-        # this codebase; this is the part that doesn't depend on the
-        # model having complied. It costs one extra call, and only on
-        # the runs that were already wrong.
-        wanted = None if answer.startswith("[error]") else lang.mismatch(query, answer)
-        if wanted and RECALL_ENFORCE_LANGUAGE:
-            log.warning(
-                "recall: answered in the wrong language (question is %s) -- retrying",
-                wanted,
-            )
-            retry = _build_prompt(
-                query,
-                entries_block,
-                _LANGUAGE_RETRY_LINE.format(language=wanted),
-            )
-            second = _clean_synthesis_response(call_llm(retry))
-            # Keep the first answer unless the second is both usable
-            # and actually in the right language. A retry that fails
-            # the same way twice is the model's limit, not a reason to
-            # hand back the worse of two answers -- and an answer whose
-            # LANGUAGE is wrong still has the right CONTENT, which is
-            # more than an error message has.
-            if not second.startswith("[error]") and not lang.mismatch(query, second):
-                answer = second
-            else:
-                log.warning("recall: retry did not fix the language, keeping the first")
+        answer = lang.enforce(
+            query,
+            answer,
+            retry=lambda line: _clean_synthesis_response(
+                call_llm(_build_prompt(query, entries_block, line))
+            ),
+            enabled=ENFORCE_ANSWER_LANGUAGE,
+        )
     except ProviderError as e:
         state.ok = False
         state.error = str(e)

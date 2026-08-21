@@ -99,6 +99,47 @@ if {"files", "test"} <= ENABLED_TOOLS:
     )
 
 
+def _missing_runners() -> list[str]:
+    """Allowlisted runners that are not actually installed."""
+    return sorted(r for r in TEST_ALLOWED_COMMANDS if shutil.which(r) is None)
+
+
+# Second tripwire, same reasoning as the one above and the opposite
+# problem: that one fires when this tool can do too much, this one
+# when it can do nothing at all.
+#
+# The Containerfile installs requirements.txt only. pytest and ruff are
+# in requirements-dev.txt, so in the shipped image neither exists and
+# every dispatch of this tool ends in "executable not found" -- after a
+# routing call has already been paid for. graphs/review.py's test step
+# hits the same wall from the other direction.
+#
+# Observed live 2026-08-19: two runs of the `test` tool came back with
+# that message, and it was first read as a path-guard refusal. It was
+# not; it was the deployment. A configuration fact belongs at startup,
+# where it is stated once, rather than being rediscovered from a
+# dispatch that looks like a different bug.
+def _tripwire_message(absent: list[str]) -> str:
+    """Built by a function so a test can read it. The first version of
+    this warning computed the list of missing runners and then left it
+    out of the format arguments, and shipped saying "the tool is
+    enabled but are not installed here" -- a warning whose entire job
+    is to name something, not naming it."""
+    return (
+        f"test: the tool is enabled but {', '.join(absent)} "
+        f"{'is' if len(absent) == 1 else 'are'} not installed here, so every "
+        "dispatch of it (and graphs/review.py's test step) will fail with "
+        "'executable not found'. The Containerfile installs requirements.txt "
+        "only, and the runners live in requirements-dev.txt -- either install "
+        "them in the image, or drop 'test' from ENABLED_TOOLS so the router "
+        "stops offering it."
+    )
+
+
+if "test" in ENABLED_TOOLS and (_absent := _missing_runners()):
+    log.warning("%s", _tripwire_message(_absent))
+
+
 def _safe_cwd() -> Path:
     cwd = Path(WORKSPACE_DIR).resolve()
     cwd.mkdir(parents=True, exist_ok=True)
@@ -189,9 +230,16 @@ def run(content: str) -> str:
 
     resolved = shutil.which(runner)
     if resolved is None:
+        # Named as a deployment fact, not as a mystery. This message
+        # was read as a path-guard refusal the first time it appeared
+        # in real logs (2026-08-19), which sent the diagnosis at the
+        # escalation guard for an hour.
         return (
-            f"[error] executable not found: {runner!r} (not on PATH)\n"
-            f"Is {runner!r} installed in this environment?"
+            f"[error] {runner!r} is allowed but not installed in this "
+            "environment, so it cannot be run.\n"
+            "This is a deployment gap, not a refusal: the container "
+            "image installs requirements.txt, and the test runners are "
+            "in requirements-dev.txt."
         )
 
     cwd = workspace

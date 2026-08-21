@@ -15,7 +15,9 @@ from forge.tools.registry import TOOLS
 def _run_with_fake_chat_handler(monkeypatch, fake_handler):
     monkeypatch.setitem(TOOLS, "chat", fake_handler)
     monkeypatch.setattr(
-        orch_mod, "call_llm", lambda p: json.dumps({"tool": "chat", "content": "x"})
+        orch_mod,
+        "call_llm",
+        lambda p, grammar=None: json.dumps({"tool": "chat", "content": "x"}),
     )
     return Orchestrator().run("hello")
 

@@ -47,6 +47,8 @@ Usage (Python):
 
 from pathlib import Path
 
+from forge import lang
+from forge.config import ENFORCE_ANSWER_LANGUAGE
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
@@ -326,9 +328,31 @@ def _llm_review_node(state: AgentState) -> AgentState:
         test_section=test_section,
     )
 
+    # Language named in LAST position, and only when forge.lang is
+    # sure -- same treatment recall got in the v3.12 dettes batch, for
+    # the same reason: this prompt body is English prose, and it pulls
+    # a French answer toward English all on its own. Appended rather
+    # than templated in, so "last" cannot drift as the template grows.
+    language_line = lang.line_for(question)
+
     log.event("review.llm_call", filename=filename, prompt_chars=len(prompt))
     try:
-        raw = call_llm(prompt)
+        # No grammar, so _grammar_for() supplies the ROUTER's. That is
+        # deliberate -- see the header of forge/prose_grammar.py.
+        raw = call_llm(prompt + language_line)
+        log.event("review.raw_output", raw=raw)
+        answer = _clean_review_response(raw)
+        # The deterministic half. Naming the language in the prompt is
+        # still a wording fix, and wording fixes have lost seven times
+        # on this codebase. The retry re-sends the same prompt with a
+        # different final line, so the KV prefix survives and only the
+        # tail is recomputed.
+        answer = lang.enforce(
+            question,
+            answer,
+            retry=lambda line: _clean_review_response(call_llm(prompt + line)),
+            enabled=ENFORCE_ANSWER_LANGUAGE,
+        )
     except ProviderError as e:
         state.ok = False
         state.error = str(e)
@@ -339,9 +363,7 @@ def _llm_review_node(state: AgentState) -> AgentState:
     # router.raw_output) -- this call previously had no raw-output
     # visibility at all, which made the JSON-habit bug above
     # impossible to confirm from logs alone the first time it happened.
-    log.event("review.raw_output", raw=raw)
-
-    state.final_output = _clean_review_response(raw)
+    state.final_output = answer
     state.final_tool = "review"
     log.event("review.done", chars=len(state.final_output))
     return state

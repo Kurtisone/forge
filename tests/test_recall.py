@@ -22,7 +22,9 @@ def test_recall_happy_path(monkeypatch):
     ]
     monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q: fake_results)
     monkeypatch.setattr(
-        recall_mod, "call_llm", lambda p: "Tu as un Steam Deck et un Dell R710."
+        recall_mod,
+        "call_llm",
+        lambda p, grammar=None: "Tu as un Steam Deck et un Dell R710.",
     )
 
     state = build_recall().run(
@@ -76,7 +78,7 @@ def test_recall_prompt_includes_ranked_clipped_entries(monkeypatch):
 
     captured = {}
 
-    def fake_call_llm(prompt):
+    def fake_call_llm(prompt, grammar=None):
         captured["prompt"] = prompt
         return "answer"
 
@@ -98,7 +100,9 @@ def test_recall_llm_unavailable(monkeypatch):
         lambda q: [{"kind": "fact", "content": "x", "project": None}],
     )
     monkeypatch.setattr(
-        recall_mod, "call_llm", lambda p: (_ for _ in ()).throw(ProviderError("down"))
+        recall_mod,
+        "call_llm",
+        lambda p, grammar=None: (_ for _ in ()).throw(ProviderError("down")),
     )
 
     state = build_recall().run("query", initial_context={"query": "query"})
@@ -126,7 +130,9 @@ def test_recall_unwraps_substantive_json_wrapped_answer(monkeypatch):
         '{"tool":"chat","content":"Tu as un Steam Deck, d\\u2019après ce '
         'que tu m\\u2019as dit précédemment sur ton matériel."}'
     )
-    monkeypatch.setattr(recall_mod, "call_llm", lambda p: substantive_wrapped)
+    monkeypatch.setattr(
+        recall_mod, "call_llm", lambda p, grammar=None: substantive_wrapped
+    )
 
     state = build_recall().run("query", initial_context={"query": "query"})
 
@@ -144,7 +150,9 @@ def test_recall_cleans_degenerate_json_echo(monkeypatch):
         lambda q: [{"kind": "fact", "content": "x", "project": None}],
     )
     monkeypatch.setattr(
-        recall_mod, "call_llm", lambda p: '{"tool":"chat","content":"query"}'
+        recall_mod,
+        "call_llm",
+        lambda p, grammar=None: '{"tool":"chat","content":"query"}',
     )
 
     state = build_recall().run("query", initial_context={"query": "query"})
@@ -159,7 +167,9 @@ def test_recall_strips_think_blocks(monkeypatch):
         lambda q: [{"kind": "fact", "content": "x", "project": None}],
     )
     monkeypatch.setattr(
-        recall_mod, "call_llm", lambda p: "<think>thinking...</think>Final answer."
+        recall_mod,
+        "call_llm",
+        lambda p, grammar=None: "<think>thinking...</think>Final answer.",
     )
 
     state = build_recall().run("query", initial_context={"query": "query"})

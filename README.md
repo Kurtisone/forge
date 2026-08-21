@@ -527,7 +527,7 @@ e.g. behind a proxy that already rate-limits.
 | `SYSADMIN_COLLECT_TIMEOUT` | Timeout for each log-collection command (seconds) | `15` |
 | `SYSADMIN_LOG_CHARS_BUDGET` | Hard cap on the log block inserted into the synthesis prompt, independent of line count — truncates keeping the **end** of the log, since that is where the recent events are | `2000` |
 | `RECALL_MAX_ANSWER_CHARS` | Cap on a `recall` answer. Far smaller than `research`'s: a recall answer is one or two facts restated as a sentence, not a multi-source summary | `800` |
-| `RECALL_ENFORCE_LANGUAGE` | After answering, check the language deterministically and retry **once** if it is demonstrably wrong. Never twice, never when either language is uncertain, and a failed retry keeps the first answer — wrong language with the right content beats an error message | `true` |
+| `ENFORCE_ANSWER_LANGUAGE` | After answering, check the language deterministically and retry **once** if it is demonstrably wrong. Applies to `recall`, `review`, `research` and `sysadmin`. Never twice, never when either language is uncertain, and a failed retry keeps the first answer — wrong language with the right content beats an error message. The former name `RECALL_ENFORCE_LANGUAGE` is still read, so an existing `.env` keeps working | `true` |
 | `MEMORY_RECALL_MAX_CHARS` | Cap on what a `memory` recall feeds back into the router prompt | `500` |
 | `MEMORY_HARD_CAP_SLACK` | Headroom above `MEMORY_MAX_HISTORY` before the hard cap fires — sized so it fires rarely rather than every turn | `20` |
 | `COMPACTION_TOKEN_THRESHOLD` | Prompt-token budget above which compaction triggers, alongside the message-count trigger (v3.12) | `6000` |

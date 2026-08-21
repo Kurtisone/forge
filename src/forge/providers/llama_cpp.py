@@ -98,6 +98,32 @@ def _grammar_for(grammar: str | None) -> str | None:
         return None
 
     if grammar is None:
+        # The router's grammar for a caller that named none, including
+        # the four graph syntheses whose prompts ask for plain text.
+        # That looks like a bug and is not one. MEASURED ON THE DECK,
+        # 2026-08-21, by giving each of them a prose grammar instead:
+        #
+        #   recall     '<answer>' and nothing else, 8 chars
+        #   review     'NO_THINK:', 5 tokens, then stop
+        #   research   1536 tokens, hit n_predict, output was the
+        #              PROMPT's own instructions read back
+        #   sysadmin   '<analysis>' block, ~2x the tokens
+        #
+        # against a router arm that answered correctly every time. The
+        # grammar was never only stopping JSON. It was suppressing the
+        # scaffolding this model reaches for -- <answer>, <think>,
+        # 'NO_THINK:', prompt echo -- and it was the only hard
+        # TERMINATOR in the loop, since "{...}" cannot run past its
+        # closing brace and free prose can run to n_predict.
+        #
+        # bench/prose_grammar_ab.py reproduces the whole comparison.
+        # The graph prompts have never been written for unconstrained
+        # decoding, and swapping the grammar without rewriting them
+        # trades a cosmetic log warning for empty answers.
+        #
+        # So: try_unwrap_router_json() in the graphs is not a
+        # workaround to be removed. It is the seam that makes this
+        # fallback safe, and tests/test_graph_grammar.py pins it.
         from forge.router.grammar import build_router_grammar
 
         grammar = build_router_grammar()
