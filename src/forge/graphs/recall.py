@@ -43,7 +43,11 @@ Usage (Python):
 """
 
 from forge import lang, rag
-from forge.config import ENFORCE_ANSWER_LANGUAGE, RECALL_MAX_ANSWER_CHARS
+from forge.config import (
+    ENFORCE_ANSWER_LANGUAGE,
+    RECALL_MAX_ANSWER_CHARS,
+    RECALL_MAX_DISTANCE,
+)
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
@@ -145,6 +149,19 @@ def _recall_node(state: AgentState) -> AgentState:
         state.final_output = f"[no memory] for query: {query!r}"
         return state
 
+    results = _drop_distant(results, query)
+    if not results:
+        # Not an error: the store was reachable, it simply holds
+        # nothing close enough to the question. Saying that is the
+        # entire value of the cutoff -- the failure it replaces is a
+        # fluent sentence built out of the five least-bad rows.
+        state.ok = False
+        state.error = "no results above the distance cutoff"
+        state.final_output = (
+            "Je n'ai rien d'assez proche en mémoire pour répondre à ça."
+        )
+        return state
+
     state.context["results"] = results
     # What the RAG actually returned, not just how many.
     #
@@ -183,6 +200,47 @@ def _recall_node(state: AgentState) -> AgentState:
         ],
     )
     return state
+
+
+def _drop_distant(results: list[dict], query: str) -> list[dict]:
+    """
+    Drop hits further than RECALL_MAX_DISTANCE, if a cutoff is set.
+
+    Inert unless configured, on purpose. See config.py for why the
+    threshold has no default: every distance measured so far comes
+    from a query with no good answer in the store, and a cutoff picked
+    from negatives alone silences real hits at no visible cost. The
+    mechanism ships now so that bench/recall_distance.py has something
+    to calibrate; the number is a separate decision, taken from a
+    measurement that includes a positive control.
+
+    A row with no distance at all is KEPT. The value comes from
+    rag.search's SELECT, and a filter that treats "not reported" as
+    "too far" would empty the list on any caller that builds hits
+    another way -- failing closed on retrieval means answering "I have
+    nothing" while holding the answer.
+    """
+    if RECALL_MAX_DISTANCE is None:
+        return results
+
+    kept, dropped = [], []
+    for r in results:
+        d = r.get("distance")
+        (
+            dropped if isinstance(d, (int, float)) and d > RECALL_MAX_DISTANCE else kept
+        ).append(r)
+
+    if dropped:
+        log.event(
+            "recall.dropped",
+            query=query[:120],
+            cutoff=RECALL_MAX_DISTANCE,
+            kept=len(kept),
+            dropped=[
+                {"id": r.get("id"), "distance": r.get("distance")} for r in dropped
+            ],
+        )
+    return kept
 
 
 def _clean_synthesis_response(raw: str) -> str:

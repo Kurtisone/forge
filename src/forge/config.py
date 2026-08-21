@@ -433,6 +433,30 @@ RESEARCH_FETCH_CHARS_PER_RESULT = int(
 # multi-source summary, so its cap is far smaller than research's.
 RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 
+# Distance above which a retrieved memory entry is not shown to the
+# synthesis step at all.
+#
+# DISABLED BY DEFAULT, and that is the whole point of it existing.
+#
+# On 2026-08-19 a recall answer welded two unrelated memories into one
+# invented causality. Patch 0007 logged the distances and the five hits
+# came back at 0.90 / 0.95 / 0.99 / 0.995 / 1.0015 -- read at the time
+# as "orthogonal, pure noise". That reading is wrong. sqlite-vec's vec0
+# defaults to L2, rag.py stores unit-length vectors, so d^2 = 2(1-cos):
+# those distances are cosine 0.60 down to 0.50, and true orthogonality
+# would be d = 1.414. Weak, yes. Noise, not demonstrably.
+#
+# Which means nobody can place this threshold yet: every distance we
+# have measured is from a query with no good answer in the store, and a
+# cutoff set from negatives alone silences real hits for free. What is
+# missing is a positive control -- bench/recall_distance.py exists to
+# produce one. Run it, read the gap between a hit and a miss, then set
+# this to something inside that gap.
+#
+# Unset means no filtering, i.e. exactly today's behaviour.
+_recall_max_distance = os.getenv("RECALL_MAX_DISTANCE", "").strip()
+RECALL_MAX_DISTANCE = float(_recall_max_distance) if _recall_max_distance else None
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the
