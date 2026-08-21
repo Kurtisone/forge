@@ -140,3 +140,21 @@ def test_the_footer_states_a_coverage_percentage(big_file, monkeypatch):
 
     expected = round(100 * review._MAX_FILE_CHARS / len(big_file.read_text()))
     assert f"{expected} %" in state.final_output
+
+
+def test_no_partial_review_footer_on_an_error(big_file, monkeypatch):
+    """
+    Run #9942466c: the copy guard fired, and the truncation footer went
+    on anyway -- "[error] the model copied the file" followed by
+    "partial review: 40 % of the file", which reads as though a review
+    happened and covered 40 % of it.
+    """
+    monkeypatch.setattr(
+        review, "call_llm", lambda prompt, **kw: big_file.read_text()[:2000]
+    )
+
+    state = review._read_file_node(_state(big_file))
+    state = review._llm_review_node(state)
+
+    assert state.final_output.startswith("[error]")
+    assert "Revue partielle" not in state.final_output

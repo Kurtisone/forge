@@ -822,3 +822,109 @@ def test_the_synthesis_prompt_allows_the_logs_to_be_off_topic(monkeypatch):
     assert "may simply not contain the answer" in prompt
     assert "say so plainly" in prompt
     assert "absence of an error" in prompt
+
+
+def test_a_failed_collection_never_reaches_the_model(monkeypatch):
+    """
+    Runs #7a29f59d and #7e0ed90c, both live on the Deck. `podman logs`
+    came back as the read-only proxy's 403 refusal rather than logs,
+    _run_fixed prefixed it "[error]" exactly as designed -- and the
+    text went into the prompt under a "collected logs" header anyway.
+
+    The model then explained, at length and convincingly, that the
+    container was crashing BECAUSE of that 403. The container was
+    healthy (Up 6 minutes). The fault did not exist.
+
+    Same shape as target_missed, so the same answer: never hand the
+    model evidence about a different subject than the question.
+    """
+
+    def failing_collect(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["forge.service"])
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return "searxng"
+        return "[error] Error: unmarshalling error into &errorhandling.ErrorModel"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", failing_collect)
+
+    def no_call(prompt, grammar=None):  # pragma: no cover - must not run
+        raise AssertionError("the model was asked to diagnose a collection error")
+
+    monkeypatch.setattr(sysadmin_mod, "call_llm", no_call)
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={"target_hint": "searxng", "question": "pourquoi ?"},
+    )
+
+    assert "[collecte impossible]" in state.final_output
+    assert "searxng" in state.final_output
+    assert "unmarshalling" in state.final_output
+
+
+def test_the_failed_collection_report_names_the_command(monkeypatch):
+    """
+    The failure that produced this node was a proxy policy refusal
+    rendered by podman as an unmarshalling error. The single most
+    useful thing to be told was which command to run by hand.
+    """
+
+    def failing_collect(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["forge.service"])
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return ""
+        return "[error] command timed out after 20s"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", failing_collect)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "x")
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={"target_hint": "forge.service", "question": "pourquoi ?"},
+    )
+
+    assert "journalctl -u forge.service" in state.final_output
+
+
+def test_the_failed_collection_report_does_not_claim_the_target_is_broken(monkeypatch):
+    """
+    The exact confusion in the two observed runs: a message about the
+    COLLECTION being read as a message about the TARGET.
+    """
+
+    def failing_collect(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["forge.service"])
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return "searxng"
+        return "[error] forbidden"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", failing_collect)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "x")
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": "searxng", "question": "pourquoi ?"}
+    )
+
+    assert "pas de l'état" in state.final_output
+
+
+def test_a_healthy_collection_still_reaches_the_model(monkeypatch):
+    """The control. Nothing above may cost a working run."""
+    captured = {}
+
+    def fake_call_llm(prompt, grammar=None):
+        captured["prompt"] = prompt
+        return "diagnostic normal"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", fake_call_llm)
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": "forge.service", "question": "pourquoi ?"}
+    )
+
+    assert "prompt" in captured
+    assert state.final_output == "diagnostic normal"

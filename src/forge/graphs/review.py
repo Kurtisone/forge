@@ -421,7 +421,11 @@ def _llm_review_node(state: AgentState) -> AgentState:
     # router.raw_output) -- this call previously had no raw-output
     # visibility at all, which made the JSON-habit bug above
     # impossible to confirm from logs alone the first time it happened.
-    if truncated_from:
+    # Not on an error. "[error] the model copied the file" followed by
+    # "partial review: 40 % of the file" reads as though a review
+    # happened and covered 40 % of it. Seen on run #9942466c, where the
+    # copy guard fired and the footer went on anyway.
+    if truncated_from and not answer.startswith("[error]"):
         answer += _TRUNCATION_FOOTER.format(
             shown=_MAX_FILE_CHARS,
             total=truncated_from,

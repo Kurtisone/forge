@@ -388,8 +388,60 @@ def _collect_node(state: AgentState) -> AgentState:
         source = "journalctl -k"
 
     state.context["log_source"] = source
-    state.context["collected_logs"] = _run_fixed(cmd, SYSADMIN_COLLECT_TIMEOUT)
+    collected = _run_fixed(cmd, SYSADMIN_COLLECT_TIMEOUT)
+    state.context["collected_logs"] = collected
+
+    # A failed collection is not a quiet log file. _run_fixed prefixes
+    # "[error]" precisely so this is distinguishable, and until now
+    # nothing distinguished it: the error text went into the prompt
+    # under a "--- collected logs ---" header and the model was asked
+    # to diagnose the service from it.
+    #
+    # The comment in _to_sub_steps used to argue that this stayed
+    # useful, "the LLM diagnosing the meta-error itself". Two real runs
+    # say otherwise. #7a29f59d and #7e0ed90c both got the podman
+    # proxy's 403 refusal instead of logs, and both answered that the
+    # container was crashing BECAUSE of that 403 -- a healthy container
+    # (Up 6 minutes), a confident cause, 600+ characters of plausible
+    # remediation for a fault that did not exist.
+    #
+    # Same shape as target_missed, so the same answer: the model is
+    # never handed evidence about a different subject than the
+    # question. The error is reported in code instead.
+    if collected.startswith("[error]"):
+        state.context["collect_failed"] = collected
+        log.event("sysadmin.collect_failed", source=source, error=collected[:200])
+        return state
+
     log.event("sysadmin.collect", source=source)
+    return state
+
+
+def _collect_failed_node(state: AgentState) -> AgentState:
+    """
+    Report a failed collection, deterministically.
+
+    Deliberately says what could not be read and stops. Naming the
+    command matters more than it looks: the failure that produced this
+    node was a proxy policy refusal that podman renders as an
+    unmarshalling error, and the single most useful thing anyone could
+    have been told is which command to run by hand.
+    """
+    source = state.context["log_source"]
+    error = state.context["collect_failed"]
+    target = state.context.get("target_hint")
+
+    subject = f"« {target} »" if target else "le système"
+    state.final_output = (
+        f"[collecte impossible] Je n'ai pas pu lire les logs de {subject} : "
+        f"la commande `{source}` a échoué.\n"
+        f"{error}\n"
+        "Tant que cette commande ne rend pas de logs, il n'y a rien à "
+        "diagnostiquer — et ce message parle de la collecte, pas de l'état "
+        "de la cible."
+    )
+    state.final_tool = "sysadmin"
+    log.event("sysadmin.done", chars=len(state.final_output), collect_failed=True)
     return state
 
 
@@ -556,6 +608,7 @@ def build() -> Graph:
     g.add_node("discover", _discover_node)
     g.add_node("collect", _collect_node)
     g.add_node("target_missed", _target_missed_node)
+    g.add_node("collect_failed", _collect_failed_node)
     g.add_node("synthesize", _synthesize_node)
 
     g.add_edge("discover", "collect")
@@ -564,6 +617,11 @@ def build() -> Graph:
         "collect",
         "target_missed",
         condition=lambda s: bool(s.context.get("target_missed")),
+    )
+    g.add_edge(
+        "collect",
+        "collect_failed",
+        condition=lambda s: bool(s.context.get("collect_failed")),
     )
     g.add_edge("collect", "synthesize")
 
@@ -619,6 +677,9 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
     details = {
         "discover": discover_detail,
         "collect": collect_detail,
+        "collect_failed": lambda: (
+            f"collecte échouée : {state.context.get('collect_failed', '')[:120]}"
+        ),
         "target_missed": lambda: (
             f"« {state.context.get('target_missed')} » absent de la découverte"
         ),
@@ -631,10 +692,14 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
             "label": ts.decision_tool,
             "detail": details.get(ts.decision_tool, lambda: "")(),
             # A discover/collect step with a real subprocess error is
-            # flagged even though the overall run still succeeds (the
-            # kernel-log fallback, or the LLM diagnosing the meta-error
-            # itself, keeps the run useful) -- ts.tool_ok alone can't
-            # express this partial failure since it tracks state.ok.
+            # flagged even though the overall run still succeeds --
+            # ts.tool_ok alone can't express this partial failure since
+            # it tracks state.ok. (This comment used to add "or the LLM
+            # diagnosing the meta-error itself, keeps the run useful".
+            # It does not: runs #7a29f59d and #7e0ed90c both turned a
+            # proxy 403 into a confident diagnosis of a healthy
+            # container. Collection errors now route to
+            # collect_failed instead of reaching the model.)
             "ok": (
                 False
                 if ts.decision_tool == "discover" and (units_error or containers_error)
