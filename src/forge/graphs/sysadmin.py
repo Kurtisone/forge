@@ -66,7 +66,11 @@ from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
 from forge.logger import log
-from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
+from forge.text_cleaning import (
+    looks_like_a_copy,
+    strip_think_blocks,
+    try_unwrap_router_json,
+)
 from forge.types import AgentState
 
 _MAX_SYNTHESIS_OUTPUT_CHARS = 4000
@@ -437,7 +441,7 @@ def _target_missed_node(state: AgentState) -> AgentState:
     return state
 
 
-def _clean_diagnosis_response(raw: str) -> str:
+def _clean_diagnosis_response(raw: str, log_block: str = "") -> str:
     """Same reasoning as review._clean_review_response and
     research._clean_synthesis_response (see forge/text_cleaning.py):
     this prompt asks for plain text, so the shared conditional-unwrap
@@ -462,6 +466,17 @@ def _clean_diagnosis_response(raw: str) -> str:
 
     if not cleaned:
         return "[error] Le modèle n'a pas généré de réponse. Réessayez."
+
+    # Same guard review gained after run #b669174a. Not observed here
+    # yet, and wired anyway: this graph already carries
+    # _EXAMPLE_LEAK_FRAGMENTS, which is the same failure against a
+    # different source text, and review/research last drifted apart
+    # precisely because one of them was fixed alone (v3.10).
+    if log_block and looks_like_a_copy(cleaned, log_block):
+        log.warning("sysadmin: model echoed the logs instead of diagnosing them")
+        return (
+            "[error] Le modèle a recopié les logs au lieu de les analyser. Réessayez."
+        )
 
     if len(cleaned) > _MAX_SYNTHESIS_OUTPUT_CHARS:
         cleaned = cleaned[:_MAX_SYNTHESIS_OUTPUT_CHARS].rstrip() + "…"
@@ -510,7 +525,7 @@ def _synthesize_node(state: AgentState) -> AgentState:
         # deliberate -- see the header of forge/prose_grammar.py.
         raw = call_llm(prompt + language_line)
         log.event("sysadmin.raw_output", raw=raw)
-        answer = _clean_diagnosis_response(raw)
+        answer = _clean_diagnosis_response(raw, log_block)
         # The deterministic half. Naming the language in the prompt is
         # still a wording fix, and wording fixes have lost seven times
         # on this codebase. The retry re-sends the same prompt with a
@@ -519,7 +534,9 @@ def _synthesize_node(state: AgentState) -> AgentState:
         answer = lang.enforce(
             question,
             answer,
-            retry=lambda line: _clean_diagnosis_response(call_llm(prompt + line)),
+            retry=lambda line: _clean_diagnosis_response(
+                call_llm(prompt + line), log_block
+            ),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
     except ProviderError as e:

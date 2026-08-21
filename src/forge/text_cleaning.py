@@ -101,3 +101,73 @@ def try_unwrap_router_json(
         content,
     )
     return None
+
+
+# --- Copy detection -------------------------------------------------
+#
+# Observed live on 2026-08-21, run #b669174a. `review` was given a
+# 20 000-character file truncated to 8 000, and answered with the
+# file's own opening docstring, copied verbatim: "The router prompt
+# lives here and ONLY here. If you ever need to tweak how the router
+# is instructed..." -- 97 words of the input handed back as analysis.
+#
+# Every existing guard passed it, and correctly by its own terms.
+# try_unwrap_router_json checks that the unwrapped content is
+# SUBSTANTIVE (>= 8 words, >= 40 chars) precisely so a degenerate
+# one-word echo is not mistaken for an answer; a verbatim copy of the
+# input is maximally substantive. _PROMPT_LEAK_MARKERS looks for the
+# prompt's own phrases; this copied the file, not the prompt.
+# sysadmin's _EXAMPLE_LEAK_FRAGMENTS looks for the GOOD ANSWER
+# example; same shape of failure, different source text.
+#
+# The generalisation those three suggest: an answer whose substance
+# came from the material rather than from thinking about it. That is
+# checkable without a model, because "did this text come from that
+# text" is a string question.
+_COPY_WINDOW = 60
+_COPY_STRIDE = 30
+_COPY_RATIO = 0.6
+
+
+def _normalise_for_comparison(text: str) -> str:
+    return " ".join(text.split()).lower()
+
+
+def looks_like_a_copy(
+    answer: str,
+    source: str,
+    ratio: float = _COPY_RATIO,
+) -> bool:
+    """
+    Is `answer` mostly lifted verbatim out of `source`?
+
+    Sliding windows rather than an exact-match check, because a copy
+    is rarely clean: the model reflows lines, drops a paragraph, adds
+    a sentence of its own at the end. Windows survive all three.
+
+    The ratio is deliberately high. Quoting the material is correct
+    behaviour and common -- a review that cites the offending line, a
+    diagnosis that reproduces the log entry it is explaining -- so
+    only an answer that is MOSTLY the source should trip this. At 0.6
+    with a 60-character window, a paragraph of original prose around
+    two quoted lines stays well clear.
+
+    Short answers are exempt: below one window there is nothing to
+    measure, and a legitimate one-line answer can easily be a phrase
+    that also appears in the source.
+    """
+    normalised_answer = _normalise_for_comparison(answer)
+    normalised_source = _normalise_for_comparison(source)
+
+    if len(normalised_answer) < _COPY_WINDOW or not normalised_source:
+        return False
+
+    windows = [
+        normalised_answer[i : i + _COPY_WINDOW]
+        for i in range(0, len(normalised_answer) - _COPY_WINDOW + 1, _COPY_STRIDE)
+    ]
+    if not windows:
+        return False
+
+    found = sum(1 for w in windows if w in normalised_source)
+    return found / len(windows) >= ratio

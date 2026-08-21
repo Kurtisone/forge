@@ -54,7 +54,11 @@ from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
 from forge.logger import log
-from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
+from forge.text_cleaning import (
+    looks_like_a_copy,
+    strip_think_blocks,
+    try_unwrap_router_json,
+)
 from forge.tools import test as test_tool
 from forge.types import AgentState
 
@@ -154,7 +158,7 @@ _TEST_SECTION_TEMPLATE = """
 """
 
 
-def _clean_review_response(raw: str) -> str:
+def _clean_review_response(raw: str, file_content: str = "") -> str:
     """
     Clean the review LLM's plain-text answer.
 
@@ -200,6 +204,16 @@ def _clean_review_response(raw: str) -> str:
     if not cleaned:
         log.warning("review: model returned an empty response")
         return "[error] Le modèle n'a pas généré de réponse. Réessayez."
+
+    # Run #b669174a: the answer WAS the file's opening docstring,
+    # copied verbatim. Every other guard passed it -- the unwrap check
+    # asks whether the content is substantive, and a copy of the input
+    # is maximally substantive. See text_cleaning.looks_like_a_copy.
+    if file_content and looks_like_a_copy(cleaned, file_content):
+        log.warning("review: model returned the file's own content instead of a review")
+        return (
+            "[error] Le modèle a recopié le fichier au lieu de l'analyser. Réessayez."
+        )
 
     if len(cleaned) > _MAX_REVIEW_OUTPUT_CHARS:
         cleaned = cleaned[:_MAX_REVIEW_OUTPUT_CHARS].rstrip() + "…"
@@ -385,7 +399,7 @@ def _llm_review_node(state: AgentState) -> AgentState:
         # deliberate -- see the header of forge/prose_grammar.py.
         raw = call_llm(prompt + language_line)
         log.event("review.raw_output", raw=raw)
-        answer = _clean_review_response(raw)
+        answer = _clean_review_response(raw, content)
         # The deterministic half. Naming the language in the prompt is
         # still a wording fix, and wording fixes have lost seven times
         # on this codebase. The retry re-sends the same prompt with a
@@ -394,7 +408,7 @@ def _llm_review_node(state: AgentState) -> AgentState:
         answer = lang.enforce(
             question,
             answer,
-            retry=lambda line: _clean_review_response(call_llm(prompt + line)),
+            retry=lambda line: _clean_review_response(call_llm(prompt + line), content),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
     except ProviderError as e:
