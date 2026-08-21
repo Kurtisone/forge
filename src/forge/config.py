@@ -464,9 +464,12 @@ RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 # being welded into an invented causality. That one is upstream: the
 # store holds compaction pointers and almost no facts.
 #
-# Still unset by default. The measurement is five short clean fixtures
-# and the real store is neither; re-measure against a copy of it
-# (--no-plant) before switching this on.
+# Still unset by default, and the first --no-plant run against a copy of
+# the real store is why: a real MISS landed at 0.9891, below the 1.05
+# the fixtures suggested. Long compaction summaries sit at middling
+# distance from every question ever asked and compress the whole scale
+# -- so the fixtures validate the mechanism, not the number. On the real
+# store it is nearer 0.96, from one pair, which is not enough to set it.
 #
 # Unset means no filtering, i.e. exactly today's behaviour.
 _recall_max_distance = os.getenv("RECALL_MAX_DISTANCE", "").strip()

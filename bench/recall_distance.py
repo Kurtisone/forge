@@ -90,8 +90,34 @@ COPY of the real database with --no-plant and your own questions:
         --hit "une question dont tu SAIS que la réponse est dedans" \
         --miss "une question dont tu sais qu'elle n'y est pas"
 
-If the real store's hits land near the misses, that is the second
-outcome above, stated by the data instead of predicted.
+MEASURED AGAINST THE REAL STORE -- same day, --no-plant
+-------------------------------------------------------
+
+    hit   "Tu peux me lister mon matériel"              0.8934
+    miss  "la date d'anniversaire de mon cousin ?"      0.9891
+
+One pair, so not a distribution -- but enough to show that the fixture
+numbers do not transfer. The real store's MISS sits at 0.9891, well
+below the fixture misses (1.1096 and up) and below the value the
+fixture run suggested (1.05). A cutoff set from the fixtures would let
+that miss straight through.
+
+Which is the predicted effect, arriving: real entries are mostly long
+compaction summaries, they sit at middling distance from every question
+ever asked, and they compress the whole scale. Hits AND misses move
+closer together (gap 0.096 against the fixtures' 0.169).
+
+So the fixture run is a sanity check on the mechanism, not a source of
+the number. The number comes from --no-plant against a copy of the real
+store, with at least three questions on each side.
+
+WHY THREE. The first --no-plant run of all used the placeholder text
+from this file's own help output as its two questions -- "une question
+dont tu SAIS que la réponse est dans ta mémoire" and its negative. Both
+are the same French sentence about memory, and both landed at ~0.80.
+The harness printed "GAP of 0.0087" and confidently suggested a cutoff.
+It should have refused: two questions are not two distributions, and a
+gap that narrow is noise wearing a decimal point. It refuses now.
 """
 
 from __future__ import annotations
@@ -146,6 +172,15 @@ FIXTURES: list[tuple[str, str, str]] = [
 # register as the answerable ones -- a miss written in English or about
 # an obviously alien topic would be easy to separate for reasons that
 # have nothing to do with retrieval quality.
+# Below this, --no-plant refuses to run. See WHY THREE above.
+_MIN_QUESTIONS = 3
+
+# Below this, no threshold is suggested however clean the two sets look.
+# Calibrated against the two real gaps measured on 2026-08-21: 0.169
+# between clean fixtures, 0.096 against the real store. 0.0087 -- what
+# two near-identical questions produced -- must not yield a number.
+_MIN_USABLE_GAP = 0.05
+
 UNANSWERABLE: list[str] = [
     "Quelle est la recette de la tarte tatin ?",
     "Combien de temps dure le vol Paris-Tokyo ?",
@@ -191,12 +226,18 @@ def main() -> int:
         if not os.path.exists(args.db):
             print(f"--no-plant given but {args.db} does not exist")
             return 1
-        if not args.hit or not args.miss:
+        if len(args.hit) < _MIN_QUESTIONS or len(args.miss) < _MIN_QUESTIONS:
             print(
-                "--no-plant needs at least one --hit and one --miss: without\n"
-                "both distributions there is nothing to compare, and half a\n"
-                "measurement is what produced the reading this file exists to\n"
-                "correct."
+                f"--no-plant needs at least {_MIN_QUESTIONS} --hit and "
+                f"{_MIN_QUESTIONS} --miss questions "
+                f"(got {len(args.hit)} and {len(args.miss)}).\n"
+                "\nTwo questions are not two distributions. The first run of\n"
+                "this mode used one of each -- and both were the placeholder\n"
+                "sentences from this file's help text, which are the same\n"
+                "French sentence about memory twice. They landed 0.0087 apart\n"
+                "and this harness printed a confident threshold anyway.\n"
+                "\nUse questions you actually asked Forge, and know the answer\n"
+                "to."
             )
             return 1
         hits = [(None, None, q) for q in args.hit]
@@ -277,6 +318,20 @@ def main() -> int:
             "  separates them. Do not set one: it would be a coin flip in a\n"
             "  config file. The problem is upstream -- what the store\n"
             "  contains, not how it is filtered."
+        )
+        return 0
+
+    gap = best_miss - worst_hit
+    if gap < _MIN_USABLE_GAP:
+        print(
+            f"\n  GAP of only {gap:.4f} -- too tight to act on. A threshold\n"
+            "  placed inside it would be sorting by noise, and every entry\n"
+            "  near the boundary would fall on whichever side the wording of\n"
+            "  the day happened to put it.\n"
+            "\n  Either the questions are too alike to separate (check that\n"
+            "  the misses are really about something else), or this store\n"
+            "  genuinely does not distinguish them -- in which case the\n"
+            "  subject is what goes INTO it, not how it is filtered."
         )
         return 0
 
