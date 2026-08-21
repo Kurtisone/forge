@@ -311,3 +311,36 @@ def test_the_tripwire_message_actually_names_them():
         ["pytest", "ruff"]
     )
     assert "pytest is not installed" in test_mod._tripwire_message(["pytest"])
+
+
+def test_the_tripwire_offers_a_supported_way_out():
+    """
+    The message used to end with "either install them in the image, or
+    drop 'test' from ENABLED_TOOLS". The first half named something
+    that did not exist: the Containerfile had no path to installing
+    them, so the only way to follow that advice was to edit the image
+    definition by hand. A warning that names an unreachable fix is a
+    warning that gets ignored.
+    """
+    message = test_mod._tripwire_message(["pytest"])
+
+    assert "INSTALL_TEST_RUNNERS=true" in message
+    assert "ENABLED_TOOLS" in message
+
+
+def test_the_containerfile_really_has_that_build_arg():
+    """
+    The pairing is the point: the message points at a build arg, so the
+    build arg has to be there. Nothing else compares the two.
+    """
+    import pathlib
+
+    containerfile = (
+        pathlib.Path(__file__).resolve().parents[1] / "Containerfile"
+    ).read_text()
+
+    assert "ARG INSTALL_TEST_RUNNERS=false" in containerfile, (
+        "the tripwire tells operators to use this build arg; it must "
+        "exist and must default to off"
+    )
+    assert "requirements-dev.txt" in containerfile
