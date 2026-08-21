@@ -36,8 +36,9 @@ best unanswerable query. A threshold belongs inside it, nearer the
 miss side.
 
   wide gap (say hits under 0.6, misses above 0.9)
-      set RECALL_MAX_DISTANCE between them and the invented-causality
-      answer becomes "je n'ai rien d'assez proche".
+      set RECALL_MAX_DISTANCE between them, leaning ABOVE the midpoint
+      -- see MEASURED below for why that direction, which the first
+      version of this file got backwards.
 
   no gap -- planted hits land in the same band as the misses
       then there is no threshold to find, the embedding is not
@@ -48,8 +49,49 @@ miss side.
       material that never contained the answer. Fix the intake, not
       the filter.
 
-The second outcome is the likelier one, and printing it clearly is
-worth as much as the number.
+MEASURED -- Steam Deck, Qwen3-Embedding-0.6B, 2026-08-21
+--------------------------------------------------------
+
+    hits    0.6943  0.7439  0.9226  0.9351  0.9402   (all rank 1)
+    misses  1.1096  1.1708  1.2071  1.2197  1.2586
+
+    worst hit 0.9402 | best miss 1.1096 | gap 0.1693
+
+A clean gap, and it settles a reading that had been wrong twice. The
+five rows behind the invented-causality answer of 2026-08-19 sat at
+0.90 / 0.95 / 0.99 / 0.995 / 1.0015. Those were first called
+"orthogonal, pure noise" (they are not -- see config.py), and then, more
+carefully, "weak but unplaceable". Against this scale they are placed:
+the two closest are inside the range a genuine hit occupies, and the
+other three sit in the gap where nothing measured lives.
+
+Which means -- and this is the finding, not the threshold -- A CUTOFF
+WOULD NOT HAVE PREVENTED THAT ANSWER. Any value that keeps real hits
+(above ~0.94) keeps four of those five rows. The distance filter is a
+guard against the tarte-tatin class of question, where nothing in the
+store is remotely relevant. It is not a guard against the store being
+full of long compaction summaries that sit at middling distance from
+every question ever asked. That remains the real problem and it is an
+intake problem.
+
+DIRECTION, corrected. The first version of this file said to lean
+BELOW the midpoint "because the real store's good hits will sit further
+out than these fixtures". That reason argues the opposite conclusion:
+if real hits are further out, a lower cutoff cuts them. Lean ABOVE the
+midpoint, and stay clearly under the closest measured miss.
+
+These fixtures are five short, clean, single-fact entries. The real
+store is not. Before trusting any value in production, re-run against a
+COPY of the real database with --no-plant and your own questions:
+
+    podman exec forge cp /app/data/forge_rag.db /tmp/real_copy.db
+    podman exec -it forge python /tmp/arm/recall_distance.py \
+        --db /tmp/real_copy.db --no-plant \
+        --hit "une question dont tu SAIS que la réponse est dedans" \
+        --miss "une question dont tu sais qu'elle n'y est pas"
+
+If the real store's hits land near the misses, that is the second
+outcome above, stated by the data instead of predicted.
 """
 
 from __future__ import annotations
@@ -117,36 +159,84 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="/tmp/recall_bench.db")
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--no-plant",
+        action="store_true",
+        help=(
+            "Do not plant fixtures and do not delete the database -- query "
+            "it as it stands. Use with --hit/--miss against a COPY of the "
+            "real store. Never point this at data/forge_rag.db itself."
+        ),
+    )
+    parser.add_argument(
+        "--hit",
+        action="append",
+        default=[],
+        metavar="QUESTION",
+        help="A question you KNOW the store can answer. Repeatable.",
+    )
+    parser.add_argument(
+        "--miss",
+        action="append",
+        default=[],
+        metavar="QUESTION",
+        help="A question you know the store cannot answer. Repeatable.",
+    )
     args = parser.parse_args()
 
     # Set before importing forge.rag: RAG_DB_FILE is read at import.
     os.environ["RAG_DB_FILE"] = args.db
-    if os.path.exists(args.db):
-        os.remove(args.db)
+
+    if args.no_plant:
+        if not os.path.exists(args.db):
+            print(f"--no-plant given but {args.db} does not exist")
+            return 1
+        if not args.hit or not args.miss:
+            print(
+                "--no-plant needs at least one --hit and one --miss: without\n"
+                "both distributions there is nothing to compare, and half a\n"
+                "measurement is what produced the reading this file exists to\n"
+                "correct."
+            )
+            return 1
+        hits = [(None, None, q) for q in args.hit]
+        misses = list(args.miss)
+    else:
+        if os.path.exists(args.db):
+            os.remove(args.db)
+        hits = list(FIXTURES)
+        misses = list(UNANSWERABLE)
 
     from forge import rag
 
     conn = rag.get_connection()
     try:
-        print(f"planting {len(FIXTURES)} entries into {args.db}")
-        for kind, content, _question in FIXTURES:
-            rag.remember(conn, kind=kind, content=content, project=None)
+        if not args.no_plant:
+            print(f"planting {len(FIXTURES)} entries into {args.db}")
+            for kind, content, _question in FIXTURES:
+                rag.remember(conn, kind=kind, content=content, project=None)
+        else:
+            print(f"querying {args.db} as it stands, planting nothing")
 
         print("\n=== HITS (the answer is in the store) ===")
         hit_distances = []
-        for _kind, content, question in FIXTURES:
+        for _kind, content, question in hits:
             results = rag.search(conn, query=question, top_k=args.top_k)
             best = results[0] if results else None
             # Rank matters as much as distance: a planted entry that
             # comes back second, behind another planted entry, means
             # the cutoff is not the only thing that needs looking at.
-            rank = next(
-                (
-                    i + 1
-                    for i, r in enumerate(results)
-                    if r.get("content", "").startswith(content[:40])
-                ),
-                None,
+            rank = (
+                next(
+                    (
+                        i + 1
+                        for i, r in enumerate(results)
+                        if r.get("content", "").startswith(content[:40])
+                    ),
+                    None,
+                )
+                if content
+                else None
             )
             distance = best.get("distance") if best else None
             if isinstance(distance, float):
@@ -158,7 +248,7 @@ def main() -> int:
 
         print("\n=== MISSES (nothing in the store answers this) ===")
         miss_distances = []
-        for question in UNANSWERABLE:
+        for question in misses:
             results = rag.search(conn, query=question, top_k=args.top_k)
             distance = results[0].get("distance") if results else None
             if isinstance(distance, float):
@@ -190,14 +280,21 @@ def main() -> int:
         )
         return 0
 
-    suggested = worst_hit + (best_miss - worst_hit) / 2
+    midpoint = worst_hit + (best_miss - worst_hit) / 2
+    suggested = worst_hit + (best_miss - worst_hit) * 0.65
     print(
         f"\n  GAP of {best_miss - worst_hit:.4f}. A cutoff inside it separates\n"
-        f"  these two sets. Midpoint: RECALL_MAX_DISTANCE={suggested:.2f}\n"
-        "\n  Lean BELOW the midpoint, toward the hits, before shipping it:\n"
-        "  these fixtures are five short clean facts, and the real store is\n"
-        "  mostly long compaction summaries whose good hits will sit\n"
-        "  further out than anything measured here."
+        f"  these two sets.  midpoint {midpoint:.4f}  |  "
+        f"suggested RECALL_MAX_DISTANCE={suggested:.2f}\n"
+        "\n  ABOVE the midpoint, deliberately. Real entries are longer and\n"
+        "  messier than any fixture, so their good hits sit further out than\n"
+        "  the ones measured here -- which argues for MORE room above the\n"
+        "  hits, not less. (The first version of this harness said the\n"
+        "  opposite while giving this same reason.)\n"
+        "\n  A cutoff removes the case where nothing in the store is remotely\n"
+        "  relevant. It does not remove the case where several middling\n"
+        "  entries get welded into an invented answer -- check where your\n"
+        "  own bad runs actually sat before expecting it to."
     )
     return 0
 

@@ -446,12 +446,27 @@ RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 # those distances are cosine 0.60 down to 0.50, and true orthogonality
 # would be d = 1.414. Weak, yes. Noise, not demonstrably.
 #
-# Which means nobody can place this threshold yet: every distance we
-# have measured is from a query with no good answer in the store, and a
-# cutoff set from negatives alone silences real hits for free. What is
-# missing is a positive control -- bench/recall_distance.py exists to
-# produce one. Run it, read the gap between a hit and a miss, then set
-# this to something inside that gap.
+# MEASURED on the Deck the same day, once bench/recall_distance.py
+# supplied the missing positive control:
+#
+#     hits    0.6943 0.7439 0.9226 0.9351 0.9402   (all rank 1)
+#     misses  1.1096 1.1708 1.2071 1.2197 1.2586
+#
+# So a real hit tops out around 0.94 and the nearest unanswerable query
+# starts at 1.11. Against that scale the five rows above are placed at
+# last: the two closest sit INSIDE the range a genuine hit occupies.
+#
+# Which settles the more useful question. A cutoff that keeps real hits
+# would have kept four of those five rows, so it WOULD NOT have
+# prevented the answer it was proposed for. It removes the case where
+# nothing in the store is remotely relevant -- worth having, ~1.05 is a
+# defensible value -- and does nothing about several middling entries
+# being welded into an invented causality. That one is upstream: the
+# store holds compaction pointers and almost no facts.
+#
+# Still unset by default. The measurement is five short clean fixtures
+# and the real store is neither; re-measure against a copy of it
+# (--no-plant) before switching this on.
 #
 # Unset means no filtering, i.e. exactly today's behaviour.
 _recall_max_distance = os.getenv("RECALL_MAX_DISTANCE", "").strip()
