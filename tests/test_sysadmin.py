@@ -96,22 +96,73 @@ def test_sysadmin_collect_uses_container_when_target_hint_matches_container(
     assert "test-container" in state.context["collected_logs"]
 
 
-def test_sysadmin_collect_falls_back_to_kernel_when_target_not_discovered(
-    monkeypatch,
-):
-    """Security-critical: a target_hint that doesn't appear in this
-    run's own discovery output must never reach a log command -- it
-    silently falls back to kernel logs instead of being trusted."""
+def test_sysadmin_stops_when_the_target_is_not_discovered(monkeypatch):
+    """
+    Security-critical, and unchanged: a target_hint that doesn't appear
+    in this run's own discovery output must never reach a log command.
+
+    What changed is what happens instead. It used to fall back to
+    kernel logs and say nothing about it, and on run #83fc443e that
+    produced a confident, entirely invented diagnosis of a service the
+    collected logs never mentioned. Kernel logs cannot answer a
+    question about a named service, so the run now stops rather than
+    handing a model evidence about the wrong subject.
+    """
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
-    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
+
+    def no_call(prompt, grammar=None):  # pragma: no cover - must not run
+        raise AssertionError("the model was asked to diagnose the wrong logs")
+
+    monkeypatch.setattr(sysadmin_mod, "call_llm", no_call)
 
     state = build_sysadmin().run(
         "",
         initial_context={"target_hint": "nginx.service", "question": None},
     )
 
-    assert state.context["log_source"] == "journalctl -k"
-    assert state.context["collected_logs"] == "kernel log line"
+    assert "collected_logs" not in state.context
+    assert state.context["target_missed"] == "nginx.service"
+    assert "nginx.service" in state.final_output
+    assert "introuvable" in state.final_output
+
+
+def test_sysadmin_suggests_close_names_for_a_missed_target(monkeypatch):
+    """A typo is the cheapest cause of a miss and the cheapest to fix."""
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={"target_hint": "searxng.servce", "question": None},
+    )
+
+    assert "searxng.service" in state.final_output
+
+
+def test_a_missed_target_reports_failed_discovery_as_the_likelier_cause(monkeypatch):
+    """
+    The real chain on run #83fc443e was: podman proxy down -> zero
+    containers -> the hint matched nothing. "I could not find your
+    container" is true and useless; "container discovery failed" is
+    what the user has to act on.
+    """
+
+    def broken_containers(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["forge.service"])
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return "[error] connection refused"
+        return "kernel log line"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", broken_containers)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={"target_hint": "forge-llm", "question": "pourquoi ?"},
+    )
+
+    assert "connection refused" in state.final_output
 
 
 def test_sysadmin_collect_falls_back_to_kernel_when_no_target_hint(monkeypatch):
@@ -285,8 +336,20 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
         "", initial_context={"target_hint": "forge.service", "question": None}
     )
 
-    # the prompt must stay well under what blew the real context window
-    assert len(captured["prompt"]) < 4000
+    # The prompt is a fixed template plus a log block capped at
+    # SYSADMIN_LOG_CHARS_BUDGET. Asserting that relation rather than a
+    # round number: the old `< 4000` was a proxy for it and had to be
+    # revisited the first time the template gained a paragraph, which
+    # tells you nothing about whether the cap still holds.
+    empty_template = sysadmin_mod._SYNTHESIS_PROMPT.format(
+        today_line="Today's date is 2026-08-21.",
+        question="Diagnostique le problème et propose une solution.",
+        source="journalctl -u forge.service",
+        log_block="",
+    )
+    assert len(captured["prompt"]) <= (
+        len(empty_template) + sysadmin_mod.SYSADMIN_LOG_CHARS_BUDGET + 200
+    )
     # the tail of the log (most recent lines) must be preserved
     assert "line 1999" in captured["prompt"]
     # the head must have been dropped
@@ -661,7 +724,10 @@ def test_sysadmin_rejects_verbatim_example_leak(monkeypatch):
 
     state = build_sysadmin().run(
         "",
-        initial_context={"target_hint": "forge-llm", "question": "logs de forge-llm ?"},
+        initial_context={
+            "target_hint": "forge.service",
+            "question": "logs de forge ?",
+        },
     )
 
     assert "[error]" in state.final_output
@@ -725,3 +791,34 @@ def test_kernel_collection_takes_no_name_at_all():
     cmd = sysadmin_mod._collect_cmd("kernel", "ignored")
     assert "ignored" not in cmd
     assert "-k" in cmd
+
+
+def test_the_synthesis_prompt_allows_the_logs_to_be_off_topic(monkeypatch):
+    """
+    Defect (4) from the v3.11 list, reproduced live on run #83fc443e:
+    given the right logs or the wrong ones, this prompt asked for a
+    diagnosis and never for an admission. `research` has always had
+    that permission; this one did not.
+
+    Wording, and wording loses here -- the deterministic half of the
+    same defect is the target_missed node above, which removes the
+    commonest way of arriving with the wrong logs in the first place.
+    """
+    captured = {}
+
+    def fake_call_llm(prompt, grammar=None):
+        captured["prompt"] = prompt
+        return "diagnostic"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", fake_call_llm)
+
+    build_sysadmin().run(
+        "",
+        initial_context={"target_hint": "forge.service", "question": "pourquoi ?"},
+    )
+
+    prompt = captured["prompt"]
+    assert "may simply not contain the answer" in prompt
+    assert "say so plainly" in prompt
+    assert "absence of an error" in prompt

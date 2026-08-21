@@ -46,6 +46,7 @@ Usage (Python):
   print(run(target_hint="searxng", question="pourquoi ça redémarre ?"))
 """
 
+import difflib
 import json
 import subprocess
 
@@ -220,6 +221,14 @@ applies any fix by hand.
 
 Question: {question}
 
+These logs are whatever `{source}` returned. They were gathered before
+anyone read your question, so they may simply not contain the answer.
+If they do not, say so plainly and say what you would need to look at
+instead -- that is a correct answer here, and a confident diagnosis
+built on logs that do not mention the subject is the one failure this
+tool cannot recover from. Never treat the absence of an error in these
+logs as evidence that nothing is wrong.
+
 --- collected logs ({source}) ---
 {log_block}
 --- end of collected logs ---
@@ -344,18 +353,87 @@ def _collect_node(state: AgentState) -> AgentState:
     elif target_hint and target_hint in containers:
         cmd = _collect_cmd("container", target_hint)
         source = f"podman logs {target_hint}"
+    elif target_hint:
+        # No fallback here any more. It used to drop to `journalctl -k`
+        # and say nothing the model could see, and on run #83fc443e the
+        # whole chain played out in one go: the podman proxy was down ->
+        # containers came back empty -> the hint "forge-llm" matched
+        # nothing -> kernel logs were collected -> the model wrote a
+        # confident, entirely invented story about a variable blocking
+        # searxng. Every step was individually reasonable.
+        #
+        # Kernel logs are a fine answer to "what is wrong with this
+        # box?". They are never an answer to a question about a NAMED
+        # service, so a run that reaches them with a name in hand has
+        # already lost, and the only thing left to decide is whether it
+        # loses loudly. It now stops here: no logs, no model call, no
+        # opportunity to confabulate, and the report names what was
+        # actually broken (usually discovery, not the service).
+        state.context["target_missed"] = target_hint
+        log.warning(
+            "sysadmin: target_hint %r not found in discovery "
+            "(%d units, %d containers), stopping instead of collecting kernel logs",
+            target_hint,
+            len(units),
+            len(containers),
+        )
+        log.event("sysadmin.target_missed", target=target_hint)
+        return state
     else:
-        if target_hint:
-            log.warning(
-                "sysadmin: target_hint %r not found in discovery, falling back to kernel logs",
-                target_hint,
-            )
         cmd = _collect_cmd("kernel", "")
         source = "journalctl -k"
 
     state.context["log_source"] = source
     state.context["collected_logs"] = _run_fixed(cmd, SYSADMIN_COLLECT_TIMEOUT)
     log.event("sysadmin.collect", source=source)
+    return state
+
+
+def _target_missed_node(state: AgentState) -> AgentState:
+    """
+    Report an unresolvable target, deterministically.
+
+    Written entirely in code. This node exists because a model was
+    asked to diagnose a service using logs from a different subsystem
+    and did it -- fluently. There is no prompt for that; the answer is
+    to not ask.
+    """
+    target = state.context["target_missed"]
+    units = state.context["units"]
+    containers = state.context["containers"]
+
+    lines = [
+        (
+            f"[cible introuvable] « {target} » ne correspond à aucune unité "
+            f"systemd ni à aucun conteneur parmi ce que la découverte a "
+            f"remonté ({len(units)} unités, {len(containers)} conteneurs)."
+        )
+    ]
+
+    # Discovery failing is the interesting case and the common one: an
+    # empty list means the proxy or busctl is down, not that the
+    # machine has no services. Naming that turns "I could not find your
+    # service" into "here is what to restart".
+    for label, err_key, count in (
+        ("unités systemd", "discover_units_error", len(units)),
+        ("conteneurs", "discover_containers_error", len(containers)),
+    ):
+        err = state.context.get(err_key)
+        if err:
+            lines.append(f"La découverte des {label} a échoué : {err}")
+        elif count == 0:
+            lines.append(
+                f"Aucun élément dans la liste des {label} — c'est "
+                f"probablement la découverte qui est en panne, pas la cible."
+            )
+
+    close = difflib.get_close_matches(target, units + containers, n=3, cutoff=0.6)
+    if close:
+        lines.append("Cibles proches : " + ", ".join(close))
+
+    state.final_output = "\n".join(lines)
+    state.final_tool = "sysadmin"
+    log.event("sysadmin.done", chars=len(state.final_output), target_missed=target)
     return state
 
 
@@ -460,9 +538,16 @@ def build() -> Graph:
     g = Graph("sysadmin", max_steps=6)
     g.add_node("discover", _discover_node)
     g.add_node("collect", _collect_node)
+    g.add_node("target_missed", _target_missed_node)
     g.add_node("synthesize", _synthesize_node)
 
     g.add_edge("discover", "collect")
+    # Order matters -- Graph takes the first matching edge.
+    g.add_edge(
+        "collect",
+        "target_missed",
+        condition=lambda s: bool(s.context.get("target_missed")),
+    )
     g.add_edge("collect", "synthesize")
 
     return g
@@ -506,6 +591,9 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
         return f"{services_part} | {containers_part}"
 
     def collect_detail() -> str:
+        missed = state.context.get("target_missed")
+        if missed:
+            return f"cible « {missed} » introuvable, aucun log collecté"
         source = state.context.get("log_source", "?")
         if collect_error:
             return f"source : {source} | erreur : {collect_error}"
@@ -514,6 +602,9 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
     details = {
         "discover": discover_detail,
         "collect": collect_detail,
+        "target_missed": lambda: (
+            f"« {state.context.get('target_missed')} » absent de la découverte"
+        ),
         "synthesize": lambda: (
             f"diagnostic généré ({len(state.final_output or '')} caractères)"
         ),
@@ -531,7 +622,8 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
                 False
                 if ts.decision_tool == "discover" and (units_error or containers_error)
                 else False
-                if ts.decision_tool == "collect" and collect_error
+                if ts.decision_tool == "collect"
+                and (collect_error or state.context.get("target_missed"))
                 else ts.tool_ok
             ),
             "duration_ms": ts.duration_ms,
