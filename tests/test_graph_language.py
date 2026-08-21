@@ -11,7 +11,7 @@ what gets sent, and that an unrecognised question adds nothing.
 
 import pytest
 
-from forge import lang, prose_grammar
+from forge import lang
 from forge.graphs import research as research_mod
 from forge.graphs import review as review_mod
 from forge.graphs import sysadmin as sysadmin_mod
@@ -99,9 +99,11 @@ def test_an_answer_in_the_wrong_language_is_asked_again(monkeypatch, run):
 
     assert len(sent) == 2
     assert "wrong language" in sent[1][0]
-    # The retry keeps the prose grammar: a second call under the router
-    # grammar would come back as JSON and be "fixed" into an error.
-    assert sent[1][1] == prose_grammar.PROSE
+    # The retry passes no grammar, exactly like the first call, so it
+    # is sampled under the same conditions and cleaned by the same
+    # function. A retry under different sampling would be measuring a
+    # second thing while trying to fix the first.
+    assert sent[1][1] is None
 
 
 @pytest.mark.parametrize("run", RUNNERS)

@@ -42,7 +42,7 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import lang, prose_grammar, rag
+from forge import lang, rag
 from forge.config import ENFORCE_ANSWER_LANGUAGE, RECALL_MAX_ANSWER_CHARS
 from forge.errors import ProviderError
 from forge.graph import Graph
@@ -248,12 +248,11 @@ def _synthesize_node(state: AgentState) -> AgentState:
         language=(lang.name(lang.detect(query)) or "unknown"),
     )
     try:
-        # Without a grammar, providers/llama_cpp._grammar_for() falls
-        # back to the ROUTER's -- so the sampler admitted only
-        # {"tool":...,"content":...} and the four paragraphs of this
-        # prompt asking for plain text were asking for something the
-        # decoder could not produce. See forge/prose_grammar.py.
-        raw = call_llm(prompt, grammar=prose_grammar.SENTENCE)
+        # No grammar, so _grammar_for() supplies the ROUTER's -- and
+        # that is deliberate. See the header of forge/prose_grammar.py:
+        # sampling this prompt as free prose was measured on the Deck
+        # and made recall return '<answer>' and nothing else.
+        raw = call_llm(prompt)
         log.event("recall.raw_output", raw=raw)
         answer = _clean_synthesis_response(raw)
 
@@ -261,10 +260,7 @@ def _synthesize_node(state: AgentState) -> AgentState:
             query,
             answer,
             retry=lambda line: _clean_synthesis_response(
-                call_llm(
-                    _build_prompt(query, entries_block, line),
-                    grammar=prose_grammar.SENTENCE,
-                )
+                call_llm(_build_prompt(query, entries_block, line))
             ),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )

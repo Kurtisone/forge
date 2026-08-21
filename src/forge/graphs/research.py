@@ -46,7 +46,7 @@ Usage (Python):
   print(run("actualités jeu vidéo"))
 """
 
-from forge import lang, prose_grammar
+from forge import lang
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RESEARCH_FETCH_CHARS_PER_RESULT,
@@ -221,10 +221,9 @@ def _synthesize_node(state: AgentState) -> AgentState:
 
     log.event("research.llm_call", query=query[:120], prompt_chars=len(prompt))
     try:
-        # PROSE, not the router grammar: without one,
-        # _grammar_for() supplies the router's and this synthesis can
-        # only come back as {"tool":...}. See forge/prose_grammar.py.
-        raw = call_llm(prompt + language_line, grammar=prose_grammar.PROSE)
+        # No grammar, so _grammar_for() supplies the ROUTER's. That is
+        # deliberate -- see the header of forge/prose_grammar.py.
+        raw = call_llm(prompt + language_line)
         log.event("research.raw_output", raw=raw)
         answer = _clean_synthesis_response(raw)
         # The deterministic half. Naming the language in the prompt is
@@ -235,9 +234,7 @@ def _synthesize_node(state: AgentState) -> AgentState:
         answer = lang.enforce(
             query,
             answer,
-            retry=lambda line: _clean_synthesis_response(
-                call_llm(prompt + line, grammar=prose_grammar.PROSE)
-            ),
+            retry=lambda line: _clean_synthesis_response(call_llm(prompt + line)),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
     except ProviderError as e:

@@ -298,3 +298,16 @@ def test_the_tripwire_stays_quiet_when_the_runners_are_there(monkeypatch):
     monkeypatch.setattr(test_mod.shutil, "which", lambda name: "/usr/bin/pytest")
 
     assert test_mod._missing_runners() == []
+
+
+def test_the_tripwire_message_actually_names_them():
+    """
+    Shipped on 2026-08-21 reading "the tool is enabled but are not
+    installed here": the list was computed and then left out of the
+    format arguments. A warning whose entire job is to name something
+    has to name it.
+    """
+    assert "pytest, ruff are not installed" in test_mod._tripwire_message(
+        ["pytest", "ruff"]
+    )
+    assert "pytest is not installed" in test_mod._tripwire_message(["pytest"])

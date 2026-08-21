@@ -154,3 +154,33 @@ def test_llm_summary_strategy(monkeypatch):
 
     assert result[0]["role"] == "system"
     assert "résumé condensé" in result[0]["content"]
+
+
+def test_llm_summary_never_writes_a_routing_decision_into_the_history(monkeypatch):
+    """
+    This strategy passes no grammar, so _grammar_for() gives it the
+    router's and the model can answer with {"tool":...,"content":...}.
+    Everywhere else that shape reaches a human who can see it is
+    wrong; here it is written into the history AS the compacted block,
+    replacing the messages it summarised, and they are gone.
+
+    COMPACTION_STRATEGY=llm_summary is one line of .env from being
+    live.
+    """
+    monkeypatch.setattr(
+        "forge.llm.call_llm",
+        lambda prompt, grammar=None: (
+            '{"tool":"chat","content":"Décision prise sur le noyau, travail en '
+            'cours sur la branche de dettes, fichiers recall.py et lang.py."}'
+        ),
+    )
+
+    out = compaction._strategy_llm_summary(
+        [
+            {"id": 1, "role": "user", "content": "un"},
+            {"id": 2, "role": "assistant", "content": "deux"},
+        ]
+    )
+
+    assert '{"tool"' not in out["content"]
+    assert "Décision prise sur le noyau" in out["content"]

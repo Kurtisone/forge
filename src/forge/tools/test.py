@@ -119,16 +119,25 @@ def _missing_runners() -> list[str]:
 # not; it was the deployment. A configuration fact belongs at startup,
 # where it is stated once, rather than being rediscovered from a
 # dispatch that looks like a different bug.
-if "test" in ENABLED_TOOLS and (_absent := _missing_runners()):
-    log.warning(
-        "test: the tool is enabled but %s not installed here, so every "
+def _tripwire_message(absent: list[str]) -> str:
+    """Built by a function so a test can read it. The first version of
+    this warning computed the list of missing runners and then left it
+    out of the format arguments, and shipped saying "the tool is
+    enabled but are not installed here" -- a warning whose entire job
+    is to name something, not naming it."""
+    return (
+        f"test: the tool is enabled but {', '.join(absent)} "
+        f"{'is' if len(absent) == 1 else 'are'} not installed here, so every "
         "dispatch of it (and graphs/review.py's test step) will fail with "
-        "'executable not found'. The Containerfile installs "
-        "requirements.txt only, and the runners live in "
-        "requirements-dev.txt -- either install them in the image, or drop "
-        "'test' from ENABLED_TOOLS so the router stops offering it.",
-        "is" if len(_absent) == 1 else "are",
+        "'executable not found'. The Containerfile installs requirements.txt "
+        "only, and the runners live in requirements-dev.txt -- either install "
+        "them in the image, or drop 'test' from ENABLED_TOOLS so the router "
+        "stops offering it."
     )
+
+
+if "test" in ENABLED_TOOLS and (_absent := _missing_runners()):
+    log.warning("%s", _tripwire_message(_absent))
 
 
 def _safe_cwd() -> Path:

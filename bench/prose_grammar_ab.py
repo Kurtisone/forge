@@ -58,11 +58,40 @@ Columns:
         what this harness is for, but free to check and it has caught
         a regression here before (see no_think_ab.py).
 
-Read GEN first. A prose arm within roughly 1.5x of the router arm is
-the expected result: the router arm's number is inflated by the JSON
-scaffolding it has to emit, so a modest increase is not padding. A 3x
-or a CAP is padding, and the answer is a length bound in the grammar,
-not a sentence added to the prompt.
+RESULT, Deck, 2026-08-21 -- read this before rerunning
+------------------------------------------------------
+The prose arm lost on every graph, and not narrowly.
+
+    graph      router arm             prose arm
+    recall      23 tok, correct       '<answer>', 8 chars, nothing else
+    review      72 tok, found the bug 'NO_THINK:', 5 tokens, stop
+    research    86 tok, correct       1536 tok, CAP, output was the
+                                      PROMPT's instructions read back
+    sysadmin   164 tok, correct       '<analysis>' block, 314 tok
+
+GEN was the wrong thing to watch, and this harness said so in the
+wrong direction: it predicted padding and warned about 3x, when three
+of four failures were the model stopping EARLY on scaffolding it could
+suddenly emit. recall at 11 tokens looked like the best number in the
+table and was an empty answer.
+
+What the router grammar was actually doing, on this model:
+
+  1. Suppressing <answer>, <think>, <analysis> and "NO_THINK:". The
+     first token had to be "{", so none of them were reachable. The
+     /no_think verdict in no_think_ab.py noticed this in 2026-08-16
+     and filed it as irrelevant. It was load-bearing.
+  2. Being the only hard TERMINATOR. An object cannot run past its
+     closing brace; free prose runs to n_predict, which research did.
+
+So the graph prompts have never been written for unconstrained
+decoding -- they were written against a grammar that was quietly doing
+half the work. A future attempt needs the prompts rewritten FIRST, and
+a replacement that is still a closed shape with a terminator (what
+spec.build_spec_grammar does for delegate), not a character filter.
+
+Keep this harness. It cost one run to overturn a conclusion that had
+survived a full branch, a root-cause analysis and 975 green tests.
 """
 
 import argparse

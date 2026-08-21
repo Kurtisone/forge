@@ -49,7 +49,7 @@ Usage (Python):
 import json
 import subprocess
 
-from forge import lang, prose_grammar, subtrace
+from forge import lang, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     SYSADMIN_COLLECT_TIMEOUT,
@@ -428,10 +428,9 @@ def _synthesize_node(state: AgentState) -> AgentState:
 
     log.event("sysadmin.llm_call", source=source, prompt_chars=len(prompt))
     try:
-        # PROSE, not the router grammar -- see forge/prose_grammar.py.
-        # This graph has logged "model wrapped a substantive answer in
-        # router-style JSON" since v3.11; that was the cause.
-        raw = call_llm(prompt + language_line, grammar=prose_grammar.PROSE)
+        # No grammar, so _grammar_for() supplies the ROUTER's. That is
+        # deliberate -- see the header of forge/prose_grammar.py.
+        raw = call_llm(prompt + language_line)
         log.event("sysadmin.raw_output", raw=raw)
         answer = _clean_diagnosis_response(raw)
         # The deterministic half. Naming the language in the prompt is
@@ -442,9 +441,7 @@ def _synthesize_node(state: AgentState) -> AgentState:
         answer = lang.enforce(
             question,
             answer,
-            retry=lambda line: _clean_diagnosis_response(
-                call_llm(prompt + line, grammar=prose_grammar.PROSE)
-            ),
+            retry=lambda line: _clean_diagnosis_response(call_llm(prompt + line)),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
     except ProviderError as e:

@@ -47,7 +47,7 @@ Usage (Python):
 
 from pathlib import Path
 
-from forge import lang, prose_grammar
+from forge import lang
 from forge.config import ENFORCE_ANSWER_LANGUAGE
 from forge.context_info import today_line
 from forge.errors import ProviderError
@@ -337,8 +337,9 @@ def _llm_review_node(state: AgentState) -> AgentState:
 
     log.event("review.llm_call", filename=filename, prompt_chars=len(prompt))
     try:
-        # PROSE, not the router grammar -- see forge/prose_grammar.py.
-        raw = call_llm(prompt + language_line, grammar=prose_grammar.PROSE)
+        # No grammar, so _grammar_for() supplies the ROUTER's. That is
+        # deliberate -- see the header of forge/prose_grammar.py.
+        raw = call_llm(prompt + language_line)
         log.event("review.raw_output", raw=raw)
         answer = _clean_review_response(raw)
         # The deterministic half. Naming the language in the prompt is
@@ -349,9 +350,7 @@ def _llm_review_node(state: AgentState) -> AgentState:
         answer = lang.enforce(
             question,
             answer,
-            retry=lambda line: _clean_review_response(
-                call_llm(prompt + line, grammar=prose_grammar.PROSE)
-            ),
+            retry=lambda line: _clean_review_response(call_llm(prompt + line)),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
     except ProviderError as e:

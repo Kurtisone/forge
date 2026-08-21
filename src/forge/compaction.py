@@ -25,7 +25,7 @@ copy of that arithmetic would be a second definition of the same fact,
 free to drift from the one that matters.
 """
 
-from forge import prose_grammar, rag
+from forge import rag
 from forge.config import (
     COMPACTION_ENABLED,
     COMPACTION_KEEP_RECENT,
@@ -36,6 +36,7 @@ from forge.config import (
 )
 from forge.logger import log
 from forge.router.prompt import estimate_history_tokens
+from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
 
 
 class CompactionError(Exception):
@@ -238,14 +239,25 @@ def _strategy_llm_summary(messages: list[dict]) -> dict:
     )
 
     try:
-        # A summary is prose too. Under the router grammar this
-        # strategy could only ever produce a routing decision, which
-        # would then be pasted into the history as the compacted
-        # block -- and COMPACTION_STRATEGY is one config line away.
-        summary = call_llm(prompt, grammar=prose_grammar.PROSE)
+        raw = call_llm(prompt)
     except ProviderError as e:
         log.error("compaction: llm_summary strategy failed: %s", e)
         raise CompactionError(str(e)) from e
+
+    # Same treatment the four graphs give their syntheses, and this is
+    # the call where skipping it costs the most. No grammar means the
+    # router's (see providers/llama_cpp._grammar_for), so the model can
+    # answer with a routing decision -- and here that decision is not
+    # shown to someone who can see it is wrong, it is WRITTEN INTO THE
+    # HISTORY as the compacted block, replacing the messages it was
+    # meant to summarise. Irreversibly: the originals are gone.
+    #
+    # COMPACTION_STRATEGY=llm_summary is one line of .env away from
+    # being the live strategy, and nothing would have warned first.
+    summary = strip_think_blocks(raw)
+    unwrapped = try_unwrap_router_json(summary, "compaction")
+    if unwrapped is not None:
+        summary = unwrapped
 
     return {
         "id": messages[0]["id"],
