@@ -48,7 +48,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from forge import jobs, memory, rag, ratelimit, trace
+from forge import __version__, jobs, memory, rag, ratelimit, trace
 from forge.config import (
     API_ALLOW_UNAUTHENTICATED,
     API_DOCS_ENABLED,
@@ -147,7 +147,7 @@ async def lifespan(_app: FastAPI):
 # development.
 app = FastAPI(
     title="Forge",
-    version="3.3.0",
+    version=__version__,
     docs_url="/docs" if API_DOCS_ENABLED else None,
     redoc_url="/redoc" if API_DOCS_ENABLED else None,
     openapi_url="/openapi.json" if API_DOCS_ENABLED else None,
