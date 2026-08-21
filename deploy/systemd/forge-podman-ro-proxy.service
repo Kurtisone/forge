@@ -8,7 +8,11 @@ After=podman.socket
 Type=simple
 ExecStart=/usr/bin/python3 __FORGE_REPO_DIR__/deploy/podman_ro_proxy.py \
   --upstream %t/podman/podman.sock \
-  --listen %t/forge-podman-ro-proxy.sock
+  --listen %t/forge-podman-ro-proxy/sock
+# Deliberately NOT RuntimeDirectory=: systemd removes that
+# directory when the unit stops, which would delete the very
+# thing whose stability the container's bind mount depends on.
+# The proxy mkdir -p's its own socket directory instead.
 Restart=on-failure
 RestartSec=2
 

@@ -18,6 +18,25 @@ Everything else -- every other path, every non-GET method -- gets a
 what gets mounted into Forge's container (via SYSADMIN_PODMAN_URL),
 never the real one.
 
+THE SOCKET LIVES IN ITS OWN DIRECTORY, and that is not cosmetic.
+
+This process unlinks and recreates its socket on every start (below),
+so the file gets a new inode each time. A container that bind-mounts
+the socket FILE keeps pointing at the old, unlinked one: the mount
+resolved the inode once, at container start, and nothing re-resolves
+it. The container then sees a socket with nobody listening and reports
+`connect: connection refused` -- which reads exactly like the proxy
+being down, while the proxy is running perfectly two metres away. It
+stays broken until the CONTAINER is recreated, not the proxy.
+
+Observed 2026-08-21, after a `systemctl --user restart` that succeeded.
+
+forge-dbus-proxy never had this problem, because xdg-dbus-proxy puts
+its socket in $XDG_RUNTIME_DIR/forge-dbus-proxy/bus and the compose
+file mounts that DIRECTORY. A directory mount resolves names on every
+access, so a recreated socket inside it is found. This proxy now does
+the same thing for the same reason.
+
 `?follow=true` on the logs path is refused too, even though it's a
 GET on an allowed path: it asks podman for a stream that never ends,
 which parks a handler thread and an upstream connection for good.
@@ -33,11 +52,11 @@ moving part with no extra dependency to audit.
 Usage:
     python3 podman_ro_proxy.py \\
         --upstream /run/podman/podman.sock \\
-        --listen /run/forge-podman-ro-proxy.sock
+        --listen /run/forge-podman-ro-proxy/sock
 
 Then point Forge's container at the listen socket, bind-mounted
 read-only, and set in .env.local:
-    SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
+    SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy/sock
 """
 
 from __future__ import annotations
@@ -297,6 +316,10 @@ def main() -> None:
         help="cap on a forwarded response body (default: %(default)s)",
     )
     args = parser.parse_args()
+
+    # The socket's PARENT is created here and never removed. That is
+    # the whole point of it having one -- see the module docstring.
+    os.makedirs(os.path.dirname(os.path.abspath(args.listen)), exist_ok=True)
 
     if os.path.exists(args.listen):
         os.remove(args.listen)

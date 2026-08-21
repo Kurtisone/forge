@@ -63,11 +63,11 @@ echo "Status:"
 systemctl --user is-active forge-dbus-proxy.service forge-podman-ro-proxy.service
 echo
 echo "Sockets:"
-ls -la "${XDG_RUNTIME_DIR}/forge-dbus-proxy/bus" "${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock"
+ls -la "${XDG_RUNTIME_DIR}/forge-dbus-proxy/bus" "${XDG_RUNTIME_DIR}/forge-podman-ro-proxy/sock"
 echo
 echo "Done. Add to .env.local:"
 echo "  SYSADMIN_DBUS_ADDRESS=unix:path=/run/forge-dbus-proxy/bus"
-echo "  SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock"
+echo "  SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy/sock"
 echo "Then mount both sockets when running Forge's container -- see README.md's"
 echo "'API server' section for the full podman run command."
 echo

@@ -85,7 +85,7 @@ protects the socket *file*, not the *requests* sent through it.
 `tests/test_podman_ro_proxy.py` for the filter's own test coverage.
 
 ```
-SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
+SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy/sock
 ```
 
 ## Running Forge with both proxies mounted
@@ -106,7 +106,7 @@ podman run -d --name forge \
   -v $(pwd)/data:/app/data \
   -v /var/log/journal:/host-journal:ro \
   -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
-  -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
+  -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy:/run/forge-podman-ro-proxy:ro \
   -p 8000:8000 \
   forge-core
 ```
@@ -134,7 +134,7 @@ services:
       - ./data:/app/data
       - /var/log/journal:/host-journal:ro
       - ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro
-      - ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro
+      - ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy:/run/forge-podman-ro-proxy:ro
 ```
 
 (`${XDG_RUNTIME_DIR}` on the host side -- e.g. `/run/user/1000` on a
@@ -194,7 +194,7 @@ podman exec forge touch /app/data/.write-test && echo OK
 # 4. Both proxies still reachable. Use a *root-owned* unit here:
 #    it's the one subject to the wheel ACL on system.journal, so it
 #    tests group access rather than just "no entries".
-podman exec forge podman --url unix:///run/forge-podman-ro-proxy.sock ps
+podman exec forge podman --url unix:///run/forge-podman-ro-proxy/sock ps
 podman exec forge journalctl -D /host-journal -u steamos-manager.service -n 5
 ```
 

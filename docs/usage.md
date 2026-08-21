@@ -50,7 +50,7 @@ podman run -d --name forge \
   -v $(pwd)/data:/app/data \
   -v /var/log/journal:/host-journal:ro \
   -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro \
-  -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro \
+  -v ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy:/run/forge-podman-ro-proxy:ro \
   -p 8000:8000 \
   forge-core
 ```
@@ -67,7 +67,7 @@ In `.env.local`:
 ```
 SYSADMIN_JOURNAL_DIR=/host-journal
 SYSADMIN_DBUS_ADDRESS=unix:path=/run/forge-dbus-proxy/bus
-SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy.sock
+SYSADMIN_PODMAN_URL=unix:///run/forge-podman-ro-proxy/sock
 SYSADMIN_MAX_LOG_LINES=100
 ```
 

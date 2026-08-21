@@ -135,7 +135,7 @@ FIXTURES: list[tuple[str, str, str]] = [
         "decision",
         (
             "Le proxy podman read-only écoute sur "
-            "/run/forge-podman-ro-proxy.sock et tourne sur l'hôte, pas dans "
+            "/run/forge-podman-ro-proxy/sock et tourne sur l'hôte, pas dans "
             "le container."
         ),
         "Où est le socket du proxy podman ?",

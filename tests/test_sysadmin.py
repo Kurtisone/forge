@@ -404,7 +404,7 @@ def test_sysadmin_discover_handles_nonzero_exit_gracefully(monkeypatch):
             return (
                 "[error] podman exited 125: Cannot connect to Podman. "
                 "Error: unable to connect to Podman socket: dial unix "
-                "/run/forge-podman-ro-proxy.sock: connect: no such file "
+                "/run/forge-podman-ro-proxy/sock: connect: no such file "
                 "or directory"
             )
         return "kernel log line"
@@ -535,7 +535,7 @@ def test_sysadmin_uses_configured_podman_url(monkeypatch):
     socket, never the raw host socket) must add --url <value> to
     every podman call."""
     monkeypatch.setattr(
-        sysadmin_mod, "SYSADMIN_PODMAN_URL", "unix:///run/forge-podman-ro-proxy.sock"
+        sysadmin_mod, "SYSADMIN_PODMAN_URL", "unix:///run/forge-podman-ro-proxy/sock"
     )
     calls = []
 
@@ -555,7 +555,7 @@ def test_sysadmin_uses_configured_podman_url(monkeypatch):
     podman_calls = [c for c in calls if c[0] == "podman"]
     assert podman_calls, "expected at least one podman call"
     for c in podman_calls:
-        assert c[1:3] == ["--url", "unix:///run/forge-podman-ro-proxy.sock"]
+        assert c[1:3] == ["--url", "unix:///run/forge-podman-ro-proxy/sock"]
 
 
 def test_sysadmin_passes_configured_dbus_address_to_subprocess_env(monkeypatch):
