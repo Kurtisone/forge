@@ -76,27 +76,62 @@ def test_rejects_path_traversal_style_attempts():
     assert not _is_allowed("GET", "/containers/abc/logs/../start")
 
 
-def test_rejects_follow_in_any_form():
+def test_rejects_a_request_that_asks_to_stream():
     """A follow request is a GET on an allowed path, so the allowlist
     alone lets it straight through -- and podman then never closes
     the connection, parking a handler thread and an upstream socket
     permanently. Three of those and sysadmin's log collection is dead
     without a single rule being broken (audit M-1).
 
-    Every spelling is refused, including the ones podman itself would
-    read as false: guessing which strings someone else's decoder
-    calls true is how a filter and its target end up disagreeing."""
+    Anything not on the falsy allowlist is refused, including a bare
+    `?follow` with no value: an unknown spelling must be denied, not
+    streamed."""
     for query in (
         "?follow=true",
         "?follow=1",
         "?follow=TRUE",
         "?follow",
-        "?follow=false",
+        "?follow=yes",
+        "?follow=",
         "?stdout=true&follow=true",
         "?FOLLOW=true",
+        "?follow=false&follow=true",
     ):
         path = f"/v4.9.0/libpod/containers/abc123/logs{query}"
         assert not _is_allowed("GET", path), f"unexpectedly allowed: GET {path}"
+
+
+def test_allows_the_false_follow_that_podman_sends_by_itself():
+    """
+    The regression this whole change exists for.
+
+    The check used to refuse the PRESENCE of the key, on the stated
+    grounds that "Forge never sends the parameter in any form
+    (graphs/sysadmin.py runs `podman logs --tail N`)". Forge does not
+    -- the podman CLI does, on its own, on every logs request
+    including a non-streaming one.
+
+    So `podman logs` through this proxy returned 403 in every
+    deployment since it shipped, and podman renders the plain-text
+    refusal as an unmarshalling error, which reads like a protocol
+    bug rather than a policy decision. sysadmin then handed that
+    refusal to the model as if it were the container's logs.
+
+    Confirmed by hand on the Deck, 2026-08-21, before the fix:
+
+        Error: unmarshalling error into &errorhandling.ErrorModel{...},
+        data "forbidden: podman_ro_proxy only allows GET on ..."
+        RC=125
+    """
+    for query in ("?follow=false", "?follow=0", "?follow=False"):
+        path = f"/v4.9.0/libpod/containers/abc123/logs{query}&tail=200"
+        assert _is_allowed("GET", path), f"unexpectedly refused: GET {path}"
+
+    assert _is_allowed(
+        "GET",
+        "/v4.9.0/libpod/containers/abc123/logs"
+        "?follow=false&stdout=true&stderr=true&tail=200",
+    )
 
 
 def test_still_allows_the_query_parameters_sysadmin_actually_sends():

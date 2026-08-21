@@ -69,8 +69,13 @@ _ALLOWED_GET_PATTERNS = [
 ]
 
 
-def _mentions_follow(path: str) -> bool:
-    """True if the query string mentions `follow` at all.
+# The only values of `follow` that are let through. An allowlist of
+# literals, deliberately, not a boolean parser -- see _asks_to_follow.
+_FALSY_FOLLOW_VALUES = frozenset({"false", "0"})
+
+
+def _asks_to_follow(path: str) -> bool:
+    """True if the query string asks to STREAM the logs.
 
     `GET /containers/{id}/logs?follow=true` never returns: podman
     holds the connection open and keeps writing. This proxy reads the
@@ -80,18 +85,50 @@ def _mentions_follow(path: str) -> bool:
     with no exploit, no mutation, and nothing in the allowlist
     violated.
 
-    The test is presence of the key, not whether its value looks
-    true. `?follow`, `?follow=1`, `?follow=TRUE` and `?follow=false`
-    are all refused, because deciding which of those podman's own
-    decoder reads as true means reimplementing someone else's
-    boolean parsing and being right about it -- the classic way a
-    filter and the thing it filters end up disagreeing. Forge never
-    sends the parameter in any form (graphs/sysadmin.py runs
-    `podman logs --tail N`), so refusing all of them costs nothing.
+    This used to refuse the PRESENCE of the key, whatever its value,
+    on the reasoning that deciding which spellings podman's own
+    decoder reads as true means reimplementing someone else's boolean
+    parsing -- and that it cost nothing, "because Forge never sends
+    the parameter in any form (graphs/sysadmin.py runs
+    `podman logs --tail N`)".
+
+    That last clause was the mistake, and it cost the entire feature.
+    Forge does not send it; the podman CLI does, on its own, on every
+    logs request including a non-streaming one. So `podman logs`
+    against this proxy has ALWAYS returned 403, in every deployment,
+    since the proxy shipped -- and podman renders that plain-text
+    refusal as an unmarshalling error, which looks like a protocol
+    bug rather than a policy decision. Confirmed by hand on
+    2026-08-21:
+
+        Error: unmarshalling error into &errorhandling.ErrorModel{...},
+        data "forbidden: podman_ro_proxy only allows GET on
+        /containers/json and /containers/{id}/logs, and never with
+        follow": invalid character 'o' in literal false
+        RC=125
+
+    Worse than a dead feature: sysadmin fed that refusal to the model
+    as though it were the container's logs, and the model dutifully
+    diagnosed the container as broken because of a proxy 403. Two
+    separate real runs, two confident fabrications
+    (#7a29f59d, #7e0ed90c).
+
+    The fix keeps the original reasoning and drops the false premise.
+    Still no boolean parsing: an ALLOWLIST of the two literals that
+    mean false, everything else refused. `?follow`, `?follow=true`,
+    `?follow=1`, `?follow=TRUE` and any spelling not on the list stay
+    refused. If podman ever changes what it sends, the request is
+    denied rather than streamed -- failing closed, which is the
+    direction this proxy is supposed to fail in.
     """
     query = urllib.parse.urlsplit(path).query
-    keys = urllib.parse.parse_qs(query, keep_blank_values=True).keys()
-    return any(key.lower() == "follow" for key in keys)
+    params = urllib.parse.parse_qs(query, keep_blank_values=True)
+    for key, values in params.items():
+        if key.lower() != "follow":
+            continue
+        if not all(v.strip().lower() in _FALSY_FOLLOW_VALUES for v in values):
+            return True
+    return False
 
 
 def _is_allowed(method: str, path: str) -> bool:
@@ -99,7 +136,7 @@ def _is_allowed(method: str, path: str) -> bool:
         return False
     if not any(p.match(path) for p in _ALLOWED_GET_PATTERNS):
         return False
-    return not _mentions_follow(path)
+    return not _asks_to_follow(path)
 
 
 # Defaults for the two limits below. Both are here because this proxy
