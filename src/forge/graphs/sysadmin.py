@@ -224,7 +224,7 @@ will execute anything: you only read logs and propose, a human always
 applies any fix by hand.
 
 Question: {question}
-
+{running_fact}
 These logs are whatever `{source}` returned. They were gathered before
 anyone read your question, so they may simply not contain the answer.
 If they do not, say so plainly and say what you would need to look at
@@ -417,6 +417,21 @@ def _collect_node(state: AgentState) -> AgentState:
     return state
 
 
+_RUNNING_FACT = """
+FACT, established before you were called and not open to
+reinterpretation: `{target}` WAS RUNNING when these logs were
+collected. It appeared in `podman ps`, which lists running containers
+only. Whatever the logs contain, this container was not down, had not
+crashed, and was not failing to start. A question that assumes
+otherwise is mistaken, and saying so is the correct answer.
+"""
+
+_RUNNING_FOOTER = (
+    "\n\n---\n_État observé : `{target}` tournait au moment de la collecte "
+    "(présent dans `podman ps`)._"
+)
+
+
 def _collect_failed_node(state: AgentState) -> AgentState:
     """
     Report a failed collection, deterministically.
@@ -557,11 +572,28 @@ def _synthesize_node(state: AgentState) -> AgentState:
         state.context["collected_logs"], SYSADMIN_LOG_CHARS_BUDGET
     )
 
+    # Run #be385d16: asked "pourquoi forge-embedding plante ?" about a
+    # container that was up, the model read a routine llama.cpp
+    # n_batch notice and concluded the service was crashing on "une
+    # assertion ou une erreur interne NON AFFICHÉE" -- inventing the
+    # evidence it lacked. Ninth time a wording fix has lost here.
+    #
+    # So this is not a wording fix. Discovery lists containers with
+    # `podman ps`, no -a, which means presence in that list IS proof
+    # the container was running. That fact is free, already collected,
+    # and was being thrown away. It goes in the prompt as a FACT rather
+    # than an instruction, and in the answer as a footer that holds
+    # whatever the model decides to say.
+    target = state.context.get("target_hint")
+    running = bool(target) and target in state.context.get("containers", [])
+    running_fact = _RUNNING_FACT.format(target=target) if running else ""
+
     prompt = _SYNTHESIS_PROMPT.format(
         today_line=today_line(),
         question=question,
         source=source,
         log_block=log_block,
+        running_fact=running_fact,
     )
 
     # Language named in LAST position, and only when forge.lang is
@@ -597,9 +629,12 @@ def _synthesize_node(state: AgentState) -> AgentState:
         state.final_output = f"[error] LLM unavailable: {e}"
         return state
 
+    if running and not answer.startswith("[error]"):
+        answer += _RUNNING_FOOTER.format(target=target)
+
     state.final_output = answer
     state.final_tool = "sysadmin"
-    log.event("sysadmin.done", chars=len(state.final_output))
+    log.event("sysadmin.done", chars=len(state.final_output), target_running=running)
     return state
 
 

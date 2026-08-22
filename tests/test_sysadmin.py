@@ -346,6 +346,7 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
         question="Diagnostique le problème et propose une solution.",
         source="journalctl -u forge.service",
         log_block="",
+        running_fact="",
     )
     assert len(captured["prompt"]) <= (
         len(empty_template) + sysadmin_mod.SYSADMIN_LOG_CHARS_BUDGET + 200
@@ -928,3 +929,66 @@ def test_a_healthy_collection_still_reaches_the_model(monkeypatch):
 
     assert "prompt" in captured
     assert state.final_output == "diagnostic normal"
+
+
+def test_a_running_container_is_stated_as_a_fact_not_asked_about(monkeypatch):
+    """
+    Run #be385d16: "pourquoi forge-embedding plante ?" against a
+    container that was UP. The model read a routine llama.cpp n_batch
+    notice and concluded the service was crashing on "une assertion ou
+    une erreur interne NON AFFICHÉE" -- inventing the evidence it did
+    not have. The ninth wording fix to lose on this repository.
+
+    Discovery runs `podman ps` with no -a, so presence in that list IS
+    proof the container was running. The fact was already collected and
+    was being thrown away.
+    """
+    captured = {}
+
+    def fake_call_llm(prompt, grammar=None):
+        captured["prompt"] = prompt
+        return "diagnostic"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", fake_call_llm)
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={
+            "target_hint": "test-container",
+            "question": "pourquoi ça plante ?",
+        },
+    )
+
+    assert "WAS RUNNING" in captured["prompt"]
+    assert "podman ps" in captured["prompt"]
+    assert "État observé" in state.final_output, (
+        "the footer must hold whatever the model decided to say"
+    )
+
+
+def test_a_systemd_unit_gets_no_running_claim(monkeypatch):
+    """
+    The proof only exists for containers. `busctl` lists units
+    regardless of state, so presence there says nothing about whether
+    the unit is up -- claiming otherwise would be exactly the kind of
+    invented certainty this guard exists to stop.
+    """
+    captured = {}
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
+    monkeypatch.setattr(
+        sysadmin_mod,
+        "call_llm",
+        lambda prompt, grammar=None: (
+            captured.setdefault("prompt", prompt) and "" or "diagnostic"
+        ),
+    )
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={"target_hint": "forge.service", "question": "pourquoi ?"},
+    )
+
+    assert "WAS RUNNING" not in captured["prompt"]
+    assert "État observé" not in state.final_output
