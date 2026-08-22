@@ -12,6 +12,7 @@ Endpoints:
   POST /drawer/pin  → pin a message by id
   POST /drawer/unpin → unpin a message by id
   POST /compact     → force a compaction pass now (v3.9)
+  POST /history/clear → wipe the history, pinned included
 
 Auth: set API_TOKEN in the environment to require
 `Authorization: Bearer <token>` on every endpoint except / and
@@ -259,6 +260,10 @@ class PinnedMessage(BaseModel):
     role: str
     content: str
     pinned: bool
+
+
+class ClearResponse(BaseModel):
+    removed: int
 
 
 class CompactResponse(BaseModel):
@@ -628,6 +633,32 @@ async def unpin(req: PinRequest):
     if not memory.unpin_message(req.message_id):
         raise HTTPException(status_code=404, detail="message not found")
     return {"ok": True}
+
+
+@app.post(
+    "/history/clear",
+    response_model=ClearResponse,
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def clear():
+    """
+    Wipe the conversation history, pinned messages included.
+
+    The REPL has had this since v3.9 as `!clear`; the web UI had no
+    equivalent at all, so typing `!clear` there went to the router,
+    came back as an invented answer about clearing something, and left
+    BOTH turns in the history it was asked to empty.
+
+    Destructive and deliberately not undoable -- the point of clearing
+    a context is that it is gone. The confirmation belongs in the
+    caller; a server-side "are you sure" is a second round trip that
+    every non-UI client would have to fake.
+    """
+    from forge import memory
+
+    removed = await _run_in_thread(memory.clear_history)
+    log.event("history.cleared", removed=removed)
+    return ClearResponse(removed=removed)
 
 
 @app.post(

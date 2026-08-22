@@ -237,8 +237,8 @@ def _handle_command(raw: str) -> None:
     arg = parts[1] if len(parts) > 1 else ""
 
     if cmd == "!clear":
-        clear_history()
-        print("[context cleared]\n")
+        removed = clear_history()
+        print(f"[context cleared -- {removed} messages]\n")
     elif cmd == "!compact":
         removed = compact_now()
         if removed:

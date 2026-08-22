@@ -805,11 +805,94 @@ async function togglePin(messageId, role, pin) {
   } catch (e) { /* best-effort */ }
 }
 
+// Commands the UI handles ITSELF. Anything starting with "!" is
+// intercepted here and never reaches /chat.
+//
+// It used to reach it. Typing !clear in the web UI sent the literal
+// string to the router, which picked `chat`, and the model produced a
+// confident sentence about having cleared the context -- leaving both
+// the command and the invented answer sitting in the history it was
+// asked to empty. The REPL has had !clear since v3.9; the UI never
+// grew an equivalent, and nothing said so.
+//
+// The unknown-command branch matters as much as the known ones: an
+// unrecognised ! command must be REFUSED locally, not forwarded. The
+// router has no notion of REPL commands, so forwarding one always
+// produces an answer about a thing that did not happen.
+const UI_COMMANDS = {
+  '!clear': {
+    help: 'vide tout l\'historique (épinglés compris)',
+    run: async () => {
+      if (!confirm('Vider tout l\'historique ? Les messages épinglés partent aussi. Irréversible.')) {
+        return 'Annulé.'
+      }
+      const r = await apiFetch('/history/clear', { method: 'POST' })
+      const data = await r.json()
+      return `Historique vidé — ${data.removed} message(s) supprimé(s).`
+    }
+  },
+  '!compact': {
+    help: 'force une passe de compaction (bouton « Compacter » aussi)',
+    run: async () => {
+      const r = await apiFetch('/compact', { method: 'POST' })
+      const data = await r.json()
+      return data.removed > 0
+        ? `Compaction effectuée — ${data.removed} message(s) condensé(s).`
+        : 'Compaction : rien à faire.'
+    }
+  }
+}
+
+async function runUiCommand(text) {
+  const name = text.split(/\s+/)[0].toLowerCase()
+  const command = UI_COMMANDS[name]
+
+  if (!command) {
+    const known = Object.entries(UI_COMMANDS)
+      .map(([n, c]) => `${n} — ${c.help}`)
+      .join('\n')
+    appendMsg(null, text, 'user')
+    appendMsg(
+      null,
+      `Commande inconnue dans l'interface web : ${name}\n\n` +
+      `Disponibles ici :\n${known}\n\n` +
+      `Les autres commandes ! n'existent que dans le REPL. ` +
+      `Celle-ci n'a pas été envoyée au modèle.`,
+      'bot error'
+    )
+    return
+  }
+
+  appendMsg(null, text, 'user')
+  try {
+    appendMsg(null, await command.run(), 'bot')
+  } catch (e) {
+    appendMsg(null, `Erreur : ${e.message}`, 'bot error')
+  }
+  await loadHistory()
+  await refreshContext()
+}
+
 async function sendChat() {
   if (_busy) return
   const input = document.getElementById('chat-input')
   const text = input.value.trim()
   if (!text) return
+
+  if (text.startsWith('!')) {
+    input.value = ''
+    input.style.height = 'auto'
+    _busy = true
+    document.getElementById('send-btn').disabled = true
+    try {
+      await runUiCommand(text)
+    } finally {
+      _busy = false
+      document.getElementById('send-btn').disabled = false
+      input.focus()
+    }
+    return
+  }
 
   _busy = true
   document.getElementById('send-btn').disabled = true
