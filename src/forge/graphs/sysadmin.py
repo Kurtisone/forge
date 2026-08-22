@@ -687,31 +687,22 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
             f"diagnostic généré ({len(state.final_output or '')} caractères)"
         ),
     }
-    return [
-        {
-            "label": ts.decision_tool,
-            "detail": details.get(ts.decision_tool, lambda: "")(),
-            # A discover/collect step with a real subprocess error is
-            # flagged even though the overall run still succeeds --
-            # ts.tool_ok alone can't express this partial failure since
-            # it tracks state.ok. (This comment used to add "or the LLM
-            # diagnosing the meta-error itself, keeps the run useful".
-            # It does not: runs #7a29f59d and #7e0ed90c both turned a
-            # proxy 403 into a confident diagnosis of a healthy
-            # container. Collection errors now route to
-            # collect_failed instead of reaching the model.)
-            "ok": (
-                False
-                if ts.decision_tool == "discover" and (units_error or containers_error)
-                else False
-                if ts.decision_tool == "collect"
-                and (collect_error or state.context.get("target_missed"))
-                else ts.tool_ok
-            ),
-            "duration_ms": ts.duration_ms,
-        }
-        for ts in state.trace
-    ]
+    steps = subtrace.from_state(state, details)
+    # sysadmin is the one graph whose per-step `ok` is not simply
+    # state.ok: discover and collect can fail partially while the run
+    # as a whole still finishes. from_state deliberately does not know
+    # that, so it is overridden here rather than made a parameter no
+    # other graph would pass.
+    for step, ts in zip(steps, state.trace, strict=True):
+        step["ok"] = (
+            False
+            if ts.decision_tool == "discover" and (units_error or containers_error)
+            else False
+            if ts.decision_tool == "collect"
+            and (collect_error or state.context.get("target_missed"))
+            else ts.tool_ok
+        )
+    return steps
 
 
 def run(target_hint: str | None, question: str | None) -> str:

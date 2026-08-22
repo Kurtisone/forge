@@ -46,7 +46,7 @@ Usage (Python):
   print(run("actualités jeu vidéo"))
 """
 
-from forge import lang
+from forge import lang, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RESEARCH_FETCH_CHARS_PER_RESULT,
@@ -272,4 +272,18 @@ def build() -> Graph:
 def run(query: str) -> str:
     """Search, fetch the top results, and synthesize one answer."""
     state = build().run(query, initial_context={"query": query})
+    results = state.context.get("results", [])
+    fetched = state.context.get("fetched", [])
+    subtrace.publish(
+        subtrace.from_state(
+            state,
+            {
+                "search": lambda: f"{len(results)} résultat(s) pour « {query} »",
+                "fetch": lambda: f"{len(fetched)} page(s) récupérée(s)",
+                "synthesize": lambda: (
+                    f"synthèse générée ({len(state.final_output or '')} caractères)"
+                ),
+            },
+        )
+    )
     return state.final_output or ""

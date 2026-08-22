@@ -47,7 +47,7 @@ Usage (Python):
 
 from pathlib import Path
 
-from forge import lang
+from forge import lang, subtrace
 from forge.config import ENFORCE_ANSWER_LANGUAGE
 from forge.context_info import today_line
 from forge.errors import ProviderError
@@ -501,5 +501,27 @@ def run(
             "question": question,
             "test_path": test_path,
         },
+    )
+    truncated = state.context.get("truncated_from")
+    subtrace.publish(
+        subtrace.from_state(
+            state,
+            {
+                "read_file": lambda: (
+                    f"{state.context.get('filename', file_path)} — "
+                    + (
+                        f"{_MAX_FILE_CHARS} caractères lus sur {truncated}"
+                        if truncated
+                        else f"{len(state.context.get('file_content', ''))} caractères"
+                    )
+                ),
+                "run_tests": lambda: (
+                    f"tests : {test_path}" if test_path else "aucun test demandé"
+                ),
+                "llm_review": lambda: (
+                    f"revue générée ({len(state.final_output or '')} caractères)"
+                ),
+            },
+        )
     )
     return state.final_output or ""

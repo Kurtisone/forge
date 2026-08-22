@@ -42,7 +42,7 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import lang, rag
+from forge import lang, rag, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RECALL_MAX_ANSWER_CHARS,
@@ -355,4 +355,20 @@ def build() -> Graph:
 def run(query: str) -> str:
     """Search memory and synthesize one natural answer."""
     state = build().run(query, initial_context={"query": query})
+    results = state.context.get("results", [])
+    subtrace.publish(
+        subtrace.from_state(
+            state,
+            {
+                "recall": lambda: (
+                    f"{len(results)} entrée(s) retenue(s)"
+                    if results
+                    else "aucune entrée assez proche"
+                ),
+                "synthesize": lambda: (
+                    f"réponse générée ({len(state.final_output or '')} caractères)"
+                ),
+            },
+        )
+    )
     return state.final_output or ""
