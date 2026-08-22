@@ -135,7 +135,7 @@ def parse(text: str) -> list[dict]:
     return messages
 
 
-def indexable(messages: list[dict]) -> list[dict]:
+def indexable(messages: list[dict], source: str = "compaction") -> list[dict]:
     """
     Drop what is not conversation, and unwrap what is wearing an
     envelope, before any of it reaches the vector store.
@@ -156,6 +156,12 @@ def indexable(messages: list[dict]) -> list[dict]:
     did not unwrap tool output. The envelope is the noise; the content
     inside it is a real answer, so it is unwrapped rather than dropped.
 
+    `source` only labels the unwrap warning. The migration goes
+    through this same function, and a line reading "compaction: model
+    wrapped a substantive answer in router-style JSON" while a
+    migration is running names the wrong process for text written
+    weeks ago.
+
     The pointer check does not look at the role. It did at first, and
     that was a guess about who wrote it: a pointer reaching the
     migration has been through render and parse, and a block whose
@@ -169,7 +175,7 @@ def indexable(messages: list[dict]) -> list[dict]:
             continue
         if POINTER_RE.match(content):
             continue
-        unwrapped = try_unwrap_router_json(content, "compaction")
+        unwrapped = try_unwrap_router_json(content, source)
         kept.append({**m, "content": unwrapped if unwrapped is not None else content})
     return kept
 
@@ -195,14 +201,14 @@ def blocks(messages: list[dict]) -> list[str]:
     return [render(g) for g in groups]
 
 
-def units(messages: list[dict]) -> list[str]:
+def units(messages: list[dict], source: str = "compaction") -> list[str]:
     """What the vector store should hold for these messages."""
-    return blocks(indexable(messages))
+    return blocks(indexable(messages, source))
 
 
-def split(text: str) -> list[str]:
+def split(text: str, source: str = "resplit") -> list[str]:
     """
     The same thing, for text written down before any of this existed.
     The migration's only entry point.
     """
-    return units(parse(text))
+    return units(parse(text), source)

@@ -202,7 +202,13 @@ def _strategy_rag_pointer(messages: list[dict]) -> dict:
     forge/transcript.py for the numbers and for where the boundary
     falls.
     """
-    contents = transcript.units(messages)
+    # Filtering and grouping are counted separately because the log
+    # line below is the only place anyone can see either happen, and
+    # one number cannot answer both questions. 35 messages becoming 17
+    # units says nothing about whether anything was filtered out --
+    # exchanges group two messages at a time all on their own.
+    kept = transcript.indexable(messages)
+    contents = transcript.blocks(kept)
 
     try:
         conn = rag.get_connection()
@@ -219,7 +225,9 @@ def _strategy_rag_pointer(messages: list[dict]) -> dict:
     log.event(
         "compaction.indexed",
         messages=len(messages),
-        indexed=len(contents),
+        kept=len(kept),
+        dropped=len(messages) - len(kept),
+        units=len(contents),
         entries=len(ids),
         first_id=ids[0] if ids else None,
         last_id=ids[-1] if ids else None,

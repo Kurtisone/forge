@@ -152,3 +152,34 @@ def test_the_embedding_server_being_down_still_stops_compaction(indexed, monkeyp
 
     with pytest.raises(compaction.CompactionError):
         compaction._strategy_rag_pointer([_m("user", "une question", 1)])
+
+
+def test_the_log_separates_what_was_filtered_from_what_was_grouped(
+    indexed, monkeypatch
+):
+    """
+    35 messages becoming 17 units says nothing about whether anything
+    was filtered -- exchanges group two messages at a time on their
+    own. A real run on 2026-08-22 was read as proof the filter had
+    fired when it was only proof that grouping had.
+    """
+    events = []
+    monkeypatch.setattr(
+        compaction.log, "event", lambda name, **kw: events.append((name, kw))
+    )
+
+    compaction._strategy_rag_pointer(
+        [
+            _m("system", transcript.pointer(59, [12]), 1),
+            _m("user", "une question", 2),
+            _m("assistant", "une réponse", 3),
+            _m("user", "une autre", 4),
+            _m("assistant", "une autre réponse", 5),
+        ]
+    )
+
+    _, fields = next(e for e in events if e[0] == "compaction.indexed")
+    assert fields["messages"] == 5
+    assert fields["kept"] == 4
+    assert fields["dropped"] == 1
+    assert fields["units"] == 2
