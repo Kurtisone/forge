@@ -163,3 +163,68 @@ def test_backup_is_written_before_applying(store, tmp_path):
     _invoke(store, "--apply", "--backup", str(backup))
 
     assert backup.exists()
+
+
+def test_an_entry_that_is_only_a_pointer_is_reported_not_deleted(
+    tmp_path, monkeypatch, capsys
+):
+    """
+    The migration of 2026-08-22 turned pointers into entries because
+    this script cut the same way compaction did but skipped its
+    filtering. It filters now -- and an entry left with nothing at all
+    is reported rather than removed: deleting a row nobody asked to
+    delete is not a migration's job.
+    """
+    from forge import transcript
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    conn = rag.get_connection()
+    rag.remember(
+        conn,
+        kind="history_summary",
+        content=f"system: {transcript.pointer(59, [12])}",
+        project=None,
+    )
+    conn.close()
+
+    _invoke(tmp_path / "rag.db", "--apply")
+
+    conn = rag.get_connection()
+    try:
+        assert rag.count_entries(conn)["total"] == 1
+    finally:
+        conn.close()
+    assert "inert" in capsys.readouterr().out
+
+
+def test_a_pointer_inside_a_block_does_not_become_an_entry(tmp_path, monkeypatch):
+    from forge import transcript
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    conn = rag.get_connection()
+    rag.remember(
+        conn,
+        kind="history_summary",
+        content=(
+            f"system: {transcript.pointer(59, [12])}\n"
+            "user: une question\nassistant: une réponse\n"
+            "user: une autre\nassistant: une autre réponse"
+        ),
+        project=None,
+    )
+    conn.close()
+
+    _invoke(tmp_path / "rag.db", "--apply")
+
+    conn = rag.get_connection()
+    try:
+        contents = [e["content"] for e in rag.list_entries(conn)]
+    finally:
+        conn.close()
+
+    assert contents == [
+        "user: une autre\nassistant: une autre réponse",
+        "user: une question\nassistant: une réponse",
+    ]

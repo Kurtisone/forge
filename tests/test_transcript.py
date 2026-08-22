@@ -1,12 +1,16 @@
 """
 Unit tests for forge.transcript.
 
-The test that matters here is the round trip: `split(render(msgs))`
-must equal `blocks(msgs)`. Compaction takes the first path (messages
--> units) and the migration in deploy/rag_resplit.py takes the second
-(stored text -> units), and if the two ever disagree the store ends up
-holding two differently-sliced halves -- which shows up as a retrieval
-distance with no explanation, not as a failure.
+The test that matters here is that the two entry points are the same
+pipeline: `split(render(msgs))` must equal `units(msgs)`. Compaction
+takes the first path (messages -> units) and the migration in
+deploy/rag_resplit.py takes the second (stored text -> units).
+
+That equality is not hypothetical maintenance. The first version of
+this module shared only the CUTTING, and the migration of 2026-08-22
+wrote a dozen entries whose entire content is a pointer to another
+entry, plus some raw router JSON -- because compaction filtered those
+out before cutting and the migration did not.
 """
 
 from forge import transcript
@@ -50,16 +54,62 @@ def test_messages_before_the_first_user_turn_are_their_own_unit():
     ]
 
 
-def test_split_round_trips_through_render():
+def test_the_two_entry_points_are_the_same_pipeline():
     messages = [
         _m("system", "ouverture"),
         _m("user", "quel port ?"),
         _m("assistant", "8080"),
+        _m("system", transcript.pointer(59, [12])),
         _m("user", "multi\nligne"),
+        _m(
+            "assistant",
+            '{"tool": "chat", "content": "une réponse assez longue '
+            'pour être considérée comme substantielle par le désenveloppage"}',
+        ),
         _m("assistant", "réponse\nsur deux lignes"),
     ]
 
-    assert transcript.split(transcript.render(messages)) == transcript.blocks(messages)
+    assert transcript.split(transcript.render(messages)) == transcript.units(messages)
+
+
+def test_parse_is_the_inverse_of_render():
+    messages = [
+        _m("user", "quel port ?"),
+        _m("assistant", "8080\net rien d'autre"),
+    ]
+
+    assert transcript.parse(transcript.render(messages)) == messages
+
+
+def test_an_earlier_pointer_never_reaches_the_store():
+    messages = [
+        _m("system", transcript.pointer(59, [12])),
+        _m("user", "une question"),
+        _m("assistant", "une réponse"),
+    ]
+
+    assert transcript.units(messages) == ["user: une question\nassistant: une réponse"]
+
+
+def test_a_pointer_is_recognised_whatever_role_carries_it():
+    """
+    The check looks at the shape, not the speaker. A block re-parsed by
+    the migration can hand a pointer back under whatever role happened
+    to precede it in the stored text.
+    """
+    assert transcript.units([_m("assistant", transcript.pointer(9, [3]))]) == []
+    assert (
+        transcript.units([{"role": None, "content": transcript.pointer(9, [3])}]) == []
+    )
+
+
+def test_the_pointer_builder_matches_its_own_detector():
+    for ids in ([], [7], [7, 8, 9]):
+        assert transcript.POINTER_RE.match(transcript.pointer(12, ids))
+
+
+def test_an_entry_that_holds_only_a_pointer_yields_nothing():
+    assert transcript.split(f"system: {transcript.pointer(59, [12])}") == []
 
 
 def test_split_keeps_text_that_has_no_role_prefix():

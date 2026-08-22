@@ -10,7 +10,7 @@ distance lost to burying a sentence in a block.
 
 import pytest
 
-from forge import compaction, rag
+from forge import compaction, rag, transcript
 
 
 @pytest.fixture
@@ -82,7 +82,7 @@ def test_the_pointer_is_recognisable_by_the_regex_that_looks_for_it():
     nothing fails.
     """
     for ids in ([], [7], [7, 8, 9]):
-        assert compaction._POINTER_RE.match(compaction._pointer(12, ids))
+        assert transcript.POINTER_RE.match(transcript.pointer(12, ids))
 
 
 def test_an_earlier_pointer_is_not_indexed_again(indexed):
@@ -94,7 +94,7 @@ def test_an_earlier_pointer_is_not_indexed_again(indexed):
     """
     compaction._strategy_rag_pointer(
         [
-            _m("system", compaction._pointer(59, [12]), 1),
+            _m("system", transcript.pointer(59, [12]), 1),
             _m("user", "une question", 2),
             _m("assistant", "une réponse", 3),
         ]
@@ -136,7 +136,7 @@ def test_empty_messages_are_not_indexed(indexed):
 
 def test_a_block_with_nothing_indexable_says_so(indexed):
     summary = compaction._strategy_rag_pointer(
-        [_m("system", compaction._pointer(59, [12]), 1)]
+        [_m("system", transcript.pointer(59, [12]), 1)]
     )
 
     assert indexed == []

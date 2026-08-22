@@ -13,12 +13,18 @@ measures the old problem.
 
 WHAT IT DOES
 
-For every `history_summary` entry, forge.transcript.split() cuts the
-stored text back into the units transcript.blocks() would produce
-today. An entry that yields one unit is left alone -- it is already
-the right shape, and rewriting it would burn an embedding call to
-produce the same row with a new id. An entry that yields several is
-replaced by that many entries.
+For every `history_summary` entry, forge.transcript.split() puts the
+stored text through the SAME pipeline compaction now uses on a live
+eviction -- parse, drop what is not conversation, cut at user turns.
+An entry that comes back unchanged is left alone: it is already the
+right shape, and rewriting it would burn an embedding call to produce
+the same row with a new id. Anything else is replaced by its units.
+
+The shared pipeline is the point. The first version of this script cut
+the same way compaction did but skipped compaction's filtering, and
+the 2026-08-22 migration wrote a dozen entries whose entire content is
+"[59 messages précédents compactés -- voir mémoire vectorielle #12]",
+plus some raw router JSON. Both paths now call one function.
 
 Nothing else is touched. `fact`, `decision` and `todo` entries are
 one statement each by construction; splitting them is not a thing that
@@ -110,10 +116,19 @@ def main() -> int:
         targets = _all_of_kind(conn, args.kind)
         print(f"{len(targets)} {args.kind} entries to inspect\n")
 
-        split_count = new_count = 0
+        split_count = new_count = inert_count = 0
         for entry in targets:
             units = transcript.split(entry["content"])
-            if len(units) < 2:
+
+            if not units:
+                # A whole entry that is nothing but a pointer to
+                # another entry. Reported, not deleted: removing a row
+                # nobody asked to remove is not a migration's job, and
+                # `!forget <id>` is one command away.
+                inert_count += 1
+                print(f"#{entry['id']:>4}    inert  rien d'indexable, laissée en place")
+                continue
+            if units == [entry["content"]]:
                 continue
 
             split_count += 1
@@ -141,6 +156,8 @@ def main() -> int:
             print(f"        -> #{ids[0]}-#{ids[-1]}, #{entry['id']} removed")
 
         after = rag.count_entries(conn)
+        if inert_count:
+            print(f"\n{inert_count} entries hold nothing indexable (see !forget)")
         print(
             f"\n{split_count} entries would become {new_count}"
             if not args.apply

@@ -89,3 +89,46 @@ def test_an_empty_env_value_disables_the_cutoff(value, monkeypatch):
     finally:
         monkeypatch.delenv("RECALL_MAX_DISTANCE", raising=False)
         importlib.reload(config)
+
+
+def test_the_env_example_value_and_the_config_note_agree():
+    """
+    The threshold is now stated in two files -- an active line in
+    .env.example and the reasoning in config.py -- and two places
+    stating the same number is how one of them goes stale. This is the
+    same drift guard the pointer builder and its regex have.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    env = (root / ".env.example").read_text()
+    config = (root / "src" / "forge" / "config.py").read_text()
+
+    active = re.search(r"^RECALL_MAX_DISTANCE=([\d.]+)$", env, re.MULTILINE)
+    assert active, ".env.example no longer sets RECALL_MAX_DISTANCE"
+
+    value = active.group(1)
+    assert f"{value} AND NOT THE MIDPOINT" in config or f"{value}," in config, (
+        f".env.example sets {value} but config.py does not explain that number"
+    )
+
+
+def test_the_cutoff_is_still_off_when_unset():
+    """
+    .env.example carries a value now; the code default must not. A
+    deployment that has not measured its own store gets no filtering
+    rather than someone else's threshold.
+    """
+    import importlib
+    import os
+
+    import forge.config as config_module
+
+    saved = os.environ.pop("RECALL_MAX_DISTANCE", None)
+    try:
+        assert importlib.reload(config_module).RECALL_MAX_DISTANCE is None
+    finally:
+        if saved is not None:
+            os.environ["RECALL_MAX_DISTANCE"] = saved
+        importlib.reload(config_module)

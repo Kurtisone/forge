@@ -464,14 +464,43 @@ RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 # being welded into an invented causality. That one is upstream: the
 # store holds compaction pointers and almost no facts.
 #
-# Still unset by default, and the first --no-plant run against a copy of
-# the real store is why: a real MISS landed at 0.9891, below the 1.05
-# the fixtures suggested. Long compaction summaries sit at middling
-# distance from every question ever asked and compress the whole scale
-# -- so the fixtures validate the mechanism, not the number. On the real
-# store it is nearer 0.96, from one pair, which is not enough to set it.
+# The fixtures validate the MECHANISM, not the number. The first
+# --no-plant run against a copy of the real store put a real MISS at
+# 0.9891, below the 1.05 the fixtures suggested: long compaction
+# summaries sit at middling distance from every question ever asked and
+# compress the whole scale.
 #
-# Unset means no filtering, i.e. exactly today's behaviour.
+# MEASURED AGAIN on 2026-08-22, six questions against a copy of the real
+# store, before and after it was re-sliced one entry per exchange:
+#
+#     before   hits 0.8934 0.671 0.9386 | misses 0.9891 0.9356 1.098
+#              worst hit 0.9386 > best miss 0.9356 -> NO GAP
+#     after    hits 0.4498 0.671 0.7695 | misses 1.0619 0.8337 1.0369
+#              worst hit 0.7695 < best miss 0.8337 -> gap 0.0642
+#
+# The intake change is what made a threshold choosable at all. Note the
+# short fact (0.671) did not move: only the entries that were buried in
+# a block did, which is the control.
+#
+# 0.95 AND NOT THE MIDPOINT. The harness suggests 0.81, halfway-plus. It
+# is right about the arithmetic and the wrong tool for this store,
+# because the three misses are not one family. Two are "nothing here is
+# relevant" (1.0619, 1.0369), which is what this setting is for. The
+# third -- "Comment s'appelle mon chat ?" at 0.8337 -- is near because
+# the store now literally contains "user: Bonjour Forge, comment je
+# m'appelle ?": lexically almost the same sentence, semantically not an
+# answer. No threshold separates that cleanly, and one set to try leaves
+# 0.04 of headroom above the worst real hit.
+#
+# The two errors are not symmetric. Too high lets a bad answer through,
+# and a bad answer gets argued with. Too low produces "je n'ai rien en
+# mémoire" while the answer is sitting in the store, and that gets
+# believed. 0.95 cuts both real misses with ~0.18 of headroom and does
+# not pretend to solve a near-duplicate by picking a number.
+#
+# recall.dropped logs every cut with its id and distance, so a value
+# that bites in the wrong place is visible rather than silent. Empty
+# means no filtering at all.
 _recall_max_distance = os.getenv("RECALL_MAX_DISTANCE", "").strip()
 RECALL_MAX_DISTANCE = float(_recall_max_distance) if _recall_max_distance else None
 

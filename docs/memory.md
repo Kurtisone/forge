@@ -46,7 +46,16 @@ stores the pieces as rows — the same number of embedding requests, kept apart 
 of averaged. `bench/rag_dilution.py` measures the difference; `deploy/rag_resplit.py`
 re-slices blocks written before the change. Two things never reach the store: an
 earlier compaction pointer (a reference to another entry, which answers no question)
-and a raw router-JSON envelope (unwrapped to its content).
+and a raw router-JSON envelope (unwrapped to its content). Both paths go through
+the same `transcript.units` / `transcript.split` pipeline, so a live eviction and a
+migration cannot filter differently.
+
+Measured on the real store, six questions before and after re-slicing: hits moved
+from 0.8934 / 0.671 / 0.9386 to 0.4498 / 0.671 / 0.7695, turning a **NO GAP**
+verdict (worst hit closer than the best miss) into a usable gap of 0.0642. The
+short fact at 0.671 did not move — only the entries that had been buried did, which
+is the control. That is what makes `RECALL_MAX_DISTANCE` a number one can choose;
+see `.env.example` for the value and why it is not the harness's midpoint.
 
 A message count turned out to be the wrong unit, though, so v3.12 added a
 second trigger alongside it: compaction also fires when the rendered prompt
