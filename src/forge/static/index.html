@@ -821,15 +821,22 @@ async function togglePin(messageId, role, pin) {
 // produces an answer about a thing that did not happen.
 const UI_COMMANDS = {
   '!clear': {
-    changesHistory: true,
     help: 'vide tout l\'historique (épinglés compris)',
     run: async () => {
       if (!confirm('Vider tout l\'historique ? Les messages épinglés partent aussi. Irréversible.')) {
-        return 'Annulé.'
+        // changed:false matters. A static changesHistory flag refreshed
+        // the chat even on a CANCELLED clear -- reported live: !truc,
+        // then !memory, then !clear answered "no", and the refresh wiped
+        // the two earlier replies. Cancelling something must not have
+        // more visible effect than doing it.
+        return { reply: 'Annulé, rien n\'a été supprimé.', changed: false }
       }
       const r = await apiFetch('/history/clear', { method: 'POST' })
       const data = await r.json()
-      return `Historique vidé — ${data.removed} message(s) supprimé(s).`
+      return {
+        reply: `Historique vidé — ${data.removed} message(s) supprimé(s).`,
+        changed: data.removed > 0
+      }
     }
   },
   '!memory': {
@@ -837,23 +844,28 @@ const UI_COMMANDS = {
     run: async () => {
       const r = await apiFetch('/memory?limit=100')
       const d = await r.json()
-      if (!d.total) return 'Mémoire vectorielle vide.'
+      if (!d.total) return { reply: 'Mémoire vectorielle vide.', changed: false }
       const breakdown = Object.entries(d.by_kind)
         .map(([k, n]) => `${k} : ${n}`).join(' · ')
       const lines = d.entries.map(e =>
         `#${e.id} [${e.kind}] ${e.content.replace(/\s+/g, ' ').slice(0, 160)}`)
-      return `${d.total} entrée(s) — ${breakdown}\n\n${lines.join('\n')}`
+      return {
+        reply: `${d.total} entrée(s) — ${breakdown}\n\n${lines.join('\n')}`,
+        changed: false
+      }
     }
   },
   '!compact': {
-    changesHistory: true,
     help: 'force une passe de compaction (bouton « Compacter » aussi)',
     run: async () => {
       const r = await apiFetch('/compact', { method: 'POST' })
       const data = await r.json()
-      return data.removed > 0
-        ? `Compaction effectuée — ${data.removed} message(s) condensé(s).`
-        : 'Compaction : rien à faire.'
+      return {
+        reply: data.removed > 0
+          ? `Compaction effectuée — ${data.removed} message(s) condensé(s).`
+          : 'Compaction : rien à faire.',
+        changed: data.removed > 0
+      }
     }
   }
 }
@@ -890,15 +902,21 @@ async function runUiCommand(text) {
   // So: run, refresh only if the command actually changed the server
   // state, and append afterwards. Local output is never at the mercy
   // of a reload it has nothing to do with.
-  let reply, cls = 'bot'
+  // A command reports whether it CHANGED anything, rather than
+  // declaring it up front. The static flag was wrong for the case that
+  // matters most: a cancelled !clear changed nothing and still
+  // triggered the refresh that erases every earlier local reply.
+  let reply, changed = false, cls = 'bot'
   try {
-    reply = await command.run()
+    const result = await command.run()
+    reply = result.reply
+    changed = result.changed === true
   } catch (e) {
     reply = `Erreur : ${e.message}`
     cls = 'bot error'
   }
 
-  if (command.changesHistory) {
+  if (changed) {
     await loadHistory()
     await refreshContext()
   }

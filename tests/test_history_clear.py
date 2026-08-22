@@ -117,15 +117,40 @@ def test_a_command_reply_is_appended_after_any_refresh():
     )
 
 
-def test_only_commands_that_change_the_history_trigger_a_refresh():
+def test_a_command_reports_whether_it_changed_anything():
     """
     A read-only command has nothing to re-read, and reloading for it is
     what created the bug above.
+
+    The first fix declared this statically, per command, and was wrong
+    for the case that matters most. Reported live: !truc, then !memory,
+    then !clear answered "no" at the confirm -- and the refresh ran
+    anyway, erasing the two earlier replies. Cancelling something must
+    not have more visible effect than doing it.
+
+    So `changed` comes back from run() with the result. A cancelled
+    clear reports false; a compaction that condensed nothing reports
+    false too.
     """
     source = INDEX.read_text()
 
-    assert "changesHistory: true" in source
-    assert "command.changesHistory" in source
-    assert source.count("changesHistory: true") == 2, (
-        "exactly !clear and !compact touch server state; !memory does not"
+    assert "changesHistory: true" not in source, (
+        "a static flag cannot know that a confirm() was cancelled"
+    )
+    assert "result.changed === true" in source
+    assert "changed: false" in source
+
+
+def test_cancelling_a_clear_changes_nothing():
+    """The exact reported sequence, read out of the source."""
+    source = INDEX.read_text()
+    clear_block = source[source.index("'!clear':") :]
+    clear_block = clear_block[: clear_block.index("'!compact':")]
+
+    cancel_at = clear_block.index("confirm(")
+    returned = clear_block[cancel_at : clear_block.index("apiFetch")]
+
+    assert "changed: false" in returned, (
+        "the cancelled branch must report changed:false, or the refresh "
+        "wipes every earlier local reply"
     )
