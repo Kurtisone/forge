@@ -147,7 +147,11 @@ TOOL_DESCRIPTIONS = {
         '"quoi de neuf sur X", "que se passe-t-il avec X", current '
         "events, results, prices) and you don't have a specific URL. "
         'Prefer this over "web_search" whenever the user wants an '
-        "answer, not just a list of links."
+        "answer, not just a list of links. BOUNDARY: this searches the "
+        "PUBLIC WEB and knows nothing about this machine. A question "
+        "about one of the user's own services or containers "
+        '("pourquoi searxng a redémarré") is "sysadmin", never here, '
+        "however recent the event sounds."
     ),
     "web_search": (
         "content is a search query (plain text, not a URL), e.g. "
@@ -189,7 +193,9 @@ TOOL_DESCRIPTIONS = {
         'FILE by path ("lis /var/log/forge/debug.log") -- that is '
         '"files", not sysadmin. Do NOT use this for an arbitrary shell '
         'command ("lance ls -la /etc") -- that is "shell"; sysadmin is '
-        "a guided read-only diagnosis, not a general shell access."
+        "a guided read-only diagnosis, not a general shell access. A "
+        'past-tense question ("pourquoi X a redémarré") is still this '
+        'tool, not "research": the answer is in this machine\'s logs.'
     ),
 }
 
@@ -418,9 +424,24 @@ _TOOL_EXAMPLES = {
                 'redémarre en boucle ?"}}'
             ),
         ),
+        # The exact phrasing that misrouted to "research" in real use:
+        # past tense, no failure verb, and it reads like a question
+        # about a recent event -- which is how "research" describes
+        # itself. The two descriptions now name the boundary, and this
+        # pins the surface form that lost.
+        (
+            "Pourquoi searxng a redémarré ?",
+            (
+                '{"tool":"sysadmin","content":{"target_hint":'
+                '"searxng","question":"pourquoi le service a '
+                'redémarré ?"}}'
+            ),
+        ),
         # Contrast: vague problem, no named service -- still sysadmin,
-        # but with no target_hint (the graph falls back to kernel
-        # logs on its own, see graphs/sysadmin.py's collect_node).
+        # but with no target_hint. Only THIS shape reaches the kernel
+        # logs: since the target_missed node landed, a hint that
+        # discovery does not recognise stops the run instead of
+        # falling back (see graphs/sysadmin.py).
         (
             "Mon Steam Deck rame depuis ce matin, tu peux regarder ?",
             (

@@ -12,6 +12,9 @@ Endpoints:
   POST /drawer/pin  → pin a message by id
   POST /drawer/unpin → unpin a message by id
   POST /compact     → force a compaction pass now (v3.9)
+  POST /history/clear → wipe the history, pinned included
+  GET  /memory      → list the vector store as stored (no query)
+  DELETE /memory/{id} → remove one entry and its vector
 
 Auth: set API_TOKEN in the environment to require
 `Authorization: Bearer <token>` on every endpoint except / and
@@ -48,7 +51,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from forge import jobs, memory, rag, ratelimit, trace
+from forge import __version__, jobs, memory, rag, ratelimit, trace
 from forge.config import (
     API_ALLOW_UNAUTHENTICATED,
     API_DOCS_ENABLED,
@@ -147,7 +150,7 @@ async def lifespan(_app: FastAPI):
 # development.
 app = FastAPI(
     title="Forge",
-    version="3.3.0",
+    version=__version__,
     docs_url="/docs" if API_DOCS_ENABLED else None,
     redoc_url="/redoc" if API_DOCS_ENABLED else None,
     openapi_url="/openapi.json" if API_DOCS_ENABLED else None,
@@ -259,6 +262,10 @@ class PinnedMessage(BaseModel):
     role: str
     content: str
     pinned: bool
+
+
+class ClearResponse(BaseModel):
+    removed: int
 
 
 class CompactResponse(BaseModel):
@@ -628,6 +635,89 @@ async def unpin(req: PinRequest):
     if not memory.unpin_message(req.message_id):
         raise HTTPException(status_code=404, detail="message not found")
     return {"ok": True}
+
+
+@app.get("/memory", dependencies=[Depends(require_token), Depends(rate_limit)])
+async def memory_list(
+    kind: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    List what is actually in the vector store, no query involved.
+
+    /search has been the only way to read this store, and it is
+    semantic: it needs a question and answers with whatever is nearest.
+    So "what do you have in memory?" had no answer -- asking `recall`
+    just runs the same retrieval whose reliability is the thing in
+    doubt, and on 2026-08-22 it returned five compaction pointers and a
+    refusal.
+
+    Ordered by id descending, with a per-kind breakdown alongside,
+    because the recurring claim about this store ("compaction pointers
+    and almost no facts") has never actually been counted.
+    """
+    from forge import rag
+
+    def _read():
+        conn = rag.get_connection()
+        try:
+            return (
+                rag.count_entries(conn),
+                rag.list_entries(conn, kind=kind, limit=limit, offset=offset),
+            )
+        finally:
+            conn.close()
+
+    counts, entries = await _run_in_thread(_read)
+    return {"total": counts["total"], "by_kind": counts["by_kind"], "entries": entries}
+
+
+@app.delete(
+    "/memory/{entry_id}",
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def memory_forget(entry_id: int):
+    """Delete one vector-store entry. See rag.forget."""
+    from forge import rag
+
+    def _delete():
+        conn = rag.get_connection()
+        try:
+            return rag.forget(conn, entry_id)
+        finally:
+            conn.close()
+
+    if not await _run_in_thread(_delete):
+        raise HTTPException(status_code=404, detail="entry not found")
+    log.event("memory.forgotten", entry_id=entry_id)
+    return {"ok": True, "id": entry_id}
+
+
+@app.post(
+    "/history/clear",
+    response_model=ClearResponse,
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def clear():
+    """
+    Wipe the conversation history, pinned messages included.
+
+    The REPL has had this since v3.9 as `!clear`; the web UI had no
+    equivalent at all, so typing `!clear` there went to the router,
+    came back as an invented answer about clearing something, and left
+    BOTH turns in the history it was asked to empty.
+
+    Destructive and deliberately not undoable -- the point of clearing
+    a context is that it is gone. The confirmation belongs in the
+    caller; a server-side "are you sure" is a second round trip that
+    every non-UI client would have to fake.
+    """
+    from forge import memory
+
+    removed = await _run_in_thread(memory.clear_history)
+    log.event("history.cleared", removed=removed)
+    return ClearResponse(removed=removed)
 
 
 @app.post(

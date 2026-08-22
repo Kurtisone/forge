@@ -95,7 +95,7 @@ def test_embedding_error_propagates(conn, monkeypatch):
     monkeypatch.setattr(rag, "_embed", _raise)
 
     with pytest.raises(requests.ConnectionError):
-        rag.remember(conn, kind="decision", content="whatever", project=None)
+        rag.remember(conn, kind="decision", content="contenu quelconque", project=None)
 
 
 def test_real_embed_wraps_request_failure_in_embedding_error(monkeypatch):

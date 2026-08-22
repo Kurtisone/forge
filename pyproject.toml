@@ -1,6 +1,6 @@
 [project]
 name = "forge"
-version = "3.3.0"
+dynamic = ["version"]
 requires-python = ">=3.12"
 dependencies = ["requests", "fastapi", "uvicorn[standard]", "sqlite-vec"]
 
@@ -10,6 +10,11 @@ forge = "forge.cli:main"
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+# Single source of truth: src/forge/__init__.py. setuptools parses
+# that file statically, so __version__ must stay a plain literal.
+version = {attr = "forge.__version__"}
 
 [tool.setuptools]
 package-dir = {"" = "src"}

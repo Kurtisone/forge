@@ -81,6 +81,13 @@ def _remember(instruction: dict) -> str:
     try:
         try:
             entry_id = rag.remember(conn, kind=kind, content=text, project=project)
+        except rag.DegenerateEntry as e:
+            # Not a crash and not a silent drop: the model asked to
+            # store something that asserts nothing, and the useful
+            # response is to say what was wrong with it so the next
+            # call carries the value that went missing.
+            log.warning("memory tool: refused a degenerate entry: %s", e)
+            return f"[error] {e}"
         except rag.EmbeddingError as e:
             log.error("memory tool: remember failed: %s", e)
             return f"[error] remember failed: embedding server unreachable ({e})"

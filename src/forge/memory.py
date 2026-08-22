@@ -270,16 +270,27 @@ def add_exchange(user_content: str, assistant_content: str) -> None:
     save_memory(memory)
 
 
-def clear_history() -> None:
+def clear_history() -> int:
     """
     Wipe the rolling conversation history (but keep facts).
-    Used by the !clear REPL command. Pinned messages are cleared too:
-    this command is an explicit reset, not a compaction pass.
+
+    Used by the !clear REPL command and POST /history/clear. Pinned
+    messages are cleared too: this command is an explicit reset, not a
+    compaction pass.
+
+    Returns how many messages were removed. It used to return None,
+    which was fine for a REPL that prints a fixed "[context cleared]"
+    and useless for anything else -- POST /compact has always answered
+    with a count, and a reset that cannot say whether it removed forty
+    messages or zero gives a caller no way to tell success from a
+    no-op.
     """
     memory = load_memory()
+    removed = len(memory["history"])
     memory["history"] = []
     save_memory(memory)
-    log.info("conversation history cleared")
+    log.info("conversation history cleared (%d messages)", removed)
+    return removed
 
 
 def compact_now() -> int:

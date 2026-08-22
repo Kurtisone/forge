@@ -74,7 +74,7 @@ def test_remember_defaults_to_fact_when_kind_empty():
 
 def test_remember_rejects_invalid_kind():
     out = memory_tool.run(
-        json.dumps({"action": "remember", "kind": "note", "content": "x"})
+        json.dumps({"action": "remember", "kind": "note", "content": "entrée de test"})
     )
     assert "kind" in out
     assert out.startswith("[error]")
@@ -93,7 +93,9 @@ def test_remember_reports_embedding_failure(monkeypatch):
 
     monkeypatch.setattr(rag, "_embed", _raise)
     out = memory_tool.run(
-        json.dumps({"action": "remember", "kind": "decision", "content": "x"})
+        json.dumps(
+            {"action": "remember", "kind": "decision", "content": "entrée de test"}
+        )
     )
     assert "remember failed" in out
 
@@ -129,9 +131,15 @@ def test_recall_rejects_empty_query():
 
 def test_recall_filters_by_kind():
     memory_tool.run(
-        json.dumps({"action": "remember", "kind": "decision", "content": "a"})
+        json.dumps(
+            {"action": "remember", "kind": "decision", "content": "une décision prise"}
+        )
     )
-    memory_tool.run(json.dumps({"action": "remember", "kind": "todo", "content": "b"}))
+    memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "todo", "content": "une tâche à faire"}
+        )
+    )
     out = memory_tool.run(
         json.dumps({"action": "recall", "query": "anything", "kind": "todo"})
     )
@@ -164,7 +172,9 @@ def test_unknown_action_is_reported():
 def test_run_always_returns_non_empty_str():
     """Matches the tool contract enforced in test_tool_contract.py."""
     for payload in [
-        json.dumps({"action": "remember", "kind": "decision", "content": "x"}),
+        json.dumps(
+            {"action": "remember", "kind": "decision", "content": "entrée de test"}
+        ),
         json.dumps({"action": "recall", "query": "x"}),
         json.dumps({"action": "bogus"}),
         "garbage",
@@ -198,8 +208,10 @@ def test_search_is_unranked_unclipped():
     how to present it without duplicating the RAG query.
     """
     conn = rag.get_connection()
-    rag.remember(conn, kind="history_summary", content="archive", project=None)
-    rag.remember(conn, kind="fact", content="fait", project=None)
+    rag.remember(
+        conn, kind="history_summary", content="archiver les logs", project=None
+    )
+    rag.remember(conn, kind="fact", content="un fait noté", project=None)
     conn.close()
 
     results = memory_tool.search("q")

@@ -24,6 +24,28 @@ ENV PYTHONPATH=/app/src
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# The `test` tool and graphs/review.py's test step both shell out to
+# pytest/ruff, which live in requirements-dev.txt and were therefore
+# never in this image. So `test` in ENABLED_TOOLS was broken by
+# construction, and there was no supported way to unbreak it short of
+# editing this file -- which is why the startup tripwire in
+# tools/test.py could name the problem but not point anywhere.
+#
+# Opt-in, and off by default, because it is a real widening: a
+# container someone can reach gains the ability to run pytest, and
+# pytest runs whatever is in the file it is given. The default keeps
+# the tripwire honest ("not installed here"); the flag makes the other
+# answer reachable:
+#
+#     podman compose build --build-arg INSTALL_TEST_RUNNERS=true forge
+#
+# requirements-dev.txt is pinned transitively like requirements.txt
+# (audit lot 2), so this does not reopen the pinning hole.
+ARG INSTALL_TEST_RUNNERS=false
+RUN if [ "$INSTALL_TEST_RUNNERS" = "true" ]; then \
+      pip install --no-cache-dir -r requirements-dev.txt; \
+    fi
+
 # journalctl (from the systemd package -- reads journal files
 # directly, no daemon involved) and the podman CLI client, needed by
 # graphs/sysadmin.py. Neither runs as a service inside this

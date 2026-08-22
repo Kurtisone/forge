@@ -64,3 +64,37 @@ def clear() -> None:
     dispatch (or a leftover from outside this call, e.g. a test) left
     behind, since pop() alone only clears AFTER reading."""
     _current.set(None)
+
+
+def from_state(state, details: dict | None = None) -> list[dict]:
+    """
+    Turn a finished graph run's internal trace into publishable steps.
+
+    Every graph already records a TraceStep per node -- graph.py's
+    Node.execute has done that since the engine shipped. Only sysadmin
+    ever published them, so `review`, `research`, `recall` and
+    `delegate` ran three to five nodes each and showed the user a
+    single opaque box, while the identical information sat on
+    `state.trace` and was dropped at the wrapper boundary.
+
+    `details` maps a node name to a zero-argument callable returning a
+    one-line description. It is optional and per-graph on purpose: the
+    node NAMES are already meaningful ("read_file", "search",
+    "synthesize"), so a graph that supplies nothing still gets a real
+    timeline, and a graph with something worth saying can say it
+    without every other graph paying for the machinery.
+
+    A callable rather than a string because the detail is computed
+    from the finished state, and a dict of strings would have to be
+    built eagerly for nodes the run never reached.
+    """
+    details = details or {}
+    return [
+        {
+            "label": step.decision_tool,
+            "detail": details.get(step.decision_tool, lambda: "")(),
+            "ok": step.tool_ok,
+            "duration_ms": step.duration_ms,
+        }
+        for step in state.trace
+    ]

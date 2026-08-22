@@ -97,7 +97,7 @@ def test_recall_llm_unavailable(monkeypatch):
     monkeypatch.setattr(
         recall_mod.memory_tool,
         "search",
-        lambda q: [{"kind": "fact", "content": "x", "project": None}],
+        lambda q: [{"kind": "fact", "content": "entrée de test", "project": None}],
     )
     monkeypatch.setattr(
         recall_mod,
@@ -147,7 +147,7 @@ def test_recall_cleans_degenerate_json_echo(monkeypatch):
     monkeypatch.setattr(
         recall_mod.memory_tool,
         "search",
-        lambda q: [{"kind": "fact", "content": "x", "project": None}],
+        lambda q: [{"kind": "fact", "content": "entrée de test", "project": None}],
     )
     monkeypatch.setattr(
         recall_mod,
@@ -164,7 +164,7 @@ def test_recall_strips_think_blocks(monkeypatch):
     monkeypatch.setattr(
         recall_mod.memory_tool,
         "search",
-        lambda q: [{"kind": "fact", "content": "x", "project": None}],
+        lambda q: [{"kind": "fact", "content": "entrée de test", "project": None}],
     )
     monkeypatch.setattr(
         recall_mod,

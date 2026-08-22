@@ -154,9 +154,68 @@ def _embed(text: str) -> list[float]:
     return [v / norm for v in mean] if norm else mean
 
 
+# A stored entry has to assert something -- at minimum, a subject and
+# something said about it.
+#
+# One word, deliberately, and not a character count. The observed
+# failure is `[fact] S'appelle`: a predicate whose object went
+# missing, which is exactly a one-word entry. Anything with two words
+# has a shape that can be right, and short legitimate entries are
+# real -- "use sqlite-vec" and "a todo" both live in this repository's
+# own fixtures. A character floor would have rejected those for being
+# terse rather than for being empty, which is a different and wrong
+# complaint.
+_MIN_ENTRY_WORDS = 2
+
+
+class DegenerateEntry(ValueError):
+    """Raised when content is too thin to be worth embedding."""
+
+
+def forget(conn: sqlite3.Connection, entry_id: int) -> bool:
+    """
+    Delete one entry and its vector. True if it existed.
+
+    Added the same day list_entries was, and for the same reason: once
+    you can see that the store contains `[fact] S'appelle`, the next
+    thing you need is to remove it. Until now the only way to correct
+    this store was to open the SQLite file by hand -- and a store you
+    can only fix by hand is one nobody fixes.
+
+    Both tables, in one transaction. memory_vectors is keyed by rowid
+    against memory_entries.id, so deleting one and not the other leaves
+    a vector that search can still match and list_entries can no longer
+    show -- a memory that is invisible and answering.
+    """
+    cur = conn.execute("DELETE FROM memory_entries WHERE id = ?", (entry_id,))
+    conn.execute("DELETE FROM memory_vectors WHERE rowid = ?", (entry_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def remember(
     conn: sqlite3.Connection, kind: str, content: str, project: str | None
 ) -> int:
+    # Checked HERE and not only in tools/memory.py, because this is the
+    # boundary every writer crosses -- the tool, the REPL, /remember,
+    # and compaction. tools/memory.py already refused empty content and
+    # `S'appelle` is not empty; it is a predicate whose value went
+    # missing, which reads as valid to every check that asks "is there
+    # a string".
+    #
+    # It is not a cosmetic problem. That single entry is what closed
+    # the gap in the 2026-08-22 calibration run: it pulled the
+    # unanswerable "Comment s'appelle mon chat ?" to 0.9356, nearer
+    # than the worst genuine hit at 0.9386, and a dangling verb is a
+    # magnet for every question phrased around it.
+    if len(content.split()) < _MIN_ENTRY_WORDS:
+        raise DegenerateEntry(
+            f"refusing to store {content!r}: an entry must assert something, "
+            f"and this is a single word. If a value was meant to follow, "
+            f"send the whole statement. A dangling fragment matches every "
+            f"question phrased around it and answers none of them."
+        )
+
     cur = conn.execute(
         "INSERT INTO memory_entries (kind, content, project, created_at) VALUES (?, ?, ?, ?)",
         (kind, content, project, datetime.now(UTC).isoformat()),
@@ -216,3 +275,78 @@ def search(
         }
         for r in rows
     ]
+
+
+def list_entries(
+    conn: sqlite3.Connection,
+    *,
+    kind: str | None = None,
+    project: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """
+    List entries as stored, newest first, with no query involved.
+
+    `search` is the only way anything ever read this store, and it is
+    semantic: it needs a question and returns whatever is nearest to
+    it. There was no way to answer "what is actually in there?" -- and
+    on 2026-08-22 that turned into a real dead end. Picking calibration
+    questions for bench/recall_distance.py needs three things the store
+    can answer and three it cannot, and finding them by asking `recall`
+    means guessing at the contents through the exact mechanism whose
+    reliability is in question.
+
+    A store you cannot enumerate is a store you cannot debug. This
+    reads it directly, ordered by id, no embedding call at all.
+    """
+    filters, params = [], []
+    if kind is not None:
+        filters.append("kind = ?")
+        params.append(kind)
+    if project is not None:
+        filters.append("project = ?")
+        params.append(project)
+    where = (" WHERE " + " AND ".join(filters)) if filters else ""
+    params += [limit, offset]
+
+    rows = conn.execute(
+        f"""
+        SELECT id, kind, content, project, status, created_at
+        FROM memory_entries
+        {where}
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        """,
+        params,
+    ).fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "kind": r[1],
+            "content": r[2],
+            "project": r[3],
+            "status": r[4],
+            "created_at": r[5],
+        }
+        for r in rows
+    ]
+
+
+def count_entries(conn: sqlite3.Connection, *, kind: str | None = None) -> dict:
+    """
+    How many entries there are, broken down by kind.
+
+    The breakdown is the point rather than the total. The recurring
+    diagnosis on this store is "it holds compaction pointers and almost
+    no facts", and until now that was an inference from whatever
+    `search` happened to return. One query settles it.
+    """
+    where, params = ("WHERE kind = ?", [kind]) if kind else ("", [])
+    rows = conn.execute(
+        f"SELECT kind, COUNT(*) FROM memory_entries {where} GROUP BY kind",
+        params,
+    ).fetchall()
+    by_kind = {r[0]: r[1] for r in rows}
+    return {"total": sum(by_kind.values()), "by_kind": by_kind}

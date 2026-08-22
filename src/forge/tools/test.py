@@ -130,9 +130,11 @@ def _tripwire_message(absent: list[str]) -> str:
         f"{'is' if len(absent) == 1 else 'are'} not installed here, so every "
         "dispatch of it (and graphs/review.py's test step) will fail with "
         "'executable not found'. The Containerfile installs requirements.txt "
-        "only, and the runners live in requirements-dev.txt -- either install "
-        "them in the image, or drop 'test' from ENABLED_TOOLS so the router "
-        "stops offering it."
+        "only, and the runners live in requirements-dev.txt. Two ways out: "
+        "rebuild with --build-arg INSTALL_TEST_RUNNERS=true (this widens what "
+        "a reachable container can execute, which is why it is off by "
+        "default), or drop 'test' from ENABLED_TOOLS so the router stops "
+        "offering it and its description stops costing router prompt tokens."
     )
 
 

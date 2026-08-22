@@ -104,4 +104,8 @@ services:
       # échouer le démarrage du container sur des chemins absents.
       # - /var/log/journal:/host-journal:ro
       # - ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro
-      # - ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy.sock:/run/forge-podman-ro-proxy.sock:ro
+      # Le RÉPERTOIRE, pas le fichier socket : le proxy recrée son
+      # socket à chaque démarrage, et un montage de fichier resterait
+      # collé à l'ancien inode (« connection refused » alors que le
+      # proxy tourne). Même forme que forge-dbus-proxy juste au-dessus.
+      # - ${XDG_RUNTIME_DIR}/forge-podman-ro-proxy:/run/forge-podman-ro-proxy:ro

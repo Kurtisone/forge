@@ -40,7 +40,7 @@ Usage (Python):
   print(run("répare le cache KV dans src/forge"))
 """
 
-from forge import delegation, jobs, spec, turn
+from forge import delegation, jobs, spec, subtrace, turn
 from forge.config import DELEGATE_DRAFT
 from forge.errors import ForgeError, ProviderError
 from forge.graph import Graph
@@ -162,4 +162,11 @@ def build() -> Graph:
 def run(request: str) -> str:
     """Draft a spec for *request* and open a job for it."""
     state = build().run(request, initial_context={"request": request})
+    job_id = state.context.get("job_id")
+    subtrace.publish(
+        subtrace.from_state(
+            state,
+            {"submit": lambda: f"job {job_id}" if job_id else "aucun job créé"},
+        )
+    )
     return state.final_output or ""

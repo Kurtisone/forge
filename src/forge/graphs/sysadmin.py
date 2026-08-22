@@ -46,6 +46,7 @@ Usage (Python):
   print(run(target_hint="searxng", question="pourquoi ça redémarre ?"))
 """
 
+import difflib
 import json
 import subprocess
 
@@ -65,7 +66,11 @@ from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
 from forge.logger import log
-from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
+from forge.text_cleaning import (
+    looks_like_a_copy,
+    strip_think_blocks,
+    try_unwrap_router_json,
+)
 from forge.types import AgentState
 
 _MAX_SYNTHESIS_OUTPUT_CHARS = 4000
@@ -219,6 +224,14 @@ will execute anything: you only read logs and propose, a human always
 applies any fix by hand.
 
 Question: {question}
+{running_fact}
+These logs are whatever `{source}` returned. They were gathered before
+anyone read your question, so they may simply not contain the answer.
+If they do not, say so plainly and say what you would need to look at
+instead -- that is a correct answer here, and a confident diagnosis
+built on logs that do not mention the subject is the one failure this
+tool cannot recover from. Never treat the absence of an error in these
+logs as evidence that nothing is wrong.
 
 --- collected logs ({source}) ---
 {log_block}
@@ -344,22 +357,158 @@ def _collect_node(state: AgentState) -> AgentState:
     elif target_hint and target_hint in containers:
         cmd = _collect_cmd("container", target_hint)
         source = f"podman logs {target_hint}"
+    elif target_hint:
+        # No fallback here any more. It used to drop to `journalctl -k`
+        # and say nothing the model could see, and on run #83fc443e the
+        # whole chain played out in one go: the podman proxy was down ->
+        # containers came back empty -> the hint "forge-llm" matched
+        # nothing -> kernel logs were collected -> the model wrote a
+        # confident, entirely invented story about a variable blocking
+        # searxng. Every step was individually reasonable.
+        #
+        # Kernel logs are a fine answer to "what is wrong with this
+        # box?". They are never an answer to a question about a NAMED
+        # service, so a run that reaches them with a name in hand has
+        # already lost, and the only thing left to decide is whether it
+        # loses loudly. It now stops here: no logs, no model call, no
+        # opportunity to confabulate, and the report names what was
+        # actually broken (usually discovery, not the service).
+        state.context["target_missed"] = target_hint
+        log.warning(
+            "sysadmin: target_hint %r not found in discovery "
+            "(%d units, %d containers), stopping instead of collecting kernel logs",
+            target_hint,
+            len(units),
+            len(containers),
+        )
+        log.event("sysadmin.target_missed", target=target_hint)
+        return state
     else:
-        if target_hint:
-            log.warning(
-                "sysadmin: target_hint %r not found in discovery, falling back to kernel logs",
-                target_hint,
-            )
         cmd = _collect_cmd("kernel", "")
         source = "journalctl -k"
 
     state.context["log_source"] = source
-    state.context["collected_logs"] = _run_fixed(cmd, SYSADMIN_COLLECT_TIMEOUT)
+    collected = _run_fixed(cmd, SYSADMIN_COLLECT_TIMEOUT)
+    state.context["collected_logs"] = collected
+
+    # A failed collection is not a quiet log file. _run_fixed prefixes
+    # "[error]" precisely so this is distinguishable, and until now
+    # nothing distinguished it: the error text went into the prompt
+    # under a "--- collected logs ---" header and the model was asked
+    # to diagnose the service from it.
+    #
+    # The comment in _to_sub_steps used to argue that this stayed
+    # useful, "the LLM diagnosing the meta-error itself". Two real runs
+    # say otherwise. #7a29f59d and #7e0ed90c both got the podman
+    # proxy's 403 refusal instead of logs, and both answered that the
+    # container was crashing BECAUSE of that 403 -- a healthy container
+    # (Up 6 minutes), a confident cause, 600+ characters of plausible
+    # remediation for a fault that did not exist.
+    #
+    # Same shape as target_missed, so the same answer: the model is
+    # never handed evidence about a different subject than the
+    # question. The error is reported in code instead.
+    if collected.startswith("[error]"):
+        state.context["collect_failed"] = collected
+        log.event("sysadmin.collect_failed", source=source, error=collected[:200])
+        return state
+
     log.event("sysadmin.collect", source=source)
     return state
 
 
-def _clean_diagnosis_response(raw: str) -> str:
+_RUNNING_FACT = """
+FACT, established before you were called and not open to
+reinterpretation: `{target}` WAS RUNNING when these logs were
+collected. It appeared in `podman ps`, which lists running containers
+only. Whatever the logs contain, this container was not down, had not
+crashed, and was not failing to start. A question that assumes
+otherwise is mistaken, and saying so is the correct answer.
+"""
+
+_RUNNING_FOOTER = (
+    "\n\n---\n_État observé : `{target}` tournait au moment de la collecte "
+    "(présent dans `podman ps`)._"
+)
+
+
+def _collect_failed_node(state: AgentState) -> AgentState:
+    """
+    Report a failed collection, deterministically.
+
+    Deliberately says what could not be read and stops. Naming the
+    command matters more than it looks: the failure that produced this
+    node was a proxy policy refusal that podman renders as an
+    unmarshalling error, and the single most useful thing anyone could
+    have been told is which command to run by hand.
+    """
+    source = state.context["log_source"]
+    error = state.context["collect_failed"]
+    target = state.context.get("target_hint")
+
+    subject = f"« {target} »" if target else "le système"
+    state.final_output = (
+        f"[collecte impossible] Je n'ai pas pu lire les logs de {subject} : "
+        f"la commande `{source}` a échoué.\n"
+        f"{error}\n"
+        "Tant que cette commande ne rend pas de logs, il n'y a rien à "
+        "diagnostiquer — et ce message parle de la collecte, pas de l'état "
+        "de la cible."
+    )
+    state.final_tool = "sysadmin"
+    log.event("sysadmin.done", chars=len(state.final_output), collect_failed=True)
+    return state
+
+
+def _target_missed_node(state: AgentState) -> AgentState:
+    """
+    Report an unresolvable target, deterministically.
+
+    Written entirely in code. This node exists because a model was
+    asked to diagnose a service using logs from a different subsystem
+    and did it -- fluently. There is no prompt for that; the answer is
+    to not ask.
+    """
+    target = state.context["target_missed"]
+    units = state.context["units"]
+    containers = state.context["containers"]
+
+    lines = [
+        (
+            f"[cible introuvable] « {target} » ne correspond à aucune unité "
+            f"systemd ni à aucun conteneur parmi ce que la découverte a "
+            f"remonté ({len(units)} unités, {len(containers)} conteneurs)."
+        )
+    ]
+
+    # Discovery failing is the interesting case and the common one: an
+    # empty list means the proxy or busctl is down, not that the
+    # machine has no services. Naming that turns "I could not find your
+    # service" into "here is what to restart".
+    for label, err_key, count in (
+        ("unités systemd", "discover_units_error", len(units)),
+        ("conteneurs", "discover_containers_error", len(containers)),
+    ):
+        err = state.context.get(err_key)
+        if err:
+            lines.append(f"La découverte des {label} a échoué : {err}")
+        elif count == 0:
+            lines.append(
+                f"Aucun élément dans la liste des {label} — c'est "
+                f"probablement la découverte qui est en panne, pas la cible."
+            )
+
+    close = difflib.get_close_matches(target, units + containers, n=3, cutoff=0.6)
+    if close:
+        lines.append("Cibles proches : " + ", ".join(close))
+
+    state.final_output = "\n".join(lines)
+    state.final_tool = "sysadmin"
+    log.event("sysadmin.done", chars=len(state.final_output), target_missed=target)
+    return state
+
+
+def _clean_diagnosis_response(raw: str, log_block: str = "") -> str:
     """Same reasoning as review._clean_review_response and
     research._clean_synthesis_response (see forge/text_cleaning.py):
     this prompt asks for plain text, so the shared conditional-unwrap
@@ -384,6 +533,17 @@ def _clean_diagnosis_response(raw: str) -> str:
 
     if not cleaned:
         return "[error] Le modèle n'a pas généré de réponse. Réessayez."
+
+    # Same guard review gained after run #b669174a. Not observed here
+    # yet, and wired anyway: this graph already carries
+    # _EXAMPLE_LEAK_FRAGMENTS, which is the same failure against a
+    # different source text, and review/research last drifted apart
+    # precisely because one of them was fixed alone (v3.10).
+    if log_block and looks_like_a_copy(cleaned, log_block):
+        log.warning("sysadmin: model echoed the logs instead of diagnosing them")
+        return (
+            "[error] Le modèle a recopié les logs au lieu de les analyser. Réessayez."
+        )
 
     if len(cleaned) > _MAX_SYNTHESIS_OUTPUT_CHARS:
         cleaned = cleaned[:_MAX_SYNTHESIS_OUTPUT_CHARS].rstrip() + "…"
@@ -412,11 +572,28 @@ def _synthesize_node(state: AgentState) -> AgentState:
         state.context["collected_logs"], SYSADMIN_LOG_CHARS_BUDGET
     )
 
+    # Run #be385d16: asked "pourquoi forge-embedding plante ?" about a
+    # container that was up, the model read a routine llama.cpp
+    # n_batch notice and concluded the service was crashing on "une
+    # assertion ou une erreur interne NON AFFICHÉE" -- inventing the
+    # evidence it lacked. Ninth time a wording fix has lost here.
+    #
+    # So this is not a wording fix. Discovery lists containers with
+    # `podman ps`, no -a, which means presence in that list IS proof
+    # the container was running. That fact is free, already collected,
+    # and was being thrown away. It goes in the prompt as a FACT rather
+    # than an instruction, and in the answer as a footer that holds
+    # whatever the model decides to say.
+    target = state.context.get("target_hint")
+    running = bool(target) and target in state.context.get("containers", [])
+    running_fact = _RUNNING_FACT.format(target=target) if running else ""
+
     prompt = _SYNTHESIS_PROMPT.format(
         today_line=today_line(),
         question=question,
         source=source,
         log_block=log_block,
+        running_fact=running_fact,
     )
 
     # Language named in LAST position, and only when forge.lang is
@@ -432,7 +609,7 @@ def _synthesize_node(state: AgentState) -> AgentState:
         # deliberate -- see the header of forge/prose_grammar.py.
         raw = call_llm(prompt + language_line)
         log.event("sysadmin.raw_output", raw=raw)
-        answer = _clean_diagnosis_response(raw)
+        answer = _clean_diagnosis_response(raw, log_block)
         # The deterministic half. Naming the language in the prompt is
         # still a wording fix, and wording fixes have lost seven times
         # on this codebase. The retry re-sends the same prompt with a
@@ -441,7 +618,9 @@ def _synthesize_node(state: AgentState) -> AgentState:
         answer = lang.enforce(
             question,
             answer,
-            retry=lambda line: _clean_diagnosis_response(call_llm(prompt + line)),
+            retry=lambda line: _clean_diagnosis_response(
+                call_llm(prompt + line), log_block
+            ),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
     except ProviderError as e:
@@ -450,9 +629,12 @@ def _synthesize_node(state: AgentState) -> AgentState:
         state.final_output = f"[error] LLM unavailable: {e}"
         return state
 
+    if running and not answer.startswith("[error]"):
+        answer += _RUNNING_FOOTER.format(target=target)
+
     state.final_output = answer
     state.final_tool = "sysadmin"
-    log.event("sysadmin.done", chars=len(state.final_output))
+    log.event("sysadmin.done", chars=len(state.final_output), target_running=running)
     return state
 
 
@@ -460,9 +642,22 @@ def build() -> Graph:
     g = Graph("sysadmin", max_steps=6)
     g.add_node("discover", _discover_node)
     g.add_node("collect", _collect_node)
+    g.add_node("target_missed", _target_missed_node)
+    g.add_node("collect_failed", _collect_failed_node)
     g.add_node("synthesize", _synthesize_node)
 
     g.add_edge("discover", "collect")
+    # Order matters -- Graph takes the first matching edge.
+    g.add_edge(
+        "collect",
+        "target_missed",
+        condition=lambda s: bool(s.context.get("target_missed")),
+    )
+    g.add_edge(
+        "collect",
+        "collect_failed",
+        condition=lambda s: bool(s.context.get("collect_failed")),
+    )
     g.add_edge("collect", "synthesize")
 
     return g
@@ -506,6 +701,9 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
         return f"{services_part} | {containers_part}"
 
     def collect_detail() -> str:
+        missed = state.context.get("target_missed")
+        if missed:
+            return f"cible « {missed} » introuvable, aucun log collecté"
         source = state.context.get("log_source", "?")
         if collect_error:
             return f"source : {source} | erreur : {collect_error}"
@@ -514,30 +712,32 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
     details = {
         "discover": discover_detail,
         "collect": collect_detail,
+        "collect_failed": lambda: (
+            f"collecte échouée : {state.context.get('collect_failed', '')[:120]}"
+        ),
+        "target_missed": lambda: (
+            f"« {state.context.get('target_missed')} » absent de la découverte"
+        ),
         "synthesize": lambda: (
             f"diagnostic généré ({len(state.final_output or '')} caractères)"
         ),
     }
-    return [
-        {
-            "label": ts.decision_tool,
-            "detail": details.get(ts.decision_tool, lambda: "")(),
-            # A discover/collect step with a real subprocess error is
-            # flagged even though the overall run still succeeds (the
-            # kernel-log fallback, or the LLM diagnosing the meta-error
-            # itself, keeps the run useful) -- ts.tool_ok alone can't
-            # express this partial failure since it tracks state.ok.
-            "ok": (
-                False
-                if ts.decision_tool == "discover" and (units_error or containers_error)
-                else False
-                if ts.decision_tool == "collect" and collect_error
-                else ts.tool_ok
-            ),
-            "duration_ms": ts.duration_ms,
-        }
-        for ts in state.trace
-    ]
+    steps = subtrace.from_state(state, details)
+    # sysadmin is the one graph whose per-step `ok` is not simply
+    # state.ok: discover and collect can fail partially while the run
+    # as a whole still finishes. from_state deliberately does not know
+    # that, so it is overridden here rather than made a parameter no
+    # other graph would pass.
+    for step, ts in zip(steps, state.trace, strict=True):
+        step["ok"] = (
+            False
+            if ts.decision_tool == "discover" and (units_error or containers_error)
+            else False
+            if ts.decision_tool == "collect"
+            and (collect_error or state.context.get("target_missed"))
+            else ts.tool_ok
+        )
+    return steps
 
 
 def run(target_hint: str | None, question: str | None) -> str:

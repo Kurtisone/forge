@@ -433,6 +433,48 @@ RESEARCH_FETCH_CHARS_PER_RESULT = int(
 # multi-source summary, so its cap is far smaller than research's.
 RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 
+# Distance above which a retrieved memory entry is not shown to the
+# synthesis step at all.
+#
+# DISABLED BY DEFAULT, and that is the whole point of it existing.
+#
+# On 2026-08-19 a recall answer welded two unrelated memories into one
+# invented causality. Patch 0007 logged the distances and the five hits
+# came back at 0.90 / 0.95 / 0.99 / 0.995 / 1.0015 -- read at the time
+# as "orthogonal, pure noise". That reading is wrong. sqlite-vec's vec0
+# defaults to L2, rag.py stores unit-length vectors, so d^2 = 2(1-cos):
+# those distances are cosine 0.60 down to 0.50, and true orthogonality
+# would be d = 1.414. Weak, yes. Noise, not demonstrably.
+#
+# MEASURED on the Deck the same day, once bench/recall_distance.py
+# supplied the missing positive control:
+#
+#     hits    0.6943 0.7439 0.9226 0.9351 0.9402   (all rank 1)
+#     misses  1.1096 1.1708 1.2071 1.2197 1.2586
+#
+# So a real hit tops out around 0.94 and the nearest unanswerable query
+# starts at 1.11. Against that scale the five rows above are placed at
+# last: the two closest sit INSIDE the range a genuine hit occupies.
+#
+# Which settles the more useful question. A cutoff that keeps real hits
+# would have kept four of those five rows, so it WOULD NOT have
+# prevented the answer it was proposed for. It removes the case where
+# nothing in the store is remotely relevant -- worth having, ~1.05 is a
+# defensible value -- and does nothing about several middling entries
+# being welded into an invented causality. That one is upstream: the
+# store holds compaction pointers and almost no facts.
+#
+# Still unset by default, and the first --no-plant run against a copy of
+# the real store is why: a real MISS landed at 0.9891, below the 1.05
+# the fixtures suggested. Long compaction summaries sit at middling
+# distance from every question ever asked and compress the whole scale
+# -- so the fixtures validate the mechanism, not the number. On the real
+# store it is nearer 0.96, from one pair, which is not enough to set it.
+#
+# Unset means no filtering, i.e. exactly today's behaviour.
+_recall_max_distance = os.getenv("RECALL_MAX_DISTANCE", "").strip()
+RECALL_MAX_DISTANCE = float(_recall_max_distance) if _recall_max_distance else None
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the

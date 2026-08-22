@@ -47,19 +47,49 @@ Usage (Python):
 
 from pathlib import Path
 
-from forge import lang
+from forge import lang, subtrace
 from forge.config import ENFORCE_ANSWER_LANGUAGE
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
 from forge.logger import log
-from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
+from forge.text_cleaning import (
+    looks_like_a_copy,
+    strip_think_blocks,
+    try_unwrap_router_json,
+)
 from forge.tools import test as test_tool
 from forge.types import AgentState
 
 _MAX_FILE_CHARS = 8_000
 _MAX_TEST_OUTPUT_CHARS = 3_000
+
+# Said three times, to three different readers, because each one drew
+# the wrong conclusion on its own:
+#   _CUT_MARKER       -- to the model, at the cut, in Forge's voice
+#   _TRUNCATION_NOTE  -- to the model, near the question, as a rule
+#   _TRUNCATION_FOOTER-- to the user, in the answer, deterministically
+# The first two are wording and wording has lost seven times here. The
+# third is the one that cannot fail: a review of the first 8 000
+# characters of a 40 000-character file is not a review of that file,
+# and until now nothing said so anywhere the user could see it.
+_CUT_MARKER = (
+    "\n[cut by Forge at {shown} of {total} characters -- the rest was not sent]"
+)
+
+_TRUNCATION_NOTE = """
+NOTE: this file is {total} characters long and Forge sent you only the
+first {shown}. The text therefore stops mid-way. That cut is Forge's,
+not the author's: never report the abrupt ending, a missing closing
+section, or an apparent copy-paste error as a defect of the file, and
+never guess what the unsent part contains.
+"""
+
+_TRUNCATION_FOOTER = (
+    "\n\n---\n_Revue partielle : Forge n'a analysé que les {shown} "
+    "premiers caractères sur {total} ({percent} % du fichier)._"
+)
 
 # A ceiling on how much of a degenerate/garbage response to show,
 # mirroring router/parser.py's _MAX_FALLBACK_CHARS -- kept as a
@@ -98,7 +128,7 @@ same language as the question.
 
 File: {filename}
 Question: {question}
-
+{truncation_note}
 --- file content ---
 {content}
 --- end of file ---
@@ -128,7 +158,7 @@ _TEST_SECTION_TEMPLATE = """
 """
 
 
-def _clean_review_response(raw: str) -> str:
+def _clean_review_response(raw: str, file_content: str = "") -> str:
     """
     Clean the review LLM's plain-text answer.
 
@@ -175,6 +205,16 @@ def _clean_review_response(raw: str) -> str:
         log.warning("review: model returned an empty response")
         return "[error] Le modèle n'a pas généré de réponse. Réessayez."
 
+    # Run #b669174a: the answer WAS the file's opening docstring,
+    # copied verbatim. Every other guard passed it -- the unwrap check
+    # asks whether the content is substantive, and a copy of the input
+    # is maximally substantive. See text_cleaning.looks_like_a_copy.
+    if file_content and looks_like_a_copy(cleaned, file_content):
+        log.warning("review: model returned the file's own content instead of a review")
+        return (
+            "[error] Le modèle a recopié le fichier au lieu de l'analyser. Réessayez."
+        )
+
     if len(cleaned) > _MAX_REVIEW_OUTPUT_CHARS:
         cleaned = cleaned[:_MAX_REVIEW_OUTPUT_CHARS].rstrip() + "…"
         log.warning("review response truncated to %d chars", _MAX_REVIEW_OUTPUT_CHARS)
@@ -212,11 +252,21 @@ def _read_file_node(state: AgentState) -> AgentState:
         state.final_output = f"[error] cannot read file: {e}"
         return state
 
-    if len(content) > _MAX_FILE_CHARS:
-        content = (
-            content[:_MAX_FILE_CHARS] + f"\n... (truncated at {_MAX_FILE_CHARS} chars)"
+    full_chars = len(content)
+    if full_chars > _MAX_FILE_CHARS:
+        # The marker names Forge on purpose. The old one read
+        # "... (truncated at 8000 chars)" in the passive voice, sitting
+        # at the end of a file that stops mid-sentence, and on a real
+        # run of notes.md the model listed that abrupt ending as defect
+        # number one of the document -- "suggests a badly executed
+        # copy-paste". It was reviewing our own scissors.
+        content = content[:_MAX_FILE_CHARS] + _CUT_MARKER.format(
+            shown=_MAX_FILE_CHARS, total=full_chars
         )
-        log.warning("review: file truncated to %d chars", _MAX_FILE_CHARS)
+        state.context["truncated_from"] = full_chars
+        log.warning(
+            "review: file truncated to %d chars (of %d)", _MAX_FILE_CHARS, full_chars
+        )
 
     state.context["file_content"] = content
     state.context["file_name"] = path.name
@@ -320,12 +370,20 @@ def _llm_review_node(state: AgentState) -> AgentState:
             test_path=test_path, test_output=test_output
         )
 
+    truncated_from = state.context.get("truncated_from")
+    truncation_note = (
+        _TRUNCATION_NOTE.format(total=truncated_from, shown=_MAX_FILE_CHARS)
+        if truncated_from
+        else ""
+    )
+
     prompt = _REVIEW_PROMPT.format(
         today_line=today_line(),
         filename=filename,
         question=question,
         content=content,
         test_section=test_section,
+        truncation_note=truncation_note,
     )
 
     # Language named in LAST position, and only when forge.lang is
@@ -341,7 +399,7 @@ def _llm_review_node(state: AgentState) -> AgentState:
         # deliberate -- see the header of forge/prose_grammar.py.
         raw = call_llm(prompt + language_line)
         log.event("review.raw_output", raw=raw)
-        answer = _clean_review_response(raw)
+        answer = _clean_review_response(raw, content)
         # The deterministic half. Naming the language in the prompt is
         # still a wording fix, and wording fixes have lost seven times
         # on this codebase. The retry re-sends the same prompt with a
@@ -350,7 +408,7 @@ def _llm_review_node(state: AgentState) -> AgentState:
         answer = lang.enforce(
             question,
             answer,
-            retry=lambda line: _clean_review_response(call_llm(prompt + line)),
+            retry=lambda line: _clean_review_response(call_llm(prompt + line), content),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
     except ProviderError as e:
@@ -363,9 +421,22 @@ def _llm_review_node(state: AgentState) -> AgentState:
     # router.raw_output) -- this call previously had no raw-output
     # visibility at all, which made the JSON-habit bug above
     # impossible to confirm from logs alone the first time it happened.
+    # Not on an error. "[error] the model copied the file" followed by
+    # "partial review: 40 % of the file" reads as though a review
+    # happened and covered 40 % of it. Seen on run #9942466c, where the
+    # copy guard fired and the footer went on anyway.
+    if truncated_from and not answer.startswith("[error]"):
+        answer += _TRUNCATION_FOOTER.format(
+            shown=_MAX_FILE_CHARS,
+            total=truncated_from,
+            percent=round(100 * _MAX_FILE_CHARS / truncated_from),
+        )
+
     state.final_output = answer
     state.final_tool = "review"
-    log.event("review.done", chars=len(state.final_output))
+    log.event(
+        "review.done", chars=len(state.final_output), truncated_from=truncated_from
+    )
     return state
 
 
@@ -430,5 +501,27 @@ def run(
             "question": question,
             "test_path": test_path,
         },
+    )
+    truncated = state.context.get("truncated_from")
+    subtrace.publish(
+        subtrace.from_state(
+            state,
+            {
+                "read_file": lambda: (
+                    f"{state.context.get('filename', file_path)} — "
+                    + (
+                        f"{_MAX_FILE_CHARS} caractères lus sur {truncated}"
+                        if truncated
+                        else f"{len(state.context.get('file_content', ''))} caractères"
+                    )
+                ),
+                "run_tests": lambda: (
+                    f"tests : {test_path}" if test_path else "aucun test demandé"
+                ),
+                "llm_review": lambda: (
+                    f"revue générée ({len(state.final_output or '')} caractères)"
+                ),
+            },
+        )
     )
     return state.final_output or ""
