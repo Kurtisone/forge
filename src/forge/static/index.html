@@ -821,6 +821,7 @@ async function togglePin(messageId, role, pin) {
 // produces an answer about a thing that did not happen.
 const UI_COMMANDS = {
   '!clear': {
+    changesHistory: true,
     help: 'vide tout l\'historique (épinglés compris)',
     run: async () => {
       if (!confirm('Vider tout l\'historique ? Les messages épinglés partent aussi. Irréversible.')) {
@@ -845,6 +846,7 @@ const UI_COMMANDS = {
     }
   },
   '!compact': {
+    changesHistory: true,
     help: 'force une passe de compaction (bouton « Compacter » aussi)',
     run: async () => {
       const r = await apiFetch('/compact', { method: 'POST' })
@@ -876,14 +878,33 @@ async function runUiCommand(text) {
     return
   }
 
-  appendMsg(null, text, 'user')
+  // Order matters, and the first version got it wrong: it appended the
+  // reply and THEN called loadHistory(), which rebuilds the whole chat
+  // from the server and wiped both the echoed command and its answer.
+  // !clear survived by accident (the history is empty afterwards, so
+  // the popup was the only visible effect) and !truc survived because
+  // the unknown branch returns before the refresh -- but !memory,
+  // whose entire output is local, vanished without a trace. From the
+  // outside it looked exactly like a command that does nothing.
+  //
+  // So: run, refresh only if the command actually changed the server
+  // state, and append afterwards. Local output is never at the mercy
+  // of a reload it has nothing to do with.
+  let reply, cls = 'bot'
   try {
-    appendMsg(null, await command.run(), 'bot')
+    reply = await command.run()
   } catch (e) {
-    appendMsg(null, `Erreur : ${e.message}`, 'bot error')
+    reply = `Erreur : ${e.message}`
+    cls = 'bot error'
   }
-  await loadHistory()
-  await refreshContext()
+
+  if (command.changesHistory) {
+    await loadHistory()
+    await refreshContext()
+  }
+
+  appendMsg(null, text, 'user')
+  appendMsg(null, reply, cls)
 }
 
 async function sendChat() {

@@ -86,3 +86,46 @@ def test_the_ui_confirms_before_clearing():
 
     assert "confirm(" in source
     assert "/history/clear" in source
+
+
+def test_a_command_reply_is_appended_after_any_refresh():
+    """
+    Bug in the first version of this feature, reported live: `!memory`
+    did nothing visible and the typed command vanished from the chat.
+
+    The reply WAS produced -- GET /memory?limit=100 returned 200 in the
+    server log -- and then loadHistory() rebuilt the chat from the
+    server, erasing both the echoed command and its answer, neither of
+    which the server knows about. `!clear` survived by accident (the
+    history is empty afterwards, so the confirm popup was the only
+    visible effect) and `!truc` survived because the unknown-command
+    branch returns before the refresh. `!memory`, whose entire output
+    is local, disappeared without a trace.
+
+    From the outside that is indistinguishable from a command that
+    does nothing at all.
+    """
+    source = INDEX.read_text()
+    body = source[source.index("async function runUiCommand") :]
+    body = body[: body.index("async function sendChat")]
+
+    refresh_at = body.index("loadHistory()")
+    append_at = body.index("appendMsg(null, reply")
+
+    assert append_at > refresh_at, (
+        "the reply must be appended AFTER the history refresh, or the refresh erases it"
+    )
+
+
+def test_only_commands_that_change_the_history_trigger_a_refresh():
+    """
+    A read-only command has nothing to re-read, and reloading for it is
+    what created the bug above.
+    """
+    source = INDEX.read_text()
+
+    assert "changesHistory: true" in source
+    assert "command.changesHistory" in source
+    assert source.count("changesHistory: true") == 2, (
+        "exactly !clear and !compact touch server state; !memory does not"
+    )
