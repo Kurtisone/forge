@@ -44,7 +44,9 @@ To activate this tool add it to ENABLED_TOOLS in .env.local:
     ENABLED_TOOLS=chat,code,memory
 """
 
+import difflib
 import json
+import re
 
 from forge import rag
 from forge.config import MEMORY_RECALL_MAX_CHARS
@@ -65,6 +67,12 @@ _VALID_KINDS = ("decision", "todo", "fact")
 # directly, bypassing _VALID_KINDS. Recall has to know about it anyway
 # -- it comes back in search results and dominates them by sheer size.
 _ARCHIVE_KINDS = ("history_summary",)
+
+# How much of the store to read when building the vocabulary. Bounded
+# because this runs on every write and the store grows without limit:
+# 500 entries is well past what any spelling suggestion needs, and the
+# words that matter here are recent by construction.
+_VOCABULARY_ENTRIES = 500
 
 
 def _remember(instruction: dict) -> str:
@@ -91,11 +99,114 @@ def _remember(instruction: dict) -> str:
         except rag.EmbeddingError as e:
             log.error("memory tool: remember failed: %s", e)
             return f"[error] remember failed: embedding server unreachable ({e})"
+
+        total = rag.count_entries(conn)["by_kind"].get(kind, 1)
+        odd = _unfamiliar_words(conn, text)
     finally:
         conn.close()
 
-    log.event("memory.remember", entry_id=entry_id, kind=kind, project=project)
-    return f"Remembered (#{entry_id})."
+    log.event(
+        "memory.remember",
+        entry_id=entry_id,
+        kind=kind,
+        project=project,
+        unfamiliar=len(odd),
+    )
+    return _confirmation(entry_id, kind, text, project, total, odd)
+
+
+def _confirmation(
+    entry_id: int,
+    kind: str,
+    text: str,
+    project: str | None,
+    total: int,
+    odd: list[tuple[str, str]],
+) -> str:
+    """
+    Say what was stored, not that something was.
+
+    "Remembered (#305)." is a receipt for a transaction nobody can
+    check. The entry that provoked this went in as "NiPoGi AM06PRO,
+    pocresseur 5500U, 32Go de RAM" and the typo was only found days
+    later, by reading the store with a debugging tool. Echoing the
+    stored text puts it in front of the person who wrote it while
+    !forget is still one line away.
+
+    Same lesson as files:write, which used to answer with a byte count
+    until a created file had to be opened by hand to see what was in
+    it (v3.11). A write that reports only that it happened hides what
+    happened.
+    """
+    where = f"/{project}" if project else ""
+    lines = [f"Noté (#{entry_id}, {kind}{where}) :", f"  {text}"]
+    lines.append(
+        f"\n{total} entrée{'s' if total > 1 else ''} de type {kind} en mémoire."
+    )
+    if odd:
+        lines.append(_spelling_note(odd))
+        lines.append(f"Si c'est une faute : `!forget {entry_id}` puis réécris-la.")
+    return "\n".join(lines)
+
+
+# A word shorter than this is not worth checking: "SSD", "RAM", "Go",
+# "PC" are the vocabulary, not the typos, and difflib on three letters
+# matches almost anything.
+_MIN_WORD = 5
+
+# How close a word has to be to an existing one to be worth
+# mentioning. 0.85 on difflib's ratio is roughly "one or two
+# characters out of eight" -- deliberately tight, because the cost of
+# a false positive is a distracting line in every confirmation, and
+# this feature is only ever a suggestion.
+_CLOSE_ENOUGH = 0.85
+
+_WORD_RE = re.compile(rf"[^\W\d_]{{{_MIN_WORD},}}", re.UNICODE)
+
+
+def _unfamiliar_words(conn, text: str) -> list[tuple[str, str]]:
+    """
+    Words in `text` that appear nowhere else in the store but sit one
+    or two characters from a word that does.
+
+    The dictionary is THE STORE ITSELF, and that is the whole design.
+    A French spellchecker on this corpus is a machine for breaking
+    identifiers: NiPoGi, sqlite-vec, busctl, aardvark-dns, GBNF are
+    precisely the tokens that carry the information, and a general
+    dictionary corrects them towards common words. Vocabulary drawn
+    from what has already been written knows those words because they
+    were already used, and it gets sharper with every entry instead of
+    needing a maintained allow-list.
+
+    It only ever SUGGESTS. Silently rewriting a memory entry is the
+    one place in Forge where being approximately right is worse than
+    being wrong -- nobody re-reads an entry, so it comes back weeks
+    later as a fact with no trace that it was altered. Everywhere else
+    a mistake is visible: a bad file, a red test, a diagnosis the logs
+    contradict.
+
+    Returns pairs of (written, closest word already in the store).
+    """
+    words = {w.lower() for w in _WORD_RE.findall(text)}
+    if not words:
+        return []
+
+    known: set[str] = set()
+    for entry in rag.list_entries(conn, limit=_VOCABULARY_ENTRIES):
+        known.update(w.lower() for w in _WORD_RE.findall(entry["content"]))
+    known -= words
+
+    found = []
+    for word in sorted(words):
+        near = difflib.get_close_matches(word, known, n=1, cutoff=_CLOSE_ENOUGH)
+        if near:
+            found.append((word, near[0]))
+    return found
+
+
+def _spelling_note(odd: list[tuple[str, str]]) -> str:
+    pairs = ", ".join(f"« {written} » (proche de « {near} »)" for written, near in odd)
+    return f"\nJamais vu ailleurs en mémoire : {pairs}."
 
 
 def search(

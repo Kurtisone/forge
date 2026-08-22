@@ -26,7 +26,7 @@ def test_remember_stores_entry():
     out = memory_tool.run(
         json.dumps({"action": "remember", "kind": "decision", "content": "use podman"})
     )
-    assert out == "Remembered (#1)."
+    assert out.startswith("Noté (#1")
 
 
 def test_remember_with_project():
@@ -40,7 +40,7 @@ def test_remember_with_project():
             }
         )
     )
-    assert "Remembered" in out
+    assert out.startswith("Noté (#1")
 
 
 def test_remember_accepts_fact_kind():
@@ -49,7 +49,7 @@ def test_remember_accepts_fact_kind():
             {"action": "remember", "kind": "fact", "content": "Possède un Steam Deck"}
         )
     )
-    assert out == "Remembered (#1)."
+    assert out.startswith("Noté (#1")
 
 
 def test_remember_defaults_to_fact_when_kind_missing():
@@ -60,7 +60,7 @@ def test_remember_defaults_to_fact_when_kind_missing():
     out = memory_tool.run(
         json.dumps({"action": "remember", "content": "Possède un Steam Deck"})
     )
-    assert out == "Remembered (#1)."
+    assert out.startswith("Noté (#1")
 
 
 def test_remember_defaults_to_fact_when_kind_empty():
@@ -69,7 +69,7 @@ def test_remember_defaults_to_fact_when_kind_empty():
             {"action": "remember", "kind": "", "content": "Possède un Steam Deck"}
         )
     )
-    assert out == "Remembered (#1)."
+    assert out.startswith("Noté (#1")
 
 
 def test_remember_rejects_invalid_kind():
@@ -229,3 +229,92 @@ def test_search_raises_on_embedding_failure(monkeypatch):
 
     with pytest.raises(rag.EmbeddingError):
         memory_tool.search("q")
+
+
+def test_the_confirmation_echoes_what_was_stored():
+    """
+    "Remembered (#305)." is a receipt for a transaction nobody can
+    check. The entry that provoked this went in as "pocresseur 5500U"
+    and the typo surfaced days later, through a debugging tool. Same
+    lesson as files:write answering with a byte count until a created
+    file had to be opened by hand to see what was in it.
+    """
+    out = memory_tool.run(
+        json.dumps(
+            {
+                "action": "remember",
+                "kind": "fact",
+                "content": "Le NiPoGi a 32 Go de RAM",
+            }
+        )
+    )
+
+    assert "Le NiPoGi a 32 Go de RAM" in out
+
+
+def test_a_word_close_to_one_already_stored_is_flagged():
+    memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "processeur Ryzen 5500U"}
+        )
+    )
+
+    out = memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "pocresseur AMD 5600G"}
+        )
+    )
+
+    assert "pocresseur" in out
+    assert "processeur" in out
+    assert "!forget" in out
+
+
+def test_a_genuinely_new_word_is_not_flagged():
+    """
+    The vocabulary is the store itself precisely so that identifiers
+    survive. A general dictionary would correct these towards common
+    words.
+    """
+    memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "processeur Ryzen 5500U"}
+        )
+    )
+
+    out = memory_tool.run(
+        json.dumps(
+            {
+                "action": "remember",
+                "kind": "fact",
+                "content": "Le proxy utilise aardvark-dns et busctl",
+            }
+        )
+    )
+
+    assert "Jamais vu" not in out
+
+
+def test_the_entry_is_stored_even_when_a_word_looks_odd():
+    """Suggest, never rewrite and never refuse. Silently altering a
+    memory entry is the one place where approximately right is worse
+    than wrong: nobody re-reads it, so it returns weeks later as a
+    fact with no trace of the edit."""
+    memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "processeur Ryzen 5500U"}
+        )
+    )
+    memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "pocresseur AMD 5600G"}
+        )
+    )
+
+    conn = rag.get_connection()
+    try:
+        contents = [e["content"] for e in rag.list_entries(conn)]
+    finally:
+        conn.close()
+
+    assert "pocresseur AMD 5600G" in contents
