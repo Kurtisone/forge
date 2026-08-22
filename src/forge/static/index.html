@@ -831,6 +831,19 @@ const UI_COMMANDS = {
       return `Historique vidé — ${data.removed} message(s) supprimé(s).`
     }
   },
+  '!memory': {
+    help: 'liste ce qu\'il y a vraiment dans la mémoire vectorielle',
+    run: async () => {
+      const r = await apiFetch('/memory?limit=100')
+      const d = await r.json()
+      if (!d.total) return 'Mémoire vectorielle vide.'
+      const breakdown = Object.entries(d.by_kind)
+        .map(([k, n]) => `${k} : ${n}`).join(' · ')
+      const lines = d.entries.map(e =>
+        `#${e.id} [${e.kind}] ${e.content.replace(/\s+/g, ' ').slice(0, 160)}`)
+      return `${d.total} entrée(s) — ${breakdown}\n\n${lines.join('\n')}`
+    }
+  },
   '!compact': {
     help: 'force une passe de compaction (bouton « Compacter » aussi)',
     run: async () => {

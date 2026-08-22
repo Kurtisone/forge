@@ -13,6 +13,7 @@ Endpoints:
   POST /drawer/unpin → unpin a message by id
   POST /compact     → force a compaction pass now (v3.9)
   POST /history/clear → wipe the history, pinned included
+  GET  /memory      → list the vector store as stored (no query)
 
 Auth: set API_TOKEN in the environment to require
 `Authorization: Bearer <token>` on every endpoint except / and
@@ -633,6 +634,42 @@ async def unpin(req: PinRequest):
     if not memory.unpin_message(req.message_id):
         raise HTTPException(status_code=404, detail="message not found")
     return {"ok": True}
+
+
+@app.get("/memory", dependencies=[Depends(require_token), Depends(rate_limit)])
+async def memory_list(
+    kind: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    List what is actually in the vector store, no query involved.
+
+    /search has been the only way to read this store, and it is
+    semantic: it needs a question and answers with whatever is nearest.
+    So "what do you have in memory?" had no answer -- asking `recall`
+    just runs the same retrieval whose reliability is the thing in
+    doubt, and on 2026-08-22 it returned five compaction pointers and a
+    refusal.
+
+    Ordered by id descending, with a per-kind breakdown alongside,
+    because the recurring claim about this store ("compaction pointers
+    and almost no facts") has never actually been counted.
+    """
+    from forge import rag
+
+    def _read():
+        conn = rag.get_connection()
+        try:
+            return (
+                rag.count_entries(conn),
+                rag.list_entries(conn, kind=kind, limit=limit, offset=offset),
+            )
+        finally:
+            conn.close()
+
+    counts, entries = await _run_in_thread(_read)
+    return {"total": counts["total"], "by_kind": counts["by_kind"], "entries": entries}
 
 
 @app.post(

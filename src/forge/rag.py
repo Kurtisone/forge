@@ -216,3 +216,78 @@ def search(
         }
         for r in rows
     ]
+
+
+def list_entries(
+    conn: sqlite3.Connection,
+    *,
+    kind: str | None = None,
+    project: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """
+    List entries as stored, newest first, with no query involved.
+
+    `search` is the only way anything ever read this store, and it is
+    semantic: it needs a question and returns whatever is nearest to
+    it. There was no way to answer "what is actually in there?" -- and
+    on 2026-08-22 that turned into a real dead end. Picking calibration
+    questions for bench/recall_distance.py needs three things the store
+    can answer and three it cannot, and finding them by asking `recall`
+    means guessing at the contents through the exact mechanism whose
+    reliability is in question.
+
+    A store you cannot enumerate is a store you cannot debug. This
+    reads it directly, ordered by id, no embedding call at all.
+    """
+    filters, params = [], []
+    if kind is not None:
+        filters.append("kind = ?")
+        params.append(kind)
+    if project is not None:
+        filters.append("project = ?")
+        params.append(project)
+    where = (" WHERE " + " AND ".join(filters)) if filters else ""
+    params += [limit, offset]
+
+    rows = conn.execute(
+        f"""
+        SELECT id, kind, content, project, status, created_at
+        FROM memory_entries
+        {where}
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+        """,
+        params,
+    ).fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "kind": r[1],
+            "content": r[2],
+            "project": r[3],
+            "status": r[4],
+            "created_at": r[5],
+        }
+        for r in rows
+    ]
+
+
+def count_entries(conn: sqlite3.Connection, *, kind: str | None = None) -> dict:
+    """
+    How many entries there are, broken down by kind.
+
+    The breakdown is the point rather than the total. The recurring
+    diagnosis on this store is "it holds compaction pointers and almost
+    no facts", and until now that was an inference from whatever
+    `search` happened to return. One query settles it.
+    """
+    where, params = ("WHERE kind = ?", [kind]) if kind else ("", [])
+    rows = conn.execute(
+        f"SELECT kind, COUNT(*) FROM memory_entries {where} GROUP BY kind",
+        params,
+    ).fetchall()
+    by_kind = {r[0]: r[1] for r in rows}
+    return {"total": sum(by_kind.values()), "by_kind": by_kind}

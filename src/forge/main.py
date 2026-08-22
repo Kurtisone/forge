@@ -23,6 +23,7 @@ Multi-line code paste — two ways:
 Special commands (prefix with !):
   !clear                              wipe conversation history so the next turn starts fresh
   !compact                            force a compaction pass now (pinned messages excluded, v3.9)
+  !memory [kind]                      list the vector store as stored, no query involved
   !trace                              show the last 5 execution traces
   !capabilities                       what Forge can do right now, and what the policy blocks
   !remember <decision|todo|fact> <project|-> <content>
@@ -239,6 +240,34 @@ def _handle_command(raw: str) -> None:
     if cmd == "!clear":
         removed = clear_history()
         print(f"[context cleared -- {removed} messages]\n")
+    elif cmd == "!memory":
+        # `!recall` asks the store a question; this shows what the
+        # store CONTAINS. They were the same command for a long time,
+        # which is why "what do you have in memory?" only ever got an
+        # answer filtered through the retrieval being debugged.
+        from forge import rag
+
+        wanted = parts[1].strip() if len(parts) > 1 else None
+        conn = rag.get_connection()
+        try:
+            counts = rag.count_entries(conn)
+            entries = rag.list_entries(conn, kind=wanted, limit=200)
+        finally:
+            conn.close()
+
+        if not counts["total"]:
+            print("[memory] vide\n")
+            return True
+
+        breakdown = " · ".join(
+            f"{k}: {n}" for k, n in sorted(counts["by_kind"].items())
+        )
+        print(f"[memory] {counts['total']} entrées -- {breakdown}")
+        for entry in entries:
+            head = " ".join(entry["content"].split())[:160]
+            print(f"  #{entry['id']} [{entry['kind']}] {head}")
+        print()
+
     elif cmd == "!compact":
         removed = compact_now()
         if removed:
