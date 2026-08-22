@@ -14,6 +14,7 @@ Endpoints:
   POST /compact     → force a compaction pass now (v3.9)
   POST /history/clear → wipe the history, pinned included
   GET  /memory      → list the vector store as stored (no query)
+  DELETE /memory/{id} → remove one entry and its vector
 
 Auth: set API_TOKEN in the environment to require
 `Authorization: Bearer <token>` on every endpoint except / and
@@ -670,6 +671,27 @@ async def memory_list(
 
     counts, entries = await _run_in_thread(_read)
     return {"total": counts["total"], "by_kind": counts["by_kind"], "entries": entries}
+
+
+@app.delete(
+    "/memory/{entry_id}",
+    dependencies=[Depends(require_token), Depends(rate_limit)],
+)
+async def memory_forget(entry_id: int):
+    """Delete one vector-store entry. See rag.forget."""
+    from forge import rag
+
+    def _delete():
+        conn = rag.get_connection()
+        try:
+            return rag.forget(conn, entry_id)
+        finally:
+            conn.close()
+
+    if not await _run_in_thread(_delete):
+        raise HTTPException(status_code=404, detail="entry not found")
+    log.event("memory.forgotten", entry_id=entry_id)
+    return {"ok": True, "id": entry_id}
 
 
 @app.post(

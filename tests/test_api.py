@@ -295,7 +295,8 @@ def test_remember_requires_token_when_configured(monkeypatch, tmp_path):
     _mock_embed(monkeypatch)
 
     r = _client().post(
-        "/remember", json={"kind": "decision", "content": "x", "project": None}
+        "/remember",
+        json={"kind": "decision", "content": "une entrée de test", "project": None},
     )
     assert r.status_code == 401
 
@@ -325,7 +326,9 @@ def test_remember_rejects_invalid_kind(monkeypatch, tmp_path):
     _use_tmp_rag_db(tmp_path, monkeypatch)
     _mock_embed(monkeypatch)
 
-    r = _client().post("/remember", json={"kind": "note", "content": "x"})
+    r = _client().post(
+        "/remember", json={"kind": "note", "content": "une entrée de test"}
+    )
     assert r.status_code == 422  # pydantic Literal validation
 
 
@@ -340,7 +343,9 @@ def test_remember_returns_502_when_embedding_server_down(monkeypatch, tmp_path):
 
     monkeypatch.setattr(rag, "_embed", _raise)
 
-    r = _client().post("/remember", json={"kind": "decision", "content": "x"})
+    r = _client().post(
+        "/remember", json={"kind": "decision", "content": "une entrée de test"}
+    )
     assert r.status_code == 502
 
 

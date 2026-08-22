@@ -24,6 +24,7 @@ Special commands (prefix with !):
   !clear                              wipe conversation history so the next turn starts fresh
   !compact                            force a compaction pass now (pinned messages excluded, v3.9)
   !memory [kind]                      list the vector store as stored, no query involved
+  !forget <id>                        delete one vector-store entry (see !memory for ids)
   !trace                              show the last 5 execution traces
   !capabilities                       what Forge can do right now, and what the policy blocks
   !remember <decision|todo|fact> <project|-> <content>
@@ -267,6 +268,24 @@ def _handle_command(raw: str) -> None:
             head = " ".join(entry["content"].split())[:160]
             print(f"  #{entry['id']} [{entry['kind']}] {head}")
         print()
+
+    elif cmd == "!forget":
+        from forge import rag
+
+        target = parts[1].strip() if len(parts) > 1 else ""
+        if not target.isdigit():
+            print("Usage: !forget <id>  (les ids viennent de !memory)\n")
+            return True
+        conn = rag.get_connection()
+        try:
+            found = rag.forget(conn, int(target))
+        finally:
+            conn.close()
+        print(
+            f"[memory] #{target} supprimée\n"
+            if found
+            else f"[memory] #{target} introuvable\n"
+        )
 
     elif cmd == "!compact":
         removed = compact_now()

@@ -154,9 +154,68 @@ def _embed(text: str) -> list[float]:
     return [v / norm for v in mean] if norm else mean
 
 
+# A stored entry has to assert something -- at minimum, a subject and
+# something said about it.
+#
+# One word, deliberately, and not a character count. The observed
+# failure is `[fact] S'appelle`: a predicate whose object went
+# missing, which is exactly a one-word entry. Anything with two words
+# has a shape that can be right, and short legitimate entries are
+# real -- "use sqlite-vec" and "a todo" both live in this repository's
+# own fixtures. A character floor would have rejected those for being
+# terse rather than for being empty, which is a different and wrong
+# complaint.
+_MIN_ENTRY_WORDS = 2
+
+
+class DegenerateEntry(ValueError):
+    """Raised when content is too thin to be worth embedding."""
+
+
+def forget(conn: sqlite3.Connection, entry_id: int) -> bool:
+    """
+    Delete one entry and its vector. True if it existed.
+
+    Added the same day list_entries was, and for the same reason: once
+    you can see that the store contains `[fact] S'appelle`, the next
+    thing you need is to remove it. Until now the only way to correct
+    this store was to open the SQLite file by hand -- and a store you
+    can only fix by hand is one nobody fixes.
+
+    Both tables, in one transaction. memory_vectors is keyed by rowid
+    against memory_entries.id, so deleting one and not the other leaves
+    a vector that search can still match and list_entries can no longer
+    show -- a memory that is invisible and answering.
+    """
+    cur = conn.execute("DELETE FROM memory_entries WHERE id = ?", (entry_id,))
+    conn.execute("DELETE FROM memory_vectors WHERE rowid = ?", (entry_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def remember(
     conn: sqlite3.Connection, kind: str, content: str, project: str | None
 ) -> int:
+    # Checked HERE and not only in tools/memory.py, because this is the
+    # boundary every writer crosses -- the tool, the REPL, /remember,
+    # and compaction. tools/memory.py already refused empty content and
+    # `S'appelle` is not empty; it is a predicate whose value went
+    # missing, which reads as valid to every check that asks "is there
+    # a string".
+    #
+    # It is not a cosmetic problem. That single entry is what closed
+    # the gap in the 2026-08-22 calibration run: it pulled the
+    # unanswerable "Comment s'appelle mon chat ?" to 0.9356, nearer
+    # than the worst genuine hit at 0.9386, and a dangling verb is a
+    # magnet for every question phrased around it.
+    if len(content.split()) < _MIN_ENTRY_WORDS:
+        raise DegenerateEntry(
+            f"refusing to store {content!r}: an entry must assert something, "
+            f"and this is a single word. If a value was meant to follow, "
+            f"send the whole statement. A dangling fragment matches every "
+            f"question phrased around it and answers none of them."
+        )
+
     cur = conn.execute(
         "INSERT INTO memory_entries (kind, content, project, created_at) VALUES (?, ?, ?, ?)",
         (kind, content, project, datetime.now(UTC).isoformat()),
