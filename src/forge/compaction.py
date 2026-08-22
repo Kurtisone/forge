@@ -25,7 +25,9 @@ copy of that arithmetic would be a second definition of the same fact,
 free to drift from the one that matters.
 """
 
-from forge import rag
+import re
+
+from forge import rag, transcript
 from forge.config import (
     COMPACTION_ENABLED,
     COMPACTION_KEEP_RECENT,
@@ -190,18 +192,25 @@ def _run_strategy(messages: list[dict]) -> dict:
 def _strategy_rag_pointer(messages: list[dict]) -> dict:
     """
     Default strategy: push the compacted block into vector memory
-    verbatim, as one 'history_summary' RAG entry (searchable later via
+    verbatim, as 'history_summary' RAG entries (searchable later via
     !recall / /search), and replace it in the rolling history with a
-    short pointer. Cheap -- no LLM call -- but only as faithful as
-    what's already indexed, since nothing is reworded.
+    short pointer. Cheap -- no LLM call -- but only as faithful as what
+    is already indexed, since nothing is reworded.
+
+    ONE ENTRY PER EXCHANGE, not one per block. The block form is what
+    made this store unusable: on 2026-08-22 it held 16 entries, 11 of
+    them whole compacted blocks, and a question landed 0.27 further
+    from the block containing its answer than a short fact does. See
+    forge/transcript.py for the numbers and for where the boundary
+    falls.
     """
-    joined = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+    contents = transcript.blocks(_indexable(messages))
 
     try:
         conn = rag.get_connection()
         try:
-            entry_id = rag.remember(
-                conn, kind="history_summary", content=joined, project=None
+            ids = rag.remember_many(
+                conn, kind="history_summary", contents=contents, project=None
             )
         finally:
             conn.close()
@@ -209,15 +218,81 @@ def _strategy_rag_pointer(messages: list[dict]) -> dict:
         log.error("compaction: embedding server unreachable: %s", e)
         raise CompactionError(str(e)) from e
 
+    log.event(
+        "compaction.indexed",
+        messages=len(messages),
+        indexed=len(contents),
+        entries=len(ids),
+        first_id=ids[0] if ids else None,
+        last_id=ids[-1] if ids else None,
+    )
+
     return {
         "id": messages[0]["id"],
         "role": "system",
-        "content": (
-            f"[{len(messages)} messages précédents compactés -- "
-            f"voir mémoire vectorielle #{entry_id}, cherchable via !recall]"
-        ),
+        "content": _pointer(len(messages), ids),
         "pinned": False,
     }
+
+
+# What a pointer written by this strategy looks like, in the one form
+# that has to be recognised again later -- see _indexable.
+#
+# Regex and builder are pinned together by a test rather than trusted
+# to stay in sync. This is the same drift that bit router/grammar.py
+# against router/prompt.py: two places stating the same string, one of
+# them edited.
+_POINTER_RE = re.compile(r"^\[\d+ messages précédents compactés")
+
+
+def _pointer(message_count: int, ids: list[int]) -> str:
+    if not ids:
+        return (
+            f"[{message_count} messages précédents compactés -- "
+            f"rien d'indexable, aucune entrée mémoire créée]"
+        )
+    if len(ids) == 1:
+        where = f"#{ids[0]}"
+    else:
+        where = f"#{ids[0]}-#{ids[-1]} ({len(ids)} entrées)"
+    return (
+        f"[{message_count} messages précédents compactés -- "
+        f"voir mémoire vectorielle {where}, cherchable via !recall]"
+    )
+
+
+def _indexable(messages: list[dict]) -> list[dict]:
+    """
+    Drop what is not conversation, and unwrap what is wearing an
+    envelope, before any of it reaches the vector store.
+
+    Both cases were found by reading the real store on 2026-08-22,
+    which is the first day anything could read it without asking it a
+    question (rag.list_entries).
+
+    A previous compaction pointer is a reference to another entry.
+    Indexed, it becomes a memory whose entire content is the sentence
+    "N messages were compacted, see #12" -- it answers no question and
+    sits at middling distance from all of them. The block it points at
+    stays reachable through search; only the textual chain is not
+    rebuilt, which is the honest trade for not indexing a signpost as
+    if it were the road.
+
+    Entry #9 of that store held raw router JSON -- {"tool": "code",
+    ...} -- swallowed from an assistant turn by an older version that
+    did not unwrap tool output. The envelope is the noise; the content
+    inside it is a real answer, so it is unwrapped rather than dropped.
+    """
+    kept = []
+    for m in messages:
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if m.get("role") == "system" and _POINTER_RE.match(content):
+            continue
+        unwrapped = try_unwrap_router_json(content, "compaction")
+        kept.append({**m, "content": unwrapped if unwrapped is not None else content})
+    return kept
 
 
 def _strategy_llm_summary(messages: list[dict]) -> dict:
@@ -230,7 +305,7 @@ def _strategy_llm_summary(messages: list[dict]) -> dict:
     from forge.errors import ProviderError
     from forge.llm import call_llm
 
-    joined = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+    joined = transcript.render(messages)
     prompt = (
         "Résume cet échange en conservant les décisions prises, l'état "
         "du travail en cours, et les fichiers/projets mentionnés. "

@@ -150,7 +150,9 @@ def test_compact_now_forces_compaction(tmp_path, monkeypatch):
 
     monkeypatch.setattr(memory.compaction.rag, "get_connection", lambda: _FakeConn())
     monkeypatch.setattr(
-        memory.compaction.rag, "remember", lambda conn, kind, content, project: 1
+        memory.compaction.rag,
+        "remember_many",
+        lambda conn, kind, contents, project: list(range(1, len(contents) + 1)),
     )
 
     for i in range(5):
