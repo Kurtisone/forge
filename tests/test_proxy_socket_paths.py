@@ -104,16 +104,69 @@ def test_no_file_in_the_repository_still_names_the_old_socket():
     A stale path in the docs is how someone ends up with a working
     proxy, a correct unit, and a container that cannot reach it.
     """
-    # tests/ is excluded on purpose: this file quotes the old path in
-    # its own docstring, and a regression test that cannot name the
-    # thing it regressed against is worse than the duplication.
+    # Two exclusions, both deliberate.
+    #
+    # tests/, because this file quotes the old path in its own
+    # docstring: a regression test that cannot name the thing it
+    # regressed against is worse than the duplication.
+    #
+    # Comment lines anywhere, because the units and the setup script
+    # explain WHY the path moved, and that explanation has to contain
+    # the old path to be worth reading. What must not survive is the
+    # old path in a position that CONFIGURES something.
     stale = []
     for path in ROOT.rglob("*"):
         if not path.is_file() or ".git" in path.parts or "tests" in path.parts:
             continue
         if path.suffix not in {".py", ".md", ".yaml", ".yml", ".sh", ".service"}:
             continue
-        if "forge-podman-ro-proxy.sock" in path.read_text(errors="ignore"):
-            stale.append(str(path.relative_to(ROOT)))
+        for number, line in enumerate(path.read_text(errors="ignore").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            if "forge-podman-ro-proxy.sock" in line:
+                stale.append(f"{path.relative_to(ROOT)}:{number}")
 
-    assert not stale, f"still naming the old socket path: {stale}"
+    assert not stale, f"still configuring the old socket path: {stale}"
+
+
+def test_the_setup_script_restarts_rather_than_only_enabling():
+    """
+    `systemctl enable --now` starts a STOPPED unit and does nothing to
+    a running one. On a first install that is indistinguishable from a
+    restart; on a re-run -- which this script advertises itself as safe
+    for -- it leaves the old process alive with the old ExecStart.
+
+    Observed 2026-08-22 while migrating the socket path: the unit on
+    disk said `--listen %t/forge-podman-ro-proxy/sock`, the running
+    process still said `--listen %t/forge-podman-ro-proxy.sock`, and
+    `is-active` reported "active" -- truthfully, about a process
+    running arguments that existed in no file on disk.
+    """
+    setup = SETUP.read_text()
+
+    for unit in ("forge-dbus-proxy.service", "forge-podman-ro-proxy.service"):
+        assert f"systemctl --user restart {unit}" in setup, (
+            f"{unit} is never restarted -- re-running this script would "
+            f"leave the previous process running the previous unit file"
+        )
+
+    assert "enable --now forge-" not in setup, (
+        "`enable --now` on the proxy units is the pattern that made an "
+        "upgrade silently no-op; enable and restart separately"
+    )
+
+
+def test_the_setup_script_fails_when_a_socket_is_missing():
+    """
+    The check used to be a bare `ls` of both sockets. Under `set -e` a
+    missing one aborted the script right there, so the run that most
+    needed the closing instructions was the one that never printed
+    them -- and it exited without saying what to look at.
+    """
+    setup = SETUP.read_text()
+
+    assert "MISSING:" in setup
+    assert "MainPID" in setup, (
+        "the failure path must point at the running process's actual "
+        "arguments -- that comparison is what identifies the cause"
+    )

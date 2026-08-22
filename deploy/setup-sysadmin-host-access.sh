@@ -54,8 +54,25 @@ systemctl --user daemon-reload
 # refuse to (re)start immediately with "Start request repeated too
 # quickly" even though the underlying problem is already gone.
 systemctl --user reset-failed forge-dbus-proxy.service forge-podman-ro-proxy.service 2>/dev/null || true
-systemctl --user enable --now forge-dbus-proxy.service
-systemctl --user enable --now forge-podman-ro-proxy.service
+systemctl --user enable forge-dbus-proxy.service
+systemctl --user enable forge-podman-ro-proxy.service
+# `enable --now` is NOT enough here, and that is the whole reason these
+# are two lines instead of one.
+#
+# --now starts a unit that is stopped and does nothing at all to a unit
+# that is already running. So on a FIRST install it looks identical to
+# a restart, and on every RE-run -- which this script advertises itself
+# as safe for -- it leaves the old process alive with the old
+# ExecStart. systemd then reports "active" perfectly truthfully about a
+# process running arguments that no longer exist in any file on disk.
+#
+# Hit on 2026-08-22 upgrading the podman proxy's socket path: the unit
+# on disk said --listen %t/forge-podman-ro-proxy/sock, the running
+# process still said --listen %t/forge-podman-ro-proxy.sock, is-active
+# said "active", and the socket was in neither place anyone was
+# looking.
+systemctl --user restart forge-dbus-proxy.service
+systemctl --user restart forge-podman-ro-proxy.service
 
 sleep 1  # give both a moment to create their sockets before checking
 echo
@@ -63,7 +80,40 @@ echo "Status:"
 systemctl --user is-active forge-dbus-proxy.service forge-podman-ro-proxy.service
 echo
 echo "Sockets:"
-ls -la "${XDG_RUNTIME_DIR}/forge-dbus-proxy/bus" "${XDG_RUNTIME_DIR}/forge-podman-ro-proxy/sock"
+# Checked one at a time, with a diagnosis rather than `ls`'s error.
+# Under `set -e` a bare `ls` of a missing socket aborted the script
+# here -- so the run that most needed the closing instructions was
+# exactly the run that never printed them.
+missing=0
+for sock in \
+  "${XDG_RUNTIME_DIR}/forge-dbus-proxy/bus" \
+  "${XDG_RUNTIME_DIR}/forge-podman-ro-proxy/sock"
+do
+  if [ -S "$sock" ]; then
+    ls -la "$sock"
+  else
+    missing=1
+    echo "  MISSING: $sock" >&2
+  fi
+done
+
+if [ "$missing" -eq 1 ]; then
+  echo >&2
+  echo "One or both proxies are 'active' without their socket. Almost" >&2
+  echo "always this means the RUNNING process predates the unit file." >&2
+  echo "Compare what systemd would start against what is actually" >&2
+  echo "running:" >&2
+  echo >&2
+  echo "  systemctl --user show -p ExecStart --value \\" >&2
+  echo "    forge-podman-ro-proxy.service" >&2
+  echo "  ps -p \"\$(systemctl --user show -p MainPID --value \\" >&2
+  echo "    forge-podman-ro-proxy.service)\" -o args=" >&2
+  echo >&2
+  echo "If the two --listen paths differ, that is it. Otherwise:" >&2
+  echo "  journalctl --user -u forge-podman-ro-proxy.service -n 40 --no-pager" >&2
+  exit 1
+fi
+
 echo
 echo "Done. Add to .env.local:"
 echo "  SYSADMIN_DBUS_ADDRESS=unix:path=/run/forge-dbus-proxy/bus"
