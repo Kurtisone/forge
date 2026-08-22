@@ -152,6 +152,13 @@ def main() -> int:
                 print("stopping here -- entries already migrated are committed")
                 return 1
 
+            if not ids:
+                # Every unit was already in the store, under another
+                # entry. Left in place all the same: this script does
+                # not delete rows on a judgement about redundancy.
+                print("        -> every unit already stored, left in place")
+                continue
+
             rag.forget(conn, entry["id"])
             print(f"        -> #{ids[0]}-#{ids[-1]}, #{entry['id']} removed")
 

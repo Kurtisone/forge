@@ -109,3 +109,68 @@ def test_single_writes_still_commit_on_their_own(store):
     entry_id = rag.remember(store, kind="fact", content="un vrai fait", project=None)
 
     assert rag.list_entries(store)[0]["id"] == entry_id
+
+
+def test_an_exact_duplicate_is_not_stored_twice(store):
+    """
+    Compaction blocks overlap. The real store held the same exchange
+    three times at distance 0.8306 -- three of the five slots a recall
+    query gets, spent on one answer.
+    """
+    rag.remember_many(
+        store,
+        kind="history_summary",
+        contents=["user: une question\nassistant: une réponse"],
+        project=None,
+    )
+
+    ids = rag.remember_many(
+        store,
+        kind="history_summary",
+        contents=[
+            "user: une question\nassistant: une réponse",
+            "user: une autre\nassistant: une autre réponse",
+        ],
+        project=None,
+    )
+
+    assert len(ids) == 1
+    assert rag.count_entries(store)["total"] == 2
+
+
+def test_duplicates_inside_one_batch_collapse(store):
+    ids = rag.remember_many(
+        store,
+        kind="history_summary",
+        contents=["user: la même chose", "user: la même chose"],
+        project=None,
+    )
+
+    assert len(ids) == 1
+
+
+def test_the_same_text_under_two_projects_is_two_entries(store):
+    """
+    A project is a namespace. The same sentence filed under two of
+    them is two statements about two things.
+    """
+    rag.remember_many(
+        store, kind="fact", contents=["le port est 8080"], project="alpha"
+    )
+    ids = rag.remember_many(
+        store, kind="fact", contents=["le port est 8080"], project="beta"
+    )
+
+    assert len(ids) == 1
+    assert rag.count_entries(store)["total"] == 2
+
+
+def test_remember_still_stores_a_repeated_assertion(store):
+    """
+    Not deduplicated: a human asserting the same fact twice is saying
+    they think it was forgotten.
+    """
+    rag.remember(store, kind="fact", content="Le NiPoGi a 32 Go", project=None)
+    rag.remember(store, kind="fact", content="Le NiPoGi a 32 Go", project=None)
+
+    assert rag.count_entries(store)["total"] == 2
