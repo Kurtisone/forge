@@ -47,9 +47,19 @@ only the closest distance cannot see that, and reports it as an
 excellent hit.
 
 --rows (on by default with --no-plant) prints every row that came
-back. Read them. This file cannot tell a good distance to the wrong
+back, and --expect ID names the entry that should have answered, one
+per --hit, which is what makes `rank` mean something in this mode.
+Without --expect this file cannot tell a good distance to the wrong
 entry from a good distance to the right one -- doing so would require
 knowing the answer, which is the thing you brought.
+
+Questions shaped like unfilled placeholders are refused outright. On
+2026-08-23 this harness was handed "<la 3e question hit du 22/08>",
+embedded it as literal text, matched it against "Merci" at 0.8962, and
+printed NO GAP -- DO NOT SET A THRESHOLD. That is the second time it
+produced a confident verdict out of its own boilerplate; _MIN_QUESTIONS
+was the answer to the first and does not catch this one, because three
+placeholders are still three questions.
 
 READING IT
 ----------
@@ -146,6 +156,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 # Planted entries, and the questions they answer. Deliberately in the
@@ -212,6 +223,24 @@ UNANSWERABLE: list[str] = [
 ]
 
 
+# Anything shaped like a slot someone forgot to fill. The 2026-08-23
+# run sent "<la 3e question hit du 22/08>" and "<la question
+# anniversaire cousin du 22/08>" straight to the embedding server;
+# they matched "Merci" and "Bonjour" at 0.8962 and 0.9601, and this
+# file printed NO GAP -- DO NOT SET A THRESHOLD off the back of it.
+#
+# That is the SECOND time this harness produced a confident verdict
+# from its own boilerplate. The first was the placeholder sentences in
+# its help text, which is why _MIN_QUESTIONS exists. A minimum count
+# does not catch this one: three placeholders are still three
+# questions. So the shape gets checked too.
+_PLACEHOLDER = re.compile(r"[<>]|\.\.\.|^\s*$|\bTODO\b|\bXXX\b")
+
+
+def _placeholders(questions: list[str]) -> list[str]:
+    return [q for q in questions if _PLACEHOLDER.search(q)]
+
+
 def _print_rows(results: list[dict], enabled: bool) -> None:
     """
     Every row the query returned, closest first.
@@ -269,6 +298,18 @@ def main() -> int:
         help="A question you know the store cannot answer. Repeatable.",
     )
     parser.add_argument(
+        "--expect",
+        action="append",
+        default=[],
+        metavar="ID",
+        help=(
+            "The entry id that SHOULD answer the --hit at the same "
+            "position. Repeat once per --hit, or leave empty. Without it "
+            "rank is None in --no-plant mode and a good distance to the "
+            "wrong row is indistinguishable from a good distance."
+        ),
+    )
+    parser.add_argument(
         "--rows",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -304,7 +345,27 @@ def main() -> int:
                 "to."
             )
             return 1
-        hits = [(None, None, q) for q in args.hit]
+        placeholders = _placeholders(args.hit + args.miss)
+        if placeholders:
+            print(
+                "these look like unfilled placeholders, not questions:\n  "
+                + "\n  ".join(placeholders)
+                + "\n\nThey would be embedded as literal text and matched "
+                "against the store,\nwhich is how the 2026-08-23 run got "
+                "0.8962 out of '<la 3e question\nhit du 22/08>' matching "
+                "'Merci', and printed a verdict on it.\n\nPut the real "
+                "questions in, or drop them."
+            )
+            return 1
+        if args.expect and len(args.expect) != len(args.hit):
+            print(
+                f"--expect given {len(args.expect)} times for {len(args.hit)} "
+                "--hit questions.\nThey are matched by position, so it has to "
+                "be one each or none at all."
+            )
+            return 1
+        expected = args.expect or [None] * len(args.hit)
+        hits = [(None, e, q) for e, q in zip(expected, args.hit)]
         misses = list(args.miss)
     else:
         if os.path.exists(args.db):
@@ -328,11 +389,14 @@ def main() -> int:
         for _kind, content, question in hits:
             results = rag.search(conn, query=question, top_k=args.top_k)
             best = results[0] if results else None
-            # Rank matters as much as distance: a planted entry that
-            # comes back second, behind another planted entry, means
-            # the cutoff is not the only thing that needs looking at.
-            rank = (
-                next(
+            # Rank matters as much as distance: an entry that comes
+            # back second, behind something else, means the cutoff is
+            # not the only thing that needs looking at. With planted
+            # fixtures the entry is matched by its text; with
+            # --no-plant it is whatever id --expect named.
+            rank = None
+            if content:
+                rank = next(
                     (
                         i + 1
                         for i, r in enumerate(results)
@@ -340,9 +404,16 @@ def main() -> int:
                     ),
                     None,
                 )
-                if content
-                else None
-            )
+            elif _kind is not None:
+                # --no-plant: _kind carries the --expect id.
+                rank = next(
+                    (
+                        i + 1
+                        for i, r in enumerate(results)
+                        if str(r.get("id")) == str(_kind)
+                    ),
+                    None,
+                )
             distance = best.get("distance") if best else None
             if isinstance(distance, float):
                 hit_distances.append(distance)
