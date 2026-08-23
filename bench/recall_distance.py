@@ -241,6 +241,58 @@ def _placeholders(questions: list[str]) -> list[str]:
     return [q for q in questions if _PLACEHOLDER.search(q)]
 
 
+def find_rank(
+    results: list[dict], fixture_text: str | None, expect_id: str | None
+) -> int | None:
+    """
+    Where the entry that should have answered came back, 1-based.
+
+    Two ways to name it, because there are two modes. A planted
+    fixture is found by its text; with --no-plant the operator names
+    an id, since there is no planted text to look for.
+
+    None means "not in the results at all", which is NOT the same as
+    "no expectation given" -- see `misplaced`, which is where that
+    distinction has to be made, because this function cannot tell them
+    apart and once printed as `rank=None` neither could anyone else.
+    """
+    if fixture_text:
+        return next(
+            (
+                i + 1
+                for i, r in enumerate(results)
+                if (r.get("content") or "").startswith(fixture_text[:40])
+            ),
+            None,
+        )
+    if expect_id is not None:
+        return next(
+            (
+                i + 1
+                for i, r in enumerate(results)
+                if str(r.get("id")) == str(expect_id)
+            ),
+            None,
+        )
+    return None
+
+
+def misplaced(rows: list[tuple[str, str | None, int | None]]) -> list[str]:
+    """
+    The questions whose expected entry did not come back first.
+
+    rows are (question, expect_id, rank). An expectation that was
+    never given is not a failure; an expectation that came back second
+    is; and an expectation that did not come back AT ALL is the worst
+    of the three, which is exactly the case the first version of this
+    check let through -- it tested `rank != 1` while excluding None,
+    so a question whose answer was nowhere in the results passed
+    silently and its distance went into the gap as though it were a
+    hit.
+    """
+    return [q for q, expect, rank in rows if expect is not None and rank != 1]
+
+
 def _print_rows(results: list[dict], enabled: bool) -> None:
     """
     Every row the query returned, closest first.
@@ -395,7 +447,7 @@ def main() -> int:
 
         print("\n=== HITS (the answer is in the store) ===")
         hit_distances = []
-        hit_ranks: list[int | None] = []
+        checked: list[tuple[str, str | None, int | None]] = []
         for fixture_text, expect_id, question in hits:
             results = rag.search(conn, query=question, top_k=args.top_k)
             best = results[0] if results else None
@@ -404,29 +456,11 @@ def main() -> int:
             # not the only thing that needs looking at. With planted
             # fixtures the entry is matched by its text; with
             # --no-plant it is whatever id --expect named.
-            rank = None
-            if fixture_text:
-                rank = next(
-                    (
-                        i + 1
-                        for i, r in enumerate(results)
-                        if r.get("content", "").startswith(fixture_text[:40])
-                    ),
-                    None,
-                )
-            elif expect_id is not None:
-                rank = next(
-                    (
-                        i + 1
-                        for i, r in enumerate(results)
-                        if str(r.get("id")) == str(expect_id)
-                    ),
-                    None,
-                )
+            rank = find_rank(results, fixture_text, expect_id)
             distance = best.get("distance") if best else None
             if isinstance(distance, float):
                 hit_distances.append(distance)
-            hit_ranks.append(rank)
+            checked.append((question, expect_id, rank))
             print(
                 f"  {distance if distance is None else round(distance, 4):<8} "
                 f"rank={rank}  {question}"
@@ -459,11 +493,15 @@ def main() -> int:
     # as a mediocre hit, which dragged the gap from 0.195 to 0.041 and
     # produced a "too tight to act on" verdict about a threshold that
     # was fine.
-    if any(r is not None and r != 1 for r in hit_ranks):
-        print("  /!\\ some --expect entries did not come back first. Their")
-        print("      distance below is the distance to a DIFFERENT row, and")
-        print("      the gap is computed on it. Fix retrieval before reading")
-        print("      the threshold.")
+    off = misplaced(checked)
+    if off:
+        print("  /!\\ the expected entry did not come back first for:")
+        for q in off:
+            print(f"        {q}")
+        print("      Their distance above is the distance to a DIFFERENT row,")
+        print("      and the gap below is computed on it. That is a retrieval")
+        print("      failure being averaged in as a mediocre hit -- fix it, or")
+        print("      drop the question, before reading any threshold here.")
     if not hit_distances or not miss_distances:
         print("  no distances came back -- is the embedding server up?")
         return 1
