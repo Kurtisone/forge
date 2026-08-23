@@ -544,8 +544,24 @@ RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 # recall.dropped logs every cut with its id and distance, so a value
 # that bites in the wrong place is visible rather than silent. Empty
 # means no filtering at all.
+#
+# THE VALUE MAY CARRY THE REGIME IT WAS MEASURED IN, as "0.95@a5c47b",
+# where the tag is rag.query_fingerprint() at the time of the
+# measurement. Distances are only comparable within one embedding
+# configuration, and on 2026-08-23 that stopped being theoretical:
+# EMBEDDING_QUERY_INSTRUCT shipped on by default, every distance
+# moved, and the 0.95 above -- measured on raw queries -- landed above
+# the best miss of the new regime, which is the wrong side. Nothing in
+# the code noticed. graphs/recall.py turns a cutoff off when the tag
+# does not match, rather than filtering with a number that means
+# something else; an untagged value is used as-is, with a warning
+# naming the fingerprint to write back once it has been re-measured.
 _recall_max_distance = os.getenv("RECALL_MAX_DISTANCE", "").strip()
-RECALL_MAX_DISTANCE = float(_recall_max_distance) if _recall_max_distance else None
+_recall_value, _, _recall_tag = _recall_max_distance.partition("@")
+RECALL_MAX_DISTANCE = float(_recall_value) if _recall_value.strip() else None
+# The query_fingerprint() the threshold above was measured against, or
+# None if whoever set it did not say.
+RECALL_CALIBRATED_FOR = _recall_tag.strip() or None
 
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this

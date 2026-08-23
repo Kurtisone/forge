@@ -105,7 +105,7 @@ def test_the_env_example_value_and_the_config_note_agree():
     env = (root / ".env.example").read_text()
     config = (root / "src" / "forge" / "config.py").read_text()
 
-    active = re.search(r"^RECALL_MAX_DISTANCE=([\d.]+)$", env, re.MULTILINE)
+    active = re.search(r"^RECALL_MAX_DISTANCE=([\d.]+)(?:@\w+)?$", env, re.MULTILINE)
     assert active, ".env.example no longer sets RECALL_MAX_DISTANCE"
 
     value = active.group(1)
@@ -132,3 +132,85 @@ def test_the_cutoff_is_still_off_when_unset():
         if saved is not None:
             os.environ["RECALL_MAX_DISTANCE"] = saved
         importlib.reload(config_module)
+
+
+class TestCalibrationRegime:
+    """
+    A threshold is a measurement, and a measurement belongs to the
+    configuration it was taken in. On 2026-08-23 EMBEDDING_QUERY_INSTRUCT
+    shipped on by default, every distance in the store moved, and
+    .env.example kept a 0.95 measured on raw queries -- above the best
+    miss of the new regime, so the filter validated in real use no
+    longer cut it. Only a comment said so.
+    """
+
+    def test_no_cutoff_configured_says_nothing(self):
+        from forge.graphs import recall
+
+        assert recall.cutoff_for(None, None, "a5c47b") == (None, None)
+
+    def test_a_matching_tag_is_used_silently(self):
+        from forge.graphs import recall
+
+        assert recall.cutoff_for(0.92, "a5c47b", "a5c47b") == (0.92, None)
+
+    def test_an_untagged_value_still_works_and_says_what_to_write(self):
+        from forge.graphs import recall
+
+        cutoff, note = recall.cutoff_for(0.95, None, "a5c47b")
+        # Values predate the tag. Breaking a working deployment to make
+        # a point about provenance would be its own kind of wrong.
+        assert cutoff == 0.95
+        assert "0.95@a5c47b" in note
+
+    def test_a_stale_tag_turns_the_cutoff_off(self):
+        from forge.graphs import recall
+
+        cutoff, note = recall.cutoff_for(0.95, "e3b0c4", "a5c47b")
+        # Off, not adjusted. A number from another regime is not too
+        # high or too low, it is unrelated -- and of the two ways to be
+        # wrong, "je n'ai rien en mémoire" while holding the answer is
+        # the one that gets believed.
+        assert cutoff is None
+        assert "e3b0c4" in note and "a5c47b" in note
+
+    def test_the_env_example_tag_is_the_regime_it_was_measured_in(self):
+        """
+        e3b0c4 is the fingerprint of no instruction at all, which is
+        how that 0.95 was measured. If this ever equals the fingerprint
+        of the shipped configuration, someone has re-tagged a number
+        without re-measuring it.
+        """
+        import hashlib
+        import re
+        from pathlib import Path
+
+        from forge import rag
+
+        env = (Path(__file__).resolve().parents[1] / ".env.example").read_text()
+        tag = re.search(r"^RECALL_MAX_DISTANCE=[\d.]+@(\w+)$", env, re.MULTILINE)
+        assert tag, ".env.example no longer tags the threshold with its regime"
+        assert tag.group(1) == hashlib.sha256(b"").hexdigest()[:6]
+        assert tag.group(1) != rag.query_fingerprint()
+
+
+class TestQueryFingerprint:
+    def test_it_covers_the_wrapper_and_not_just_the_setting(self, monkeypatch):
+        """
+        The "Instruct:/Query:" shape is part of what the model sees, so
+        changing it is a change of regime even at the same setting.
+        """
+        from forge import rag
+
+        monkeypatch.setattr(rag, "EMBEDDING_QUERY_INSTRUCT", "retrieve the answer")
+        with_wrapper = rag.query_fingerprint()
+        monkeypatch.setattr(rag, "EMBEDDING_QUERY_INSTRUCT", "")
+        assert rag.query_fingerprint() != with_wrapper
+
+    def test_no_instruction_hashes_the_empty_query(self, monkeypatch):
+        import hashlib
+
+        from forge import rag
+
+        monkeypatch.setattr(rag, "EMBEDDING_QUERY_INSTRUCT", "")
+        assert rag.query_fingerprint() == hashlib.sha256(b"").hexdigest()[:6]

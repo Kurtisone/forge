@@ -45,9 +45,10 @@ Usage (Python):
 from forge import lang, non_answer, outcome, rag, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
+    RECALL_CALIBRATED_FOR,
     RECALL_MAX_ANSWER_CHARS,
-    RECALL_MAX_DISTANCE,
 )
+from forge.config import RECALL_MAX_DISTANCE as _CONFIGURED_CUTOFF
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.llm import call_llm
@@ -133,6 +134,81 @@ not the NEVER DO THIS shape. Be concise.
 {language_line}"""
 
 
+def cutoff_for(
+    configured: float | None, calibrated_for: str | None, current: str
+) -> tuple[float | None, str | None]:
+    """
+    The cutoff to actually use, and what to say about it.
+
+    A distance threshold is a measurement, not a constant: it is only
+    valid for the embedding configuration it was measured against.
+    Three cases, and the middle one is the reason this exists.
+
+      no cutoff configured   nothing to check, nothing to say.
+
+      tag matches            use it, silently.
+
+      tag missing            use it, and warn. Values predate this
+                             mechanism, and breaking a deployment that
+                             works to make a point about provenance
+                             would be its own kind of wrong. The
+                             warning carries the fingerprint to write
+                             back.
+
+      tag does not match     do NOT use it. The number was measured in
+                             another regime, so it is not too high or
+                             too low, it is unrelated -- and of the two
+                             ways to be wrong here, only one is
+                             visible. A cutoff set too high lets a bad
+                             answer through and a bad answer gets
+                             argued with. Set too low it produces "je
+                             n'ai rien en mémoire" while the answer is
+                             sitting in the store, and that gets
+                             believed. Off is the recoverable
+                             direction.
+
+    Measured on 2026-08-23, this is not hypothetical: .env.example
+    shipped 0.95 from a run on raw queries while the default
+    configuration prefixed every query with the embedding model's
+    instruction. In the new regime the best miss came back at 0.9495 --
+    under the cutoff, so the filter validated in real use no longer
+    cut it, and nothing anywhere said so.
+    """
+    if configured is None:
+        return None, None
+    if calibrated_for is None:
+        return configured, (
+            f"RECALL_MAX_DISTANCE={configured} carries no calibration tag, so "
+            "nothing can tell whether it was measured against the embedding "
+            f"configuration now in force ({current}). If it was, write it as "
+            f"RECALL_MAX_DISTANCE={configured}@{current} and this stops. If it "
+            "was not, the cutoff is filtering on a number that means something "
+            "else -- re-measure with bench/recall_distance.py."
+        )
+    if calibrated_for != current:
+        return None, (
+            f"RECALL_MAX_DISTANCE={configured} was calibrated against "
+            f"{calibrated_for} and the embedding configuration is now "
+            f"{current}: distances are not comparable across the two, so the "
+            "cutoff is OFF and every hit is being passed to synthesis. "
+            "Re-measure with bench/recall_distance.py and set "
+            f"RECALL_MAX_DISTANCE=<new value>@{current}."
+        )
+    return configured, None
+
+
+# Resolved once, at import, like every other configuration fact -- see
+# the tripwires in tools/test.py for the same reasoning: a fact about
+# the configuration belongs in the startup log, not repeated into
+# every run. _drop_distant reads the module global below, which is
+# also what the tests substitute.
+RECALL_MAX_DISTANCE, _calibration_note = cutoff_for(
+    _CONFIGURED_CUTOFF, RECALL_CALIBRATED_FOR, rag.query_fingerprint()
+)
+if _calibration_note:
+    log.warning("%s", _calibration_note)
+
+
 def _recall_node(state: AgentState) -> AgentState:
     query = state.context.get("query", state.user_input.strip())
     try:
@@ -204,8 +280,10 @@ def _drop_distant(results: list[dict], query: str) -> list[dict]:
     """
     Drop hits further than RECALL_MAX_DISTANCE, if a cutoff is set.
 
-    Inert unless configured, on purpose. See config.py for why the
-    threshold has no default: every distance measured so far comes
+    Inert unless configured, and inert as well when the configured
+    value was calibrated against another embedding configuration --
+    see cutoff_for above. See config.py for why the threshold has no
+    default: every distance measured so far comes
     from a query with no good answer in the store, and a cutoff picked
     from negatives alone silences real hits at no visible cost. The
     mechanism ships now so that bench/recall_distance.py has something
