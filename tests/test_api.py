@@ -488,7 +488,9 @@ def test_manual_compact_reports_removed_count(monkeypatch, tmp_path):
 
     monkeypatch.setattr(compaction.rag, "get_connection", lambda: _FakeConn())
     monkeypatch.setattr(
-        compaction.rag, "remember", lambda conn, kind, content, project: 1
+        compaction.rag,
+        "remember_many",
+        lambda conn, kind, contents, project: list(range(1, len(contents) + 1)),
     )
 
     client = _client()

@@ -30,15 +30,14 @@ def _fake_rag(monkeypatch):
         def close(self):
             pass
 
+    def _remember_many(conn, kind, contents, project):
+        return list(range(42, 42 + len(contents)))
+
     monkeypatch.setattr(rag, "get_connection", lambda: _FakeConn())
-    monkeypatch.setattr(
-        rag, "remember", lambda conn, kind, content, project: 42, raising=False
-    )
+    monkeypatch.setattr(rag, "remember_many", _remember_many, raising=False)
     # compaction imported `rag` directly, patch the same module object
     monkeypatch.setattr(compaction.rag, "get_connection", lambda: _FakeConn())
-    monkeypatch.setattr(
-        compaction.rag, "remember", lambda conn, kind, content, project: 42
-    )
+    monkeypatch.setattr(compaction.rag, "remember_many", _remember_many)
 
 
 def test_below_threshold_is_untouched(monkeypatch):
@@ -131,10 +130,10 @@ def test_embedding_failure_raises_compaction_error(monkeypatch):
     monkeypatch.setattr(compaction, "COMPACTION_THRESHOLD", 1)
     monkeypatch.setattr(compaction, "COMPACTION_KEEP_RECENT", 1)
 
-    def _boom(conn, kind, content, project):
+    def _boom(conn, kind, contents, project):
         raise rag.EmbeddingError("embedding server down")
 
-    monkeypatch.setattr(compaction.rag, "remember", _boom)
+    monkeypatch.setattr(compaction.rag, "remember_many", _boom)
     history = _messages(5)
 
     with pytest.raises(compaction.CompactionError):

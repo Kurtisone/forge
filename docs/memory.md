@@ -34,6 +34,29 @@ short pointer, searchable via `!recall`/`/search`) or `llm_summary` (one LLM cal
 block into prose kept inline). Both share the same signature, so switching is a config change,
 not a rewrite. `POST /compact` (or `!compact` in the REPL) forces a pass on demand.
 
+**What `rag_pointer` writes is one entry per exchange, not one per block.** Until
+v3.14 it joined the whole evicted window into a single string and stored it as one
+entry — and since that string is far past `EMBEDDING_MAX_CHARS`, its one vector was
+the *average* of a dozen chunk vectors, which is close to no question in particular.
+Measured against the real store on 2026-08-22: a question sat at 0.9386 from the
+compacted block containing it nearly word for word, while a short fact sat at 0.671.
+`forge/transcript.py` cuts the window at user turns (a user turn plus whatever
+answered it is the smallest unit that still stands on its own) and `rag.remember_many`
+stores the pieces as rows — the same number of embedding requests, kept apart instead
+of averaged. `bench/rag_dilution.py` measures the difference; `deploy/rag_resplit.py`
+re-slices blocks written before the change. Two things never reach the store: an
+earlier compaction pointer (a reference to another entry, which answers no question)
+and a raw router-JSON envelope (unwrapped to its content). Both paths go through
+the same `transcript.units` / `transcript.split` pipeline, so a live eviction and a
+migration cannot filter differently.
+
+Measured on the real store, six questions before and after re-slicing: hits moved
+from 0.8934 / 0.671 / 0.9386 to 0.4498 / 0.671 / 0.7695, turning a **NO GAP**
+verdict (worst hit closer than the best miss) into a usable gap of 0.0642. The
+short fact at 0.671 did not move — only the entries that had been buried did, which
+is the control. That is what makes `RECALL_MAX_DISTANCE` a number one can choose;
+see `.env.example` for the value and why it is not the harness's midpoint.
+
 A message count turned out to be the wrong unit, though, so v3.12 added a
 second trigger alongside it: compaction also fires when the rendered prompt
 crosses `COMPACTION_TOKEN_THRESHOLD` tokens, aiming to bring it back to
@@ -110,6 +133,33 @@ If the embedding server is unreachable, all three entry points fail the same
 predictable way: `!remember`/`!recall` print a one-line error instead of crashing the
 REPL, `/remember`/`/search` return `502`, and the `memory` tool returns a `[error]`
 string the router treats as a normal (if unhelpful) tool result rather than a crash.
+
+### Reading and repairing the store
+
+`search` was the only reader this store ever had, and it is semantic by construction —
+you cannot ask it what is *in* there without already having a question. `GET /memory`,
+`!memory [kind]` in the REPL and `!memory` in the web UI list entries directly, with no
+embedding call at all, and report the breakdown by `kind`. `!forget <id>` /
+`DELETE /memory/{id}` remove one entry from both tables.
+
+Two harnesses go with it, both writing to their own database and never to
+`data/forge_rag.db`:
+
+```bash
+# what distance a good hit sits at, on this box, with this embedding model
+python bench/recall_distance.py
+
+# what burying a sentence in a compacted block costs
+python bench/rag_dilution.py
+
+# one-shot: re-slice blocks written before the per-exchange intake
+python deploy/rag_resplit.py                      # dry run, the default
+python deploy/rag_resplit.py --apply --backup /tmp/forge_rag.db.bak
+```
+
+`rag_resplit` rewrites rows in place and there is no undo — take the backup. It inserts
+the pieces before deleting the block, so an interrupted run leaves a visible duplicate
+rather than a missing entry.
 
 ## Execution Traces
 

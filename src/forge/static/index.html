@@ -855,6 +855,34 @@ const UI_COMMANDS = {
       }
     }
   },
+  '!forget': {
+    help: 'supprime une entrée de la mémoire vectorielle : !forget 312',
+    // Takes an argument, unlike the other three. The confirmation
+    // printed after storing a fact ends with "!forget 312 puis
+    // réécris-la" -- and until now that line named a command the
+    // person reading it could not run, because it only existed in the
+    // REPL. A message that tells you what to do next has to be
+    // runnable where it is displayed.
+    run: async (args) => {
+      const id = (args[0] || '').trim()
+      if (!/^\d+$/.test(id)) {
+        return { reply: 'Usage : !forget <id> — l\'id est un nombre, visible dans !memory.', changed: false }
+      }
+      const r = await apiFetch(`/memory/${id}`, { method: 'DELETE' })
+      if (r.status === 404) {
+        return { reply: `Aucune entrée #${id} en mémoire.`, changed: false }
+      }
+      await r.json()
+      return {
+        // changed:false on purpose. Forgetting a memory entry does not
+        // touch the conversation, so reloading the chat would only
+        // erase the command and its answer -- the bug fixed in 0020 of
+        // fix/dettes-ouvertes.
+        reply: `Entrée #${id} supprimée de la mémoire.`,
+        changed: false
+      }
+    }
+  },
   '!compact': {
     help: 'force une passe de compaction (bouton « Compacter » aussi)',
     run: async () => {
@@ -871,7 +899,9 @@ const UI_COMMANDS = {
 }
 
 async function runUiCommand(text) {
-  const name = text.split(/\s+/)[0].toLowerCase()
+  const parts = text.trim().split(/\s+/)
+  const name = parts[0].toLowerCase()
+  const args = parts.slice(1)
   const command = UI_COMMANDS[name]
 
   if (!command) {
@@ -908,7 +938,7 @@ async function runUiCommand(text) {
   // triggered the refresh that erases every earlier local reply.
   let reply, changed = false, cls = 'bot'
   try {
-    const result = await command.run()
+    const result = await command.run(args)
     reply = result.reply
     changed = result.changed === true
   } catch (e) {

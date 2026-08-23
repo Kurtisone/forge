@@ -25,7 +25,7 @@ copy of that arithmetic would be a second definition of the same fact,
 free to drift from the one that matters.
 """
 
-from forge import rag
+from forge import rag, transcript
 from forge.config import (
     COMPACTION_ENABLED,
     COMPACTION_KEEP_RECENT,
@@ -190,18 +190,31 @@ def _run_strategy(messages: list[dict]) -> dict:
 def _strategy_rag_pointer(messages: list[dict]) -> dict:
     """
     Default strategy: push the compacted block into vector memory
-    verbatim, as one 'history_summary' RAG entry (searchable later via
+    verbatim, as 'history_summary' RAG entries (searchable later via
     !recall / /search), and replace it in the rolling history with a
-    short pointer. Cheap -- no LLM call -- but only as faithful as
-    what's already indexed, since nothing is reworded.
+    short pointer. Cheap -- no LLM call -- but only as faithful as what
+    is already indexed, since nothing is reworded.
+
+    ONE ENTRY PER EXCHANGE, not one per block. The block form is what
+    made this store unusable: on 2026-08-22 it held 16 entries, 11 of
+    them whole compacted blocks, and a question landed 0.27 further
+    from the block containing its answer than a short fact does. See
+    forge/transcript.py for the numbers and for where the boundary
+    falls.
     """
-    joined = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+    # Filtering and grouping are counted separately because the log
+    # line below is the only place anyone can see either happen, and
+    # one number cannot answer both questions. 35 messages becoming 17
+    # units says nothing about whether anything was filtered out --
+    # exchanges group two messages at a time all on their own.
+    kept = transcript.indexable(messages)
+    contents = transcript.blocks(kept)
 
     try:
         conn = rag.get_connection()
         try:
-            entry_id = rag.remember(
-                conn, kind="history_summary", content=joined, project=None
+            ids = rag.remember_many(
+                conn, kind="history_summary", contents=contents, project=None
             )
         finally:
             conn.close()
@@ -209,13 +222,21 @@ def _strategy_rag_pointer(messages: list[dict]) -> dict:
         log.error("compaction: embedding server unreachable: %s", e)
         raise CompactionError(str(e)) from e
 
+    log.event(
+        "compaction.indexed",
+        messages=len(messages),
+        kept=len(kept),
+        dropped=len(messages) - len(kept),
+        units=len(contents),
+        entries=len(ids),
+        first_id=ids[0] if ids else None,
+        last_id=ids[-1] if ids else None,
+    )
+
     return {
         "id": messages[0]["id"],
         "role": "system",
-        "content": (
-            f"[{len(messages)} messages précédents compactés -- "
-            f"voir mémoire vectorielle #{entry_id}, cherchable via !recall]"
-        ),
+        "content": transcript.pointer(len(messages), ids),
         "pinned": False,
     }
 
@@ -230,7 +251,7 @@ def _strategy_llm_summary(messages: list[dict]) -> dict:
     from forge.errors import ProviderError
     from forge.llm import call_llm
 
-    joined = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+    joined = transcript.render(messages)
     prompt = (
         "Résume cet échange en conservant les décisions prises, l'état "
         "du travail en cours, et les fichiers/projets mentionnés. "

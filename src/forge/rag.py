@@ -216,6 +216,96 @@ def remember(
             f"question phrased around it and answers none of them."
         )
 
+    entry_id = _insert(conn, kind, content, project)
+    conn.commit()
+    return entry_id
+
+
+def remember_many(
+    conn: sqlite3.Connection, kind: str, contents: list[str], project: str | None
+) -> list[int]:
+    """
+    Store several entries as several ROWS, in one transaction.
+
+    The alternative -- what compaction did until now -- is to join the
+    lot into one string and store it as a single entry. That entry then
+    gets one vector, and since the joined text is far past
+    EMBEDDING_MAX_CHARS, that vector is the AVERAGE of a dozen chunk
+    vectors. A mean of a dozen unrelated subjects is close to no
+    question in particular, which is the 0.27 of distance measured on
+    2026-08-22 between a fact stored alone and the same content buried
+    in a compacted block.
+
+    It costs no extra embedding calls: _embed already made one request
+    per chunk. The change is that the chunks are kept apart instead of
+    being collapsed into their mean.
+
+    A degenerate item is SKIPPED, not raised on. remember() raises
+    because a caller asserting a one-word fact should hear about it;
+    here the caller is archiving a block it did not write, and failing
+    the whole compaction because one evicted message was a single word
+    would leave the history uncompacted with no way to recover.
+
+    All or nothing on the embedding server, deliberately: an
+    EmbeddingError propagates before the commit, so a block is never
+    half-indexed. A partially indexed block is worse than an unindexed
+    one -- the pointer written into the history claims a range that
+    does not hold what it says it holds.
+
+    Exact duplicates are skipped, both against what is already stored
+    and within the batch itself. Compaction blocks overlap -- the real
+    store held the same exchange three times at distance 0.8306,
+    taking three of the five slots a recall query gets. Nothing is
+    lost by storing it once: the content is identical, so the
+    surviving row answers every question the copies would have.
+
+    Only here, not in remember(). A human asserting the same fact
+    twice is saying something -- they think it was forgotten. An
+    archive holding the same exchange twice is redundancy nobody
+    chose.
+    """
+    ids: list[int] = []
+    seen: set[str] = set()
+    for content in contents:
+        if len(content.split()) < _MIN_ENTRY_WORDS:
+            log.warning("rag: skipping a degenerate entry in a batch: %r", content)
+            continue
+        if content in seen or _already_stored(conn, content, project):
+            log.event("rag.duplicate_skipped", chars=len(content))
+            continue
+        seen.add(content)
+        ids.append(_insert(conn, kind, content, project))
+
+    conn.commit()
+    return ids
+
+
+def _already_stored(
+    conn: sqlite3.Connection, content: str, project: str | None
+) -> bool:
+    """
+    Exact match, within the same project. A near-duplicate is a
+    judgement call with a threshold to tune; an identical string is a
+    fact.
+
+    Scoped to the project because that is the namespace: the same
+    sentence filed under two projects is two statements about two
+    things, and deduplicating across them would silently drop one.
+    `IS` rather than `=` so a NULL project matches a NULL project,
+    which is every entry compaction writes.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM memory_entries WHERE content = ? AND project IS ? LIMIT 1",
+        (content, project),
+    ).fetchone()
+    return row is not None
+
+
+def _insert(
+    conn: sqlite3.Connection, kind: str, content: str, project: str | None
+) -> int:
+    """Write one row and its vector. Does NOT commit -- the caller owns
+    the transaction, which is what lets remember_many be atomic."""
     cur = conn.execute(
         "INSERT INTO memory_entries (kind, content, project, created_at) VALUES (?, ?, ?, ?)",
         (kind, content, project, datetime.now(UTC).isoformat()),
@@ -227,7 +317,6 @@ def remember(
         "INSERT INTO memory_vectors (rowid, embedding) VALUES (?, ?)",
         (entry_id, sqlite_vec.serialize_float32(embedding)),
     )
-    conn.commit()
     return entry_id
 
 
