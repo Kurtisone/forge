@@ -281,5 +281,7 @@ def test_split_dropped_reads_stored_text():
         ]
     )
 
-    assert transcript.split(text) == []
-    assert len(transcript.split_dropped(text)) == 1
+    kept, gone = transcript.split_partition(text)
+
+    assert kept == []
+    assert len(gone) == 1

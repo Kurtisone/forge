@@ -129,11 +129,12 @@ def main() -> int:
         refused: list[int] = []
         dropped_count = 0
         for entry in targets:
-            units = transcript.split(entry["content"])
-            # Asked of the same module that does the cutting, never
-            # re-derived here: a reporting path with its own copy of
-            # the rules is free to disagree with the path that writes.
-            gone = transcript.split_dropped(entry["content"])
+            # One call, not two: `indexable` warns when it unwraps
+            # router JSON, and asking for the kept units and the
+            # dropped ones separately would log that warning twice for
+            # the same entry. Asked of the module that does the
+            # cutting, never re-derived here.
+            units, gone = transcript.split_partition(entry["content"])
             dropped_count += len(gone)
             for unit in gone:
                 head = unit[:70].replace("\n", " / ")

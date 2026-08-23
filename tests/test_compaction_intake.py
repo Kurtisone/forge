@@ -183,3 +183,64 @@ def test_the_log_separates_what_was_filtered_from_what_was_grouped(
     assert fields["kept"] == 4
     assert fields["dropped"] == 1
     assert fields["units"] == 2
+
+
+# --- the live path, not a rehearsal of it -----------------------------
+#
+# These call _strategy_rag_pointer, which is what a real eviction runs,
+# rather than transcript.units. The distinction is not academic: the
+# strategy used to call indexable() and blocks() -- the first and third
+# steps of a three-step pipeline -- and so went around the non-answer
+# filter entirely while deploy/rag_resplit.py went through it. Every
+# test that asserted on transcript.units passed throughout.
+
+
+def test_a_refusal_never_reaches_the_store(indexed):
+    from forge import non_answer
+
+    compaction._strategy_rag_pointer(
+        [
+            _m("user", "Tu peux me lister mon matériel ?", 1),
+            _m("assistant", non_answer.NOTHING_CLOSE_ENOUGH, 2),
+            _m("user", "et le port ?", 3),
+            _m("assistant", "8080.", 4),
+        ]
+    )
+
+    assert indexed == ["user: et le port ?\nassistant: 8080."]
+
+
+def test_an_exchange_the_run_marked_never_reaches_the_store(indexed):
+    compaction._strategy_rag_pointer(
+        [
+            {"id": 1, "role": "user", "content": "et ma voiture ?", "answered": False},
+            {
+                "id": 2,
+                "role": "assistant",
+                "content": "Je vais regarder ça.",
+                "answered": False,
+            },
+        ]
+    )
+
+    assert indexed == []
+
+
+def test_the_strategy_and_the_pipeline_agree(indexed):
+    # The invariant the hole broke. Whatever the strategy sends must be
+    # exactly what transcript says the store should hold -- no second
+    # opinion assembled out of the pipeline's individual steps.
+    from forge import non_answer
+
+    messages = [
+        _m("user", "une question", 1),
+        _m("assistant", "une réponse", 2),
+        _m("user", "une autre", 3),
+        _m("assistant", f"{non_answer.ERROR_PREFIX}boom", 4),
+        _m("user", "une troisième", 5),
+        _m("assistant", "encore une réponse", 6),
+    ]
+
+    compaction._strategy_rag_pointer(messages)
+
+    assert indexed == transcript.units(messages)

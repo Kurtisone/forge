@@ -261,9 +261,31 @@ def answered(units: list[list[dict]]) -> list[list[dict]]:
     return kept
 
 
+def partition(
+    messages: list[dict], source: str = "compaction"
+) -> tuple[list[str], list[str]]:
+    """
+    The whole pipeline, in one pass: (what the store should hold,
+    what was left out for answering nothing).
+
+    ONE pass, and that is not a micro-optimisation. `indexable` logs a
+    warning when it unwraps router JSON, so asking for the kept units
+    and the dropped ones separately would emit that warning twice for
+    the same text -- once for a caller that is only counting. A caller
+    that wants both must get both from the same walk.
+    """
+    cut = groups(indexable(messages, source))
+    keep = answered(cut)
+    kept_ids = {id(unit) for unit in keep}
+    return (
+        [render(unit) for unit in keep],
+        [render(unit) for unit in cut if id(unit) not in kept_ids],
+    )
+
+
 def units(messages: list[dict], source: str = "compaction") -> list[str]:
     """What the vector store should hold for these messages."""
-    return [render(g) for g in answered(groups(indexable(messages, source)))]
+    return partition(messages, source)[0]
 
 
 def split(text: str, source: str = "resplit") -> list[str]:
@@ -276,21 +298,19 @@ def split(text: str, source: str = "resplit") -> list[str]:
 
 def dropped(messages: list[dict], source: str = "compaction") -> list[str]:
     """
-    The units `units()` would leave behind, rendered.
+    The units `units()` left behind, rendered.
 
-    Exists so deploy/rag_resplit.py can show what it is about to
-    remove without cutting the transcript a second time of its own.
-    The first version of that script kept its own copy of the cutting
-    rules, they drifted, and the 2026-08-22 migration wrote a dozen
-    entries whose whole content was a pointer. A reporting path that
+    Exists so a caller can show what it is about to leave out without
+    cutting the transcript a second time of its own. The first version
+    of deploy/rag_resplit.py kept its own copy of the cutting rules,
+    they drifted, and the 2026-08-22 migration wrote a dozen entries
+    whose whole content was a pointer. A reporting path that
     re-derives the answer is the same mistake wearing a different hat:
     it would be free to disagree with the path that actually writes.
     """
-    cut = groups(indexable(messages, source))
-    kept = {id(unit) for unit in answered(cut)}
-    return [render(unit) for unit in cut if id(unit) not in kept]
+    return partition(messages, source)[1]
 
 
-def split_dropped(text: str, source: str = "resplit") -> list[str]:
-    """`dropped`, for text already in the store."""
-    return dropped(parse(text), source)
+def split_partition(text: str, source: str = "resplit") -> tuple[list[str], list[str]]:
+    """`partition`, for text already in the store."""
+    return partition(parse(text), source)

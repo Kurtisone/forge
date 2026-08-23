@@ -207,8 +207,17 @@ def _strategy_rag_pointer(messages: list[dict]) -> dict:
     # one number cannot answer both questions. 35 messages becoming 17
     # units says nothing about whether anything was filtered out --
     # exchanges group two messages at a time all on their own.
+    #
+    # transcript.partition, not indexable + blocks. Those two are the
+    # first and third steps of a three-step pipeline, and calling them
+    # in sequence skipped the middle one silently: the whole live
+    # intake path went around the non-answer filter while the
+    # migration went through it -- which is exactly the two-callers-
+    # disagreeing failure transcript.py exists to prevent, reappearing
+    # inside the module that shares the pipeline. One entry point, or
+    # the second one drifts.
     kept = transcript.indexable(messages)
-    contents = transcript.blocks(kept)
+    contents, refused = transcript.partition(messages)
 
     try:
         conn = rag.get_connection()
@@ -228,6 +237,12 @@ def _strategy_rag_pointer(messages: list[dict]) -> dict:
         kept=len(kept),
         dropped=len(messages) - len(kept),
         units=len(contents),
+        # Counted apart from `dropped`, which is messages thrown out
+        # before the cut (pointers, router JSON). This is whole
+        # exchanges thrown out after it, for answering nothing -- a
+        # different filter at a different granularity, and rolling the
+        # two into one number would make neither answerable.
+        refused=len(refused),
         entries=len(ids),
         first_id=ids[0] if ids else None,
         last_id=ids[-1] if ids else None,
