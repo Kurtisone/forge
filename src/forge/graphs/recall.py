@@ -42,7 +42,7 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import lang, non_answer, rag, subtrace
+from forge import lang, non_answer, outcome, rag, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RECALL_MAX_ANSWER_CHARS,
@@ -354,6 +354,13 @@ def run(query: str) -> str:
     """Search memory and synthesize one natural answer."""
     state = build().run(query, initial_context={"query": query})
     results = state.context.get("results", [])
+
+    # The error node sets ok=True so the caller gets a message rather
+    # than a crash, which is right for the conversation and erases the
+    # only thing the store needs to know. state.error survives it, so
+    # report it before it goes out of scope -- see forge/outcome.py.
+    if state.error:
+        outcome.no_answer(f"recall: {state.error}")
     subtrace.publish(
         subtrace.from_state(
             state,

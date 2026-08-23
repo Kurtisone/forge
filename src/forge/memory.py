@@ -163,13 +163,30 @@ def get_history() -> list[dict]:
     return load_memory().get("history", [])
 
 
-def _new_entry(memory: dict, role: str, content: str) -> dict:
+def _new_entry(memory: dict, role: str, content: str, answered: bool = True) -> dict:
+    """
+    One history entry.
+
+    `answered` is written only when it is False, and read only by
+    compaction (see forge/transcript.py's `answered`). Absent means
+    True, so nothing has to be backfilled onto the entries already on
+    disk and a normal turn keeps exactly the shape it had.
+
+    It marks BOTH messages of the exchange, not just the reply. The
+    unit that reaches the vector store is the question plus whatever
+    answered it, so keeping the question alone would leave behind an
+    entry that is nothing but the question -- which is the closest
+    possible match for anyone asking it again, and precisely the row
+    this exists to stop writing.
+    """
     entry = {
         "id": memory["next_id"],
         "role": role,
         "content": safe_text(content),
         "pinned": False,
     }
+    if not answered:
+        entry["answered"] = False
     memory["next_id"] += 1
     return entry
 
@@ -254,17 +271,23 @@ def add_message(role: str, content: str) -> None:
     save_memory(memory)
 
 
-def add_exchange(user_content: str, assistant_content: str) -> None:
+def add_exchange(
+    user_content: str, assistant_content: str, answered: bool = True
+) -> None:
     """
     Persist one user/assistant turn in a single read-modify-write,
     instead of calling add_message() twice (which would read and
     rewrite the file twice for what is logically one turn).
+
+    `answered=False` records that the run produced no answer -- see
+    orchestrator._answered. The exchange is stored and displayed
+    either way; only compaction reads the mark.
     """
     memory = load_memory()
     history = memory.get("history", [])
 
-    history.append(_new_entry(memory, "user", user_content))
-    history.append(_new_entry(memory, "assistant", assistant_content))
+    history.append(_new_entry(memory, "user", user_content, answered))
+    history.append(_new_entry(memory, "assistant", assistant_content, answered))
     memory["history"] = _apply_retention(history)
 
     save_memory(memory)

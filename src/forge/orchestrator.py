@@ -27,7 +27,16 @@ import re
 import shlex
 from pathlib import Path
 
-from forge import delegation, memory, metrics, non_answer, subtrace, trace, turn
+from forge import (
+    delegation,
+    memory,
+    metrics,
+    non_answer,
+    outcome,
+    subtrace,
+    trace,
+    turn,
+)
 from forge.config import (
     ALLOW_MUTATION_AFTER_EXTERNAL_DATA,
     MAX_STEPS,
@@ -296,6 +305,9 @@ class Orchestrator:
         # compaction, which calls the LLM, and that call belongs to
         # this run's bill.
         metrics.start_run()
+        # Same reason as start_run above: a verdict left behind by the
+        # previous run in this context would mark this turn unanswered.
+        outcome.clear()
         # The raw message, for the one tool that needs it rather than
         # the router's restatement of it. See turn.py.
         turn.set_input(user_input)
@@ -577,7 +589,11 @@ class Orchestrator:
         """
         trace.save(state)
         if MEMORY_ENABLED and remember:
-            self._remember(state.user_input, state.final_output or "")
+            self._remember(
+                state.user_input,
+                state.final_output or "",
+                answered=self._answered(state.final_output or ""),
+            )
         # Snapshot taken here, on the way out but still inside the run:
         # see AgentState.to_result for why the caller cannot take it
         # itself.
@@ -693,7 +709,37 @@ class Orchestrator:
             log.warning("failed to load memory: %s", e)
             return []
 
-    def _remember(self, user_input: str, output: str) -> None:
+    def _answered(self, output: str) -> bool:
+        """
+        Whether this turn produced something worth putting in the
+        vector store when the exchange is eventually compacted.
+
+        Two sources, checked in this order because they fail in
+        opposite ways. A run that reported its own failure is right
+        even if the wording of its reply changes; the text check is
+        the net for every producer not wired to forge/outcome.py --
+        which today is all of them but recall -- and is what
+        deploy/rag_resplit.py has to use on blocks written down long
+        before either existed.
+
+        The verdict is READ HERE AND NOWHERE ELSE, on the single exit
+        path, so a run that ends early cannot leave one behind for the
+        next turn.
+
+        Note what this does NOT decide: whether the exchange is shown,
+        or kept in the rolling history. A failed turn is part of the
+        conversation and stays visible. This is only about what the
+        retrieval store is later allowed to hold.
+        """
+        reason = outcome.taken()
+        if reason is None and non_answer.is_non_answer(output):
+            reason = "non-answer reply"
+        if reason is None:
+            return True
+        log.event("memory.unanswered", reason=reason, chars=len(output))
+        return False
+
+    def _remember(self, user_input: str, output: str, answered: bool = True) -> None:
         # Content used to be hard-truncated to _MAX_MEMORY_CONTENT chars
         # here (pre-v3.9), to keep the router's own prompt from
         # ballooning on large pastes/tool output. That's now the job of
@@ -706,7 +752,7 @@ class Orchestrator:
         # cap on a tool result like a file read showed up as a broken
         # answer on screen, not just a shorter prompt.
         try:
-            memory.add_exchange(user_input, output)
+            memory.add_exchange(user_input, output, answered=answered)
         except Exception as e:  # noqa: BLE001
             log.warning("failed to persist memory: %s", e)
 
