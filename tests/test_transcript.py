@@ -132,3 +132,97 @@ def test_a_single_exchange_stays_one_unit():
     text = "user: une question\nassistant: une réponse"
 
     assert transcript.split(text) == [text]
+
+
+# --- units that answered nothing -------------------------------------
+#
+# See forge/non_answer.py for the measurement these exist for: an
+# exchange whose reply says nothing is a near-copy of its own question,
+# which makes it the closest possible neighbour of anyone asking it
+# again.
+
+
+def test_a_refusal_and_its_question_go_together():
+    from forge import non_answer
+
+    messages = [
+        _m("user", "Tu peux me lister mon matériel ?"),
+        _m("assistant", non_answer.NOTHING_CLOSE_ENOUGH),
+    ]
+
+    assert transcript.units(messages) == []
+
+
+def test_the_question_is_not_kept_on_its_own():
+    # The failure this guards against is a per-message filter: drop the
+    # reply, keep the question, and the entry left behind is worse than
+    # the one removed.
+    from forge import non_answer
+
+    messages = [
+        _m("user", "Quel est le modèle de ma voiture ?"),
+        _m("assistant", non_answer.NOTHING_CLOSE_ENOUGH),
+        _m("user", "Et mon matériel ?"),
+        _m("assistant", "Un Steam Deck et un NiPoGi AM06PRO."),
+    ]
+
+    units = transcript.units(messages)
+
+    assert units == [
+        "user: Et mon matériel ?\nassistant: Un Steam Deck et un NiPoGi AM06PRO."
+    ]
+
+
+def test_a_marked_exchange_is_dropped_whatever_it_says():
+    # The structural half: the reply reads like an answer, the run said
+    # otherwise when it was persisted.
+    messages = [
+        {"role": "user", "content": "et ma voiture ?", "answered": False},
+        {"role": "assistant", "content": "Je vais regarder ça.", "answered": False},
+    ]
+
+    assert transcript.units(messages) == []
+
+
+def test_a_mark_on_either_message_is_enough():
+    messages = [
+        _m("user", "et ma voiture ?"),
+        {"role": "assistant", "content": "Je vais regarder ça.", "answered": False},
+    ]
+
+    assert transcript.units(messages) == []
+
+
+def test_a_unit_with_no_reply_is_left_alone():
+    # Same shape as the problem, different cause: the eviction window
+    # ended on a user turn. Nothing failed.
+    assert transcript.units([_m("user", "et mon matériel ?")]) == [
+        "user: et mon matériel ?"
+    ]
+
+
+def test_one_real_reply_is_enough_to_keep_the_unit():
+    from forge import non_answer
+
+    messages = [
+        _m("user", "Tu peux me lister mon matériel ?"),
+        _m("assistant", f"{non_answer.ERROR_PREFIX}first try failed"),
+        _m("assistant", "Un Steam Deck et un NiPoGi AM06PRO."),
+    ]
+
+    assert len(transcript.units(messages)) == 1
+
+
+def test_the_mark_is_the_one_thing_the_two_paths_cannot_share():
+    # Deliberate, and pinned so it stays a decision. render() does not
+    # write the mark down and parse() cannot recover it, so a block
+    # already in the store can only ever be judged on its text.
+    messages = [
+        {"role": "user", "content": "et ma voiture ?", "answered": False},
+        {"role": "assistant", "content": "Je vais regarder ça.", "answered": False},
+    ]
+
+    assert transcript.units(messages) == []
+    assert transcript.split(transcript.render(messages)) == [
+        "user: et ma voiture ?\nassistant: Je vais regarder ça."
+    ]
