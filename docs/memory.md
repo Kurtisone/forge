@@ -173,6 +173,36 @@ information") — that is prose like any other, and a phrase list aimed at it wo
 start dropping real answers. Failed turns stay in the conversation and on screen
 either way; this only decides what the vector store is allowed to hold.
 
+### The query instruction
+
+Qwen3-Embedding is instruction-aware, and its retrieval format is **asymmetric**:
+the instruction goes on the query, the document is embedded raw. Forge applies it
+in `rag.search` and nowhere else — documents reach the store through `remember`,
+queries through `search`, so the asymmetry is structural rather than a rule
+someone has to remember. It is also why turning it on needed no migration: every
+vector already stored was written raw and stays valid.
+
+Measured against the real store on 2026-08-23, three hits and three misses, the
+same six questions raw and prefixed (`bench/instruct_prefix.py`):
+
+| | worst hit | best miss | gap |
+|---|---|---|---|
+| raw | 0.8366 | 0.8337 | **−0.0029** |
+| prefixed | 0.8951 | 0.9495 | **+0.0544** |
+
+A negative gap means no threshold exists at all. What makes the result
+trustworthy is not the size of the number but that all six questions moved the
+way one mechanism predicts: **the prefix pulls weight off literal string
+overlap.** The semantic hit improved by 0.108; the two that got worse are the two
+that were scoring on overlap, and one of them is a miss that was supposed to move
+away.
+
+Set `EMBEDDING_QUERY_INSTRUCT=` (empty) for an embedding model that is not
+instruction-aware — for those it is noise glued to every search.
+
+**`RECALL_MAX_DISTANCE` must be recalibrated after changing this.** The 0.95 was
+measured on unprefixed queries and means something else now.
+
 ### Reading and repairing the store
 
 `search` was the only reader this store ever had, and it is semantic by construction —

@@ -27,6 +27,7 @@ from forge.config import (
     EMBEDDING_DIM,
     EMBEDDING_MAX_CHARS,
     EMBEDDING_MAX_CHUNKS,
+    EMBEDDING_QUERY_INSTRUCT,
     EMBEDDING_TIMEOUT,
     EMBEDDING_URL,
     RAG_DB_FILE,
@@ -104,7 +105,10 @@ def _split_for_embedding(text: str) -> list[str]:
 def _embed_one(text: str) -> list[float]:
     try:
         resp = requests.post(
-            EMBEDDING_URL, json={"input": text}, timeout=EMBEDDING_TIMEOUT
+            EMBEDDING_QUERY_INSTRUCT,
+            EMBEDDING_URL,
+            json={"input": text},
+            timeout=EMBEDDING_TIMEOUT,
         )
         resp.raise_for_status()
         return resp.json()[0]["embedding"][0]
@@ -320,6 +324,31 @@ def _insert(
     return entry_id
 
 
+def _as_query(text: str) -> str:
+    """
+    Wrap a search string in the embedding model's query instruction.
+
+    Applied HERE and only here, which is the whole design. Documents
+    reach the store through remember(), queries reach it through
+    search(), and putting the wrapper at the query choke point makes
+    the asymmetry structural rather than a rule someone has to
+    remember. There is no call path that could accidentally embed a
+    stored fact with a question's instruction glued to the front.
+
+    It is also why this needed no migration: every vector already in
+    the database was written raw by remember() and stays exactly as
+    valid as it was.
+
+    Empty EMBEDDING_QUERY_INSTRUCT disables it -- see config.py for
+    the measurement, and for why a model that is not instruction-aware
+    wants it off.
+    """
+    instruct = EMBEDDING_QUERY_INSTRUCT.strip()
+    if not instruct:
+        return text
+    return f"Instruct: {instruct}\nQuery: {text}"
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
@@ -327,7 +356,7 @@ def search(
     kind: str | None = None,
     project: str | None = None,
 ) -> list[dict]:
-    query_embedding = _embed(query)
+    query_embedding = _embed(_as_query(query))
 
     filters = []
     params: list = [sqlite_vec.serialize_float32(query_embedding), top_k]

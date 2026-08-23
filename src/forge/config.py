@@ -378,6 +378,35 @@ EMBEDDING_MAX_CHARS = int(os.getenv("EMBEDDING_MAX_CHARS", "1500"))
 # hundreds of sequential HTTP requests. Beyond this the tail is
 # dropped, with a warning.
 EMBEDDING_MAX_CHUNKS = int(os.getenv("EMBEDDING_MAX_CHUNKS", "16"))
+
+# Qwen3-Embedding is instruction-aware and its retrieval format is
+# ASYMMETRIC: the instruction goes on the QUERY, the document is
+# embedded raw. That asymmetry is why this costs no migration -- every
+# vector already in the store was written raw and stays valid.
+#
+# MEASURED against the real store on 2026-08-23, 3 hits and 3 misses,
+# same six questions raw and prefixed (bench/instruct_prefix.py):
+#
+#   raw       worst hit 0.8366 | best miss 0.8337 | gap -0.0029
+#   prefixed  worst hit 0.8951 | best miss 0.9495 | gap +0.0544
+#
+# A negative gap means no threshold exists at all. What makes the
+# result trustworthy is not the number but that every one of the six
+# questions moved the way ONE mechanism predicts: the prefix pulls
+# weight off literal string overlap. The two that got "worse" are the
+# two that were scoring on overlap -- an archived recall whose text
+# contains the question verbatim, and "Comment s'appelle mon chat ?"
+# matching "Comment je m'appelle ?", which is a MISS and was supposed
+# to move away. The semantic hit improved by 0.108.
+#
+# Set to empty to disable, which is what a model that is not
+# instruction-aware needs -- for those this is just noise glued to the
+# front of every search.
+EMBEDDING_QUERY_INSTRUCT = os.getenv(
+    "EMBEDDING_QUERY_INSTRUCT",
+    "Given a question asked in conversation, retrieve the stored facts, "
+    "decisions and past exchanges that answer it",
+)
 RAG_DB_FILE = os.getenv("RAG_DB_FILE", "data/forge_rag.db")
 # Per-hit ceiling on what the memory tool feeds back into the router
 # prompt. A "fact" entry is one line, but a "history_summary" written
