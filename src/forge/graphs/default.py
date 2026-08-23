@@ -16,6 +16,7 @@ Node order:
                                        [fallback]  ──► (terminal)
 """
 
+from forge import non_answer
 from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.kernel import policy
@@ -42,7 +43,7 @@ def _router_node(state: AgentState) -> AgentState:
         log.error("graph router: provider failure: %s", e)
         state.ok = False
         state.error = str(e)
-        state.final_output = "The model backend is unavailable."
+        state.final_output = non_answer.BACKEND_UNAVAILABLE
     return state
 
 
@@ -72,7 +73,7 @@ def _dispatch_node(state: AgentState) -> AgentState:
             "and no Cognitive Scheduler to choose between them"
         )
         log.error("graph dispatch: %s", state.error)
-        state.final_output = f"Tool error: {decision.tool}"
+        state.final_output = f"{non_answer.TOOL_ERROR_PREFIX}{decision.tool}"
         return state
 
     verdict = policy.check(providers[0])
@@ -95,7 +96,7 @@ def _dispatch_node(state: AgentState) -> AgentState:
         log.error("graph dispatch: tool %r raised: %s", decision.tool, e)
         state.ok = False
         state.error = str(e)
-        state.final_output = f"Tool error: {decision.tool}"
+        state.final_output = f"{non_answer.TOOL_ERROR_PREFIX}{decision.tool}"
     return state
 
 
@@ -107,7 +108,8 @@ def _fallback_node(state: AgentState) -> AgentState:
     """
     log.warning("graph fallback: recovering from error: %s", state.error)
     state.final_output = (
-        f"Something went wrong: {state.error or 'unknown error'}. Please try again."
+        f"{non_answer.SOMETHING_WENT_WRONG_PREFIX}"
+        f"{state.error or 'unknown error'}. Please try again."
     )
     state.ok = True  # error was handled; caller gets a result, not a crash
     state.error = None

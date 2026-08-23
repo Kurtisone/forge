@@ -29,6 +29,38 @@ and never touches data/forge_rag.db. Planting fixtures in the real
 store would leave them there for the next real recall, which is the
 same class of mistake as a benchmark that writes to production.
 
+WHAT THE BEST DISTANCE DOES NOT TELL YOU
+----------------------------------------
+It does not tell you WHICH row came first, and with --no-plant this
+harness has no way to check: you supply a question, not the entry that
+should answer it. On 2026-08-22 that gap produced the best-looking
+number this file had ever printed and the wrong conclusion behind it.
+"Tu peux me lister mon matériel ?" returned 0.4519 -- and the row at
+0.4519 was an archived refusal to that same question, while the entry
+holding the hardware sat second at 0.7891.
+
+Since compaction indexes one entry per exchange, the question is
+inside the entry, so an exchange whose reply says nothing is a
+near-copy of the question and the best possible match for it. The
+emptier the entry, the better it matches. A summary line reporting
+only the closest distance cannot see that, and reports it as an
+excellent hit.
+
+--rows (on by default with --no-plant) prints every row that came
+back, and --expect ID names the entry that should have answered, one
+per --hit, which is what makes `rank` mean something in this mode.
+Without --expect this file cannot tell a good distance to the wrong
+entry from a good distance to the right one -- doing so would require
+knowing the answer, which is the thing you brought.
+
+Questions shaped like unfilled placeholders are refused outright. On
+2026-08-23 this harness was handed "<la 3e question hit du 22/08>",
+embedded it as literal text, matched it against "Merci" at 0.8962, and
+printed NO GAP -- DO NOT SET A THRESHOLD. That is the second time it
+produced a confident verdict out of its own boilerplate; _MIN_QUESTIONS
+was the answer to the first and does not catch this one, because three
+placeholders are still three questions.
+
 READING IT
 ----------
 The number that matters is the GAP: the worst planted hit versus the
@@ -124,6 +156,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 # Planted entries, and the questions they answer. Deliberately in the
@@ -190,6 +223,105 @@ UNANSWERABLE: list[str] = [
 ]
 
 
+# Anything shaped like a slot someone forgot to fill. The 2026-08-23
+# run sent "<la 3e question hit du 22/08>" and "<la question
+# anniversaire cousin du 22/08>" straight to the embedding server;
+# they matched "Merci" and "Bonjour" at 0.8962 and 0.9601, and this
+# file printed NO GAP -- DO NOT SET A THRESHOLD off the back of it.
+#
+# That is the SECOND time this harness produced a confident verdict
+# from its own boilerplate. The first was the placeholder sentences in
+# its help text, which is why _MIN_QUESTIONS exists. A minimum count
+# does not catch this one: three placeholders are still three
+# questions. So the shape gets checked too.
+_PLACEHOLDER = re.compile(r"[<>]|\.\.\.|^\s*$|\bTODO\b|\bXXX\b")
+
+
+def _placeholders(questions: list[str]) -> list[str]:
+    return [q for q in questions if _PLACEHOLDER.search(q)]
+
+
+def find_rank(
+    results: list[dict], fixture_text: str | None, expect_id: str | None
+) -> int | None:
+    """
+    Where the entry that should have answered came back, 1-based.
+
+    Two ways to name it, because there are two modes. A planted
+    fixture is found by its text; with --no-plant the operator names
+    an id, since there is no planted text to look for.
+
+    None means "not in the results at all", which is NOT the same as
+    "no expectation given" -- see `misplaced`, which is where that
+    distinction has to be made, because this function cannot tell them
+    apart and once printed as `rank=None` neither could anyone else.
+    """
+    if fixture_text:
+        return next(
+            (
+                i + 1
+                for i, r in enumerate(results)
+                if (r.get("content") or "").startswith(fixture_text[:40])
+            ),
+            None,
+        )
+    if expect_id is not None:
+        return next(
+            (
+                i + 1
+                for i, r in enumerate(results)
+                if str(r.get("id")) == str(expect_id)
+            ),
+            None,
+        )
+    return None
+
+
+def misplaced(rows: list[tuple[str, str | None, int | None]]) -> list[str]:
+    """
+    The questions whose expected entry did not come back first.
+
+    rows are (question, expect_id, rank). An expectation that was
+    never given is not a failure; an expectation that came back second
+    is; and an expectation that did not come back AT ALL is the worst
+    of the three, which is exactly the case the first version of this
+    check let through -- it tested `rank != 1` while excluding None,
+    so a question whose answer was nowhere in the results passed
+    silently and its distance went into the gap as though it were a
+    hit.
+    """
+    return [q for q, expect, rank in rows if expect is not None and rank != 1]
+
+
+def _print_rows(results: list[dict], enabled: bool) -> None:
+    """
+    Every row the query returned, closest first.
+
+    The summary line above prints the best distance and calls it the
+    hit. On 2026-08-22 that reading was wrong in the most expensive
+    way available: "Tu peux me lister mon matériel ?" came back with a
+    best distance of 0.4519, the finest number this harness had ever
+    printed -- and the row at 0.4519 was an archived refusal to that
+    same question. The entry that holds the hardware was second, at
+    0.7891. A good distance to the wrong row looks exactly like a good
+    distance.
+
+    So the rows are printed, and whoever reads them decides whether
+    rank 1 is the entry they meant. Nothing here can decide that: it
+    would have to know the answer.
+    """
+    if not enabled:
+        return
+    for i, r in enumerate(results, start=1):
+        d = r.get("distance")
+        head = (r.get("content") or "").replace("\n", " / ")[:64]
+        print(
+            f"        {i}. #{r.get('id')}  "
+            f"{d if d is None else round(d, 4):<8} "
+            f"{r.get('kind', ''):<16} {head}…"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="/tmp/recall_bench.db")
@@ -217,7 +349,32 @@ def main() -> int:
         metavar="QUESTION",
         help="A question you know the store cannot answer. Repeatable.",
     )
+    parser.add_argument(
+        "--expect",
+        action="append",
+        default=[],
+        metavar="ID",
+        help=(
+            "The entry id that SHOULD answer the --hit at the same "
+            "position. Repeat once per --hit, or leave empty. Without it "
+            "rank is None in --no-plant mode and a good distance to the "
+            "wrong row is indistinguishable from a good distance."
+        ),
+    )
+    parser.add_argument(
+        "--rows",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Print every row that came back, not just the closest one. "
+            "On by default with --no-plant, where the top-1 distance on "
+            "its own has already been misleading -- see WHAT THE BEST "
+            "DISTANCE DOES NOT TELL YOU."
+        ),
+    )
     args = parser.parse_args()
+    if args.rows is None:
+        args.rows = args.no_plant
 
     # Set before importing forge.rag: RAG_DB_FILE is read at import.
     os.environ["RAG_DB_FILE"] = args.db
@@ -240,12 +397,41 @@ def main() -> int:
                 "to."
             )
             return 1
-        hits = [(None, None, q) for q in args.hit]
+        placeholders = _placeholders(args.hit + args.miss)
+        if placeholders:
+            print(
+                "these look like unfilled placeholders, not questions:\n  "
+                + "\n  ".join(placeholders)
+                + "\n\nThey would be embedded as literal text and matched "
+                "against the store,\nwhich is how the 2026-08-23 run got "
+                "0.8962 out of '<la 3e question\nhit du 22/08>' matching "
+                "'Merci', and printed a verdict on it.\n\nPut the real "
+                "questions in, or drop them."
+            )
+            return 1
+        if args.expect and len(args.expect) != len(args.hit):
+            print(
+                f"--expect given {len(args.expect)} times for {len(args.hit)} "
+                "--hit questions.\nThey are matched by position, so it has to "
+                "be one each or none at all."
+            )
+            return 1
+        expected = args.expect or [None] * len(args.hit)
+        # (fixture text to match, entry id to match, question). Each
+        # field is read by its own name below. The first version
+        # reused the FIXTURES 3-tuple and put the --expect id where
+        # the fixture text goes, so the rank lookup ran startswith on
+        # "308" against every result and returned None for every
+        # question in every --no-plant run ever made -- printing
+        # rank=None, which is exactly what it prints when no id was
+        # given at all. Two different states, one indistinguishable
+        # output.
+        hits = [(None, e, q) for e, q in zip(expected, args.hit)]
         misses = list(args.miss)
     else:
         if os.path.exists(args.db):
             os.remove(args.db)
-        hits = list(FIXTURES)
+        hits = [(content, None, question) for _kind, content, question in FIXTURES]
         misses = list(UNANSWERABLE)
 
     from forge import rag
@@ -261,31 +447,25 @@ def main() -> int:
 
         print("\n=== HITS (the answer is in the store) ===")
         hit_distances = []
-        for _kind, content, question in hits:
+        checked: list[tuple[str, str | None, int | None]] = []
+        for fixture_text, expect_id, question in hits:
             results = rag.search(conn, query=question, top_k=args.top_k)
             best = results[0] if results else None
-            # Rank matters as much as distance: a planted entry that
-            # comes back second, behind another planted entry, means
-            # the cutoff is not the only thing that needs looking at.
-            rank = (
-                next(
-                    (
-                        i + 1
-                        for i, r in enumerate(results)
-                        if r.get("content", "").startswith(content[:40])
-                    ),
-                    None,
-                )
-                if content
-                else None
-            )
+            # Rank matters as much as distance: an entry that comes
+            # back second, behind something else, means the cutoff is
+            # not the only thing that needs looking at. With planted
+            # fixtures the entry is matched by its text; with
+            # --no-plant it is whatever id --expect named.
+            rank = find_rank(results, fixture_text, expect_id)
             distance = best.get("distance") if best else None
             if isinstance(distance, float):
                 hit_distances.append(distance)
+            checked.append((question, expect_id, rank))
             print(
                 f"  {distance if distance is None else round(distance, 4):<8} "
                 f"rank={rank}  {question}"
             )
+            _print_rows(results, args.rows)
 
         print("\n=== MISSES (nothing in the store answers this) ===")
         miss_distances = []
@@ -298,10 +478,30 @@ def main() -> int:
                 f"  {distance if distance is None else round(distance, 4):<8} "
                 f"        {question}"
             )
+            _print_rows(results, args.rows)
     finally:
         conn.close()
 
     print("\n=== VERDICT ===")
+    # The distance recorded for a hit is the distance to the CLOSEST
+    # row, which is only the hit's distance if the hit came back
+    # first. When --expect says rank is not 1, that number is the
+    # distance to something else and the verdict below is computed on
+    # it. Measured on 2026-08-23: "Tu peux me lister mon matériel ?"
+    # scored 0.9083 against an entry about tools, with every hardware
+    # fact outside the top 5 -- a retrieval failure being averaged in
+    # as a mediocre hit, which dragged the gap from 0.195 to 0.041 and
+    # produced a "too tight to act on" verdict about a threshold that
+    # was fine.
+    off = misplaced(checked)
+    if off:
+        print("  /!\\ the expected entry did not come back first for:")
+        for q in off:
+            print(f"        {q}")
+        print("      Their distance above is the distance to a DIFFERENT row,")
+        print("      and the gap below is computed on it. That is a retrieval")
+        print("      failure being averaged in as a mediocre hit -- fix it, or")
+        print("      drop the question, before reading any threshold here.")
     if not hit_distances or not miss_distances:
         print("  no distances came back -- is the embedding server up?")
         return 1

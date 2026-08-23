@@ -16,11 +16,21 @@ compactés -- voir mémoire vectorielle #12]", plus a handful of raw
 router JSON out of the old entry #9. So the pipeline is shared here
 whole, and the two entry points are now the same sequence:
 
-    units(messages)  =  blocks(indexable(messages))
+    units(messages)  =  worth_indexing(groups(indexable(messages))) , rendered
     split(text)      =  units(parse(text))
 
 A test asserts that equality on the same input. Sharing one step out
 of three is how the second step drifts.
+
+ONE DELIBERATE DIVERGENCE. A message can carry `index: False`, set
+when the exchange was persisted by a run that reported itself
+unindexable (see forge/outcome.py). render() does not write that mark down and
+parse() cannot recover it, so the two paths part company on exactly
+those units: compaction drops them on the mark, the migration only on
+what the text says. That is not a leak in the shared pipeline, it is
+the honest limit of reading a block written weeks before anything
+could mark it -- and it is pinned by its own test so it stays a
+decision rather than becoming a surprise.
 
 WHY AN EXCHANGE, AND NOT THE WHOLE BLOCK
 
@@ -57,6 +67,7 @@ store, which is the case this has to serve.
 
 import re
 
+from forge import non_answer
 from forge.text_cleaning import try_unwrap_router_json
 
 # Every role forge.memory writes. Kept as one tuple because the regex
@@ -180,9 +191,9 @@ def indexable(messages: list[dict], source: str = "compaction") -> list[dict]:
     return kept
 
 
-def blocks(messages: list[dict]) -> list[str]:
+def groups(messages: list[dict]) -> list[list[dict]]:
     """
-    Group messages into retrieval units and render each one.
+    Cut messages into retrieval units, still as messages.
 
     A new unit starts at every `user` message; anything that follows
     belongs to it. Messages appearing before the first user turn form a
@@ -190,20 +201,93 @@ def blocks(messages: list[dict]) -> list[str]:
     after them -- an evicted window does not necessarily begin on a
     user message.
 
-    Grouping only, no filtering. `units` is what callers want.
+    Cutting only, no filtering.
     """
-    groups: list[list[dict]] = []
+    out: list[list[dict]] = []
     for m in messages:
-        if m.get("role") == "user" or not groups:
-            groups.append([m])
+        if m.get("role") == "user" or not out:
+            out.append([m])
         else:
-            groups[-1].append(m)
-    return [render(g) for g in groups]
+            out[-1].append(m)
+    return out
+
+
+def blocks(messages: list[dict]) -> list[str]:
+    """Cut, then render each unit. Cutting only, no filtering."""
+    return [render(g) for g in groups(messages)]
+
+
+def worth_indexing(units: list[list[dict]]) -> list[list[dict]]:
+    """
+    Drop the units that must not reach the vector store.
+
+    This is the filter `indexable` cannot be, and the difference is the
+    whole reason it exists separately: `indexable` decides one message
+    at a time, and dropping only the reply would leave the question
+    behind as a unit of its own. That is not a smaller version of the
+    problem, it is the worst case of it -- a unit is a question plus
+    what answered it, so an entry that is ONLY a question is the
+    nearest possible neighbour of anyone asking it again. Measured at
+    0.4519 on the Deck on 2026-08-22, beating the real answer at
+    0.7891. The unit goes whole or it stays whole.
+
+    Two ways a unit qualifies, and they fail in opposite directions:
+
+      - the run said so, via forge/outcome.py, recorded on the messages
+        when the exchange was persisted. Two claims wear this mark:
+        nothing answered, and -- since 2026-08-23 -- the answer was
+        rebuilt from the store by a recall, which would otherwise feed
+        the store its own output. Survives any change to the wording.
+      - the reply is one of the fixed strings Forge writes when it has
+        nothing to say (forge/non_answer.py). The only test available
+        to deploy/rag_resplit.py, whose input went through render and
+        parse and carries no marks at all.
+
+    A unit with no reply -- an evicted window that ends on a user turn,
+    with the answer in the next one -- is LEFT ALONE. It has the same
+    shape as the problem and not the same cause: nothing failed, the
+    cut simply landed there. Dropping it would lose a question whose
+    answer is stored two units away under no subject at all, and that
+    is a different repair.
+    """
+    kept = []
+    for unit in units:
+        if any(m.get("index") is False for m in unit):
+            continue
+        replies = unit[1:] if unit and unit[0].get("role") == "user" else unit
+        if replies and all(
+            non_answer.is_non_answer(m.get("content") or "") for m in replies
+        ):
+            continue
+        kept.append(unit)
+    return kept
+
+
+def partition(
+    messages: list[dict], source: str = "compaction"
+) -> tuple[list[str], list[str]]:
+    """
+    The whole pipeline, in one pass: (what the store should hold,
+    what was left out for answering nothing).
+
+    ONE pass, and that is not a micro-optimisation. `indexable` logs a
+    warning when it unwraps router JSON, so asking for the kept units
+    and the dropped ones separately would emit that warning twice for
+    the same text -- once for a caller that is only counting. A caller
+    that wants both must get both from the same walk.
+    """
+    cut = groups(indexable(messages, source))
+    keep = worth_indexing(cut)
+    kept_ids = {id(unit) for unit in keep}
+    return (
+        [render(unit) for unit in keep],
+        [render(unit) for unit in cut if id(unit) not in kept_ids],
+    )
 
 
 def units(messages: list[dict], source: str = "compaction") -> list[str]:
     """What the vector store should hold for these messages."""
-    return blocks(indexable(messages, source))
+    return partition(messages, source)[0]
 
 
 def split(text: str, source: str = "resplit") -> list[str]:
@@ -212,3 +296,23 @@ def split(text: str, source: str = "resplit") -> list[str]:
     The migration's only entry point.
     """
     return units(parse(text), source)
+
+
+def dropped(messages: list[dict], source: str = "compaction") -> list[str]:
+    """
+    The units `units()` left behind, rendered.
+
+    Exists so a caller can show what it is about to leave out without
+    cutting the transcript a second time of its own. The first version
+    of deploy/rag_resplit.py kept its own copy of the cutting rules,
+    they drifted, and the 2026-08-22 migration wrote a dozen entries
+    whose whole content was a pointer. A reporting path that
+    re-derives the answer is the same mistake wearing a different hat:
+    it would be free to disagree with the path that actually writes.
+    """
+    return partition(messages, source)[1]
+
+
+def split_partition(text: str, source: str = "resplit") -> tuple[list[str], list[str]]:
+    """`partition`, for text already in the store."""
+    return partition(parse(text), source)

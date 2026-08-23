@@ -134,6 +134,75 @@ predictable way: `!remember`/`!recall` print a one-line error instead of crashin
 REPL, `/remember`/`/search` return `502`, and the `memory` tool returns a `[error]`
 string the router treats as a normal (if unhelpful) tool result rather than a crash.
 
+### What does not get indexed
+
+Compaction indexes one entry per exchange — a user turn plus whatever answered it.
+That means the question is *inside* the entry, and an exchange whose reply says
+nothing is therefore a near-copy of its own question, which makes it the closest
+possible match for anyone asking it again. **The emptier the entry, the better it
+matches.** Measured on 2026-08-22: asked "Tu peux me lister mon matériel ?", the store
+returned an archived refusal at distance `0.4519` ahead of the entry that actually
+holds the hardware at `0.7891`.
+
+Two filters keep those out, and they are deliberately different in kind:
+
+- **the run says so.** A graph that ends without an answer reports it through
+  `forge/outcome.py`, and the exchange is written to `memory.json` with
+  `"answered": false`. Survives any change to the wording of the reply.
+- **the text says so.** `forge/non_answer.py` holds the fixed strings Forge writes
+  when it has nothing to say (`[error] `, `[no memory] `, `Tool error: `,
+  `Something went wrong: ` and the cutoff refusal). This is the only test available
+  to `rag_resplit`, whose input was written down long before any of this existed.
+
+A recall answer is never indexed, good or bad. It was rebuilt from entries the
+store already holds, so writing it back gives the store a second, worse copy —
+worse because the copy carries the *question*, and an entry containing the
+question outranks the entry containing the answer. Measured on 2026-08-23,
+after the archived refusal was forgotten: `#138` came back at rank 1 for
+"Tu peux me lister mon matériel ?" — and `#138` is itself an archived recall,
+whose reply was already partial the day it was written. Left alone, every
+recall adds one. The cost is that a good synthesised answer is not kept; it is
+re-derivable from the entries it was built from, which are still there.
+
+Either one drops the **whole** exchange, question included. Dropping only the reply
+would leave an entry that is nothing but the question, which is the worst case rather
+than a smaller one.
+
+Neither catches a refusal the *model* phrased itself ("je n'ai pas cette
+information") — that is prose like any other, and a phrase list aimed at it would
+start dropping real answers. Failed turns stay in the conversation and on screen
+either way; this only decides what the vector store is allowed to hold.
+
+### The query instruction
+
+Qwen3-Embedding is instruction-aware, and its retrieval format is **asymmetric**:
+the instruction goes on the query, the document is embedded raw. Forge applies it
+in `rag.search` and nowhere else — documents reach the store through `remember`,
+queries through `search`, so the asymmetry is structural rather than a rule
+someone has to remember. It is also why turning it on needed no migration: every
+vector already stored was written raw and stays valid.
+
+Measured against the real store on 2026-08-23, three hits and three misses, the
+same six questions raw and prefixed (`bench/instruct_prefix.py`):
+
+| | worst hit | best miss | gap |
+|---|---|---|---|
+| raw | 0.8366 | 0.8337 | **−0.0029** |
+| prefixed | 0.8951 | 0.9495 | **+0.0544** |
+
+A negative gap means no threshold exists at all. What makes the result
+trustworthy is not the size of the number but that all six questions moved the
+way one mechanism predicts: **the prefix pulls weight off literal string
+overlap.** The semantic hit improved by 0.108; the two that got worse are the two
+that were scoring on overlap, and one of them is a miss that was supposed to move
+away.
+
+Set `EMBEDDING_QUERY_INSTRUCT=` (empty) for an embedding model that is not
+instruction-aware — for those it is noise glued to every search.
+
+**`RECALL_MAX_DISTANCE` must be recalibrated after changing this.** The 0.95 was
+measured on unprefixed queries and means something else now.
+
 ### Reading and repairing the store
 
 `search` was the only reader this store ever had, and it is semantic by construction —
@@ -156,6 +225,10 @@ python bench/rag_dilution.py
 python deploy/rag_resplit.py                      # dry run, the default
 python deploy/rag_resplit.py --apply --backup /tmp/forge_rag.db.bak
 ```
+
+A dry run prints every unit it would leave out as a non-answer, and lists the ids of
+entries that turn out to be a refusal and nothing else. Those are reported, never
+deleted — `!forget <id>` is the deliberate step.
 
 `rag_resplit` rewrites rows in place and there is no undo — take the backup. It inserts
 the pieces before deleting the block, so an interrupted run leaves a visible duplicate
