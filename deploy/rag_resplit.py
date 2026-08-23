@@ -15,7 +15,16 @@ WHAT IT DOES
 
 For every `history_summary` entry, forge.transcript.split() puts the
 stored text through the SAME pipeline compaction now uses on a live
-eviction -- parse, drop what is not conversation, cut at user turns.
+eviction -- parse, drop what is not conversation, cut at user turns,
+drop the exchanges that answered nothing.
+
+That last step removes text. It is the same trade already accepted for
+pointers and router JSON: an exchange whose reply is one of Forge's
+own refusals is a near-copy of its own question, and on 2026-08-22 one
+of them outranked the real answer to that question by a wide margin.
+An entry made ENTIRELY of such exchanges is reported and left in
+place, with its id, because deleting a row nobody asked to delete is
+not a migration's job.
 An entry that comes back unchanged is left alone: it is already the
 right shape, and rewriting it would burn an embedding call to produce
 the same row with a new id. Anything else is replaced by its units.
@@ -117,16 +126,34 @@ def main() -> int:
         print(f"{len(targets)} {args.kind} entries to inspect\n")
 
         split_count = new_count = inert_count = 0
+        refused: list[int] = []
+        dropped_count = 0
         for entry in targets:
             units = transcript.split(entry["content"])
+            # Asked of the same module that does the cutting, never
+            # re-derived here: a reporting path with its own copy of
+            # the rules is free to disagree with the path that writes.
+            gone = transcript.split_dropped(entry["content"])
+            dropped_count += len(gone)
+            for unit in gone:
+                head = unit[:70].replace("\n", " / ")
+                print(f"#{entry['id']:>4}   dropped  {head}…")
 
             if not units:
-                # A whole entry that is nothing but a pointer to
-                # another entry. Reported, not deleted: removing a row
+                # Nothing worth indexing: a pointer to another entry,
+                # or -- since the non-answer filter -- an exchange
+                # where Forge declined to answer and nothing else.
+                #
+                # Reported, not deleted, either way. Removing a row
                 # nobody asked to remove is not a migration's job, and
-                # `!forget <id>` is one command away.
+                # `!forget <id>` is one command away. The ids are
+                # gathered so that decision can be made on a list
+                # rather than by scrolling.
                 inert_count += 1
-                print(f"#{entry['id']:>4}    inert  rien d'indexable, laissée en place")
+                why = "que des non-réponses" if gone else "rien d'indexable"
+                if gone:
+                    refused.append(entry["id"])
+                print(f"#{entry['id']:>4}    inert  {why}, laissée en place")
                 continue
             if units == [entry["content"]]:
                 continue
@@ -163,6 +190,15 @@ def main() -> int:
             print(f"        -> #{ids[0]}-#{ids[-1]}, #{entry['id']} removed")
 
         after = rag.count_entries(conn)
+        if dropped_count:
+            print(
+                f"\n{dropped_count} units answered nothing and were left out "
+                "(see forge/non_answer.py)"
+            )
+        if refused:
+            ids = " ".join(f"#{i}" for i in refused)
+            print(f"{len(refused)} entries are a refusal and nothing else: {ids}")
+            print("nothing was deleted -- `!forget <id>` if you want them gone")
         if inert_count:
             print(f"\n{inert_count} entries hold nothing indexable (see !forget)")
         print(

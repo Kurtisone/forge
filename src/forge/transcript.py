@@ -272,3 +272,25 @@ def split(text: str, source: str = "resplit") -> list[str]:
     The migration's only entry point.
     """
     return units(parse(text), source)
+
+
+def dropped(messages: list[dict], source: str = "compaction") -> list[str]:
+    """
+    The units `units()` would leave behind, rendered.
+
+    Exists so deploy/rag_resplit.py can show what it is about to
+    remove without cutting the transcript a second time of its own.
+    The first version of that script kept its own copy of the cutting
+    rules, they drifted, and the 2026-08-22 migration wrote a dozen
+    entries whose whole content was a pointer. A reporting path that
+    re-derives the answer is the same mistake wearing a different hat:
+    it would be free to disagree with the path that actually writes.
+    """
+    cut = groups(indexable(messages, source))
+    kept = {id(unit) for unit in answered(cut)}
+    return [render(unit) for unit in cut if id(unit) not in kept]
+
+
+def split_dropped(text: str, source: str = "resplit") -> list[str]:
+    """`dropped`, for text already in the store."""
+    return dropped(parse(text), source)

@@ -226,3 +226,60 @@ def test_the_mark_is_the_one_thing_the_two_paths_cannot_share():
     assert transcript.split(transcript.render(messages)) == [
         "user: et ma voiture ?\nassistant: Je vais regarder ça."
     ]
+
+
+def test_dropped_reports_exactly_what_units_left_behind():
+    from forge import non_answer
+
+    messages = [
+        _m("user", "Tu peux me lister mon matériel ?"),
+        _m("assistant", non_answer.NOTHING_CLOSE_ENOUGH),
+        _m("user", "et le port ?"),
+        _m("assistant", "8080."),
+    ]
+
+    kept = transcript.units(messages)
+    gone = transcript.dropped(messages)
+
+    assert kept == ["user: et le port ?\nassistant: 8080."]
+    assert gone == [
+        (
+            "user: Tu peux me lister mon matériel ?\nassistant: "
+            f"{non_answer.NOTHING_CLOSE_ENOUGH}"
+        )
+    ]
+
+
+def test_nothing_is_both_kept_and_dropped():
+    # The migration prints one list and writes the other. A unit
+    # appearing in both, or in neither, is a report that lies about
+    # what was written.
+    from forge import non_answer
+
+    messages = [
+        _m("user", "une question"),
+        _m("assistant", "une réponse"),
+        _m("user", "une autre"),
+        _m("assistant", f"{non_answer.ERROR_PREFIX}boom"),
+        _m("user", "une troisième"),
+    ]
+
+    kept = transcript.units(messages)
+    gone = transcript.dropped(messages)
+
+    assert set(kept) & set(gone) == set()
+    assert len(kept) + len(gone) == 3
+
+
+def test_split_dropped_reads_stored_text():
+    from forge import non_answer
+
+    text = transcript.render(
+        [
+            _m("user", "Quel est le modèle de ma voiture ?"),
+            _m("assistant", non_answer.NOTHING_CLOSE_ENOUGH),
+        ]
+    )
+
+    assert transcript.split(text) == []
+    assert len(transcript.split_dropped(text)) == 1
