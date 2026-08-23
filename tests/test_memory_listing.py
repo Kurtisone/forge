@@ -97,3 +97,38 @@ def test_the_endpoint_and_both_front_ends_exist():
     assert "'!memory'" in (root / "static" / "index.html").read_text(), (
         "the web UI has no !memory -- which is where the dead end happened"
     )
+
+
+def test_the_web_ui_can_run_the_command_its_own_message_recommends():
+    """
+    The confirmation printed after storing a fact ends with "!forget
+    312 puis réécris-la". Until this was added, that line named a
+    command that only existed in the REPL -- so from the web UI it
+    went to the router, which had no idea what it was. A message
+    telling you what to do next has to be runnable where it is
+    displayed.
+    """
+    from pathlib import Path
+
+    ui = (
+        Path(__file__).resolve().parents[1] / "src" / "forge" / "static" / "index.html"
+    ).read_text()
+    tool = (
+        Path(__file__).resolve().parents[1] / "src" / "forge" / "tools" / "memory.py"
+    ).read_text()
+
+    assert "'!forget'" in ui
+    assert "!forget" in tool, "the confirmation no longer suggests !forget"
+
+
+def test_the_ui_command_dispatcher_passes_arguments():
+    """!forget is the first UI command that takes one. A dispatcher
+    calling run() with nothing would leave it permanently answering
+    'usage'."""
+    from pathlib import Path
+
+    ui = (
+        Path(__file__).resolve().parents[1] / "src" / "forge" / "static" / "index.html"
+    ).read_text()
+
+    assert "command.run(args)" in ui
