@@ -101,7 +101,7 @@ def _remember(instruction: dict) -> str:
             return f"[error] remember failed: embedding server unreachable ({e})"
 
         total = rag.count_entries(conn)["by_kind"].get(kind, 1)
-        odd = _unfamiliar_words(conn, text)
+        odd = _unfamiliar_words(conn, text, entry_id)
     finally:
         conn.close()
 
@@ -164,7 +164,7 @@ _CLOSE_ENOUGH = 0.85
 _WORD_RE = re.compile(rf"[^\W\d_]{{{_MIN_WORD},}}", re.UNICODE)
 
 
-def _unfamiliar_words(conn, text: str) -> list[tuple[str, str]]:
+def _unfamiliar_words(conn, text: str, entry_id: int) -> list[tuple[str, str]]:
     """
     Words in `text` that appear nowhere else in the store but sit one
     or two characters from a word that does.
@@ -191,13 +191,29 @@ def _unfamiliar_words(conn, text: str) -> list[tuple[str, str]]:
     if not words:
         return []
 
+    # The entry being confirmed is already committed by the time this
+    # runs, so it has to be excluded by id -- otherwise every word in
+    # it is "already in the store", which it is, because we just put it
+    # there.
     known: set[str] = set()
     for entry in rag.list_entries(conn, limit=_VOCABULARY_ENTRIES):
+        if entry["id"] == entry_id:
+            continue
         known.update(w.lower() for w in _WORD_RE.findall(entry["content"]))
-    known -= words
 
     found = []
     for word in sorted(words):
+        # A word the store already uses is familiar, full stop, and no
+        # neighbour of it is worth mentioning. The first version
+        # subtracted the whole new text from the vocabulary before
+        # searching -- meant to stop a word matching itself, it also
+        # deleted the evidence that the word was fine. "J'utilise
+        # aardvark-dns pour la résolution DNS" was flagged twice on
+        # `utilise` and `résolution`, two words written a dozen times
+        # in that store, each matched against a near neighbour only
+        # because the exact hit had just been removed.
+        if word in known:
+            continue
         near = difflib.get_close_matches(word, known, n=1, cutoff=_CLOSE_ENOUGH)
         if near:
             found.append((word, near[0]))

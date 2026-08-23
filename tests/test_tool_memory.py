@@ -318,3 +318,56 @@ def test_the_entry_is_stored_even_when_a_word_looks_odd():
         conn.close()
 
     assert "pocresseur AMD 5600G" in contents
+
+
+def test_a_word_the_store_already_uses_is_never_flagged():
+    """
+    Found in real use: "J'utilise aardvark-dns pour la résolution DNS"
+    was flagged twice, on `utilise` and `résolution` -- two words
+    written a dozen times in that store. The check removed the whole
+    new text from the vocabulary before searching, so the exact hit
+    that proved each word was fine had been deleted, and each matched
+    a near neighbour instead.
+    """
+    memory_tool.run(
+        json.dumps(
+            {
+                "action": "remember",
+                "kind": "fact",
+                "content": "La résolution DNS utilise aardvark",
+            }
+        )
+    )
+
+    out = memory_tool.run(
+        json.dumps(
+            {
+                "action": "remember",
+                "kind": "fact",
+                "content": "La résolution des noms utilise le proxy",
+            }
+        )
+    )
+
+    assert "Jamais vu" not in out
+
+
+def test_the_entry_being_confirmed_is_not_its_own_dictionary():
+    """
+    The row is committed before the check runs, so without excluding
+    it every word in the new text is "already in the store" -- because
+    we just put it there -- and nothing is ever flagged.
+    """
+    memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "processeur Ryzen 5500U"}
+        )
+    )
+
+    out = memory_tool.run(
+        json.dumps(
+            {"action": "remember", "kind": "fact", "content": "pocresseur 5600G"}
+        )
+    )
+
+    assert "pocresseur" in out and "processeur" in out
