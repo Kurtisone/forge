@@ -105,10 +105,7 @@ def _split_for_embedding(text: str) -> list[str]:
 def _embed_one(text: str) -> list[float]:
     try:
         resp = requests.post(
-            EMBEDDING_QUERY_INSTRUCT,
-            EMBEDDING_URL,
-            json={"input": text},
-            timeout=EMBEDDING_TIMEOUT,
+            EMBEDDING_URL, json={"input": text}, timeout=EMBEDDING_TIMEOUT
         )
         resp.raise_for_status()
         return resp.json()[0]["embedding"][0]

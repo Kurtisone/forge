@@ -67,3 +67,63 @@ def test_empty_instruction_disables_it(embedded, conn, monkeypatch):
     rag.search(conn, query="Quel processeur a mon NiPoGi ?")
 
     assert embedded == ["Quel processeur a mon NiPoGi ?"]
+
+
+# --- the request itself ----------------------------------------------
+#
+# Nothing exercised _embed_one before this. Every test in the suite,
+# including the four above, replaces rag._embed wholesale -- so the
+# HTTP call was the one piece of the retrieval path with no coverage at
+# all, and it shipped broken: a bad edit left the instruction sitting
+# where the URL goes, requests.post took it as the address, and 1143
+# tests passed. It failed on the first real query.
+
+
+class TestTheRequest:
+    def test_the_url_is_the_url(self, monkeypatch):
+        calls = []
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [{"embedding": [[0.0] * 1024]}]
+
+        def _post(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Resp()
+
+        monkeypatch.setattr(rag.requests, "post", _post)
+        monkeypatch.setattr(rag, "EMBEDDING_URL", "http://embed:8081/embedding")
+
+        rag._embed_one("Quel processeur a mon NiPoGi ?")
+
+        url, kwargs = calls[0]
+        assert url == "http://embed:8081/embedding"
+        assert kwargs["json"] == {"input": "Quel processeur a mon NiPoGi ?"}
+
+    def test_the_text_travels_in_the_body_not_the_address(self, monkeypatch):
+        # The failure mode this exists for, stated as a property: no
+        # part of the text being embedded may end up in the URL.
+        seen = {}
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return [{"embedding": [[0.0] * 1024]}]
+
+        def _post(url, **kwargs):
+            seen["url"] = url
+            return _Resp()
+
+        monkeypatch.setattr(rag.requests, "post", _post)
+        monkeypatch.setattr(rag, "EMBEDDING_URL", "http://embed:8081/embedding")
+
+        rag._embed_one(rag._as_query("Comment s'appelle mon chat ?"))
+
+        assert seen["url"].startswith("http://")
+        assert "Instruct:" not in seen["url"]
+        assert "chat" not in seen["url"]
