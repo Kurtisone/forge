@@ -359,6 +359,20 @@ EMBEDDING_TIMEOUT = int(os.getenv("EMBEDDING_TIMEOUT", "30"))
 # text into chunks of at most this many characters, embeds each, and
 # averages -- ~1500 chars stays under 512 tokens even for dense French
 # or code. Raise it if you also raise -b/-ub on the embedding server.
+# COUPLED TO THE EMBEDDING SERVER'S n_ubatch, which nothing here can
+# read. llama-server needs the whole input in one physical batch and
+# answers 400 Bad Request past it rather than truncating, so 1500 chars
+# (~400-500 French tokens) is chosen to sit under a 512-token ubatch,
+# which is what llama-server falls back to when --ubatch-size is left
+# unset: it prints
+#
+#   embeddings enabled with n_batch (2048) > n_ubatch (512)
+#   setting n_batch = n_ubatch = 512 to avoid assertion failure
+#
+# at startup and quietly runs at 512. Raising this without raising
+# -ub on the server makes compaction fail permanently -- see _embed in
+# rag.py for what that failure looked like the first time, and why it
+# read as an unreachable server rather than an oversized request.
 EMBEDDING_MAX_CHARS = int(os.getenv("EMBEDDING_MAX_CHARS", "1500"))
 # Ceiling on chunks per call, so one oversized input can't turn into
 # hundreds of sequential HTTP requests. Beyond this the tail is
