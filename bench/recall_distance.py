@@ -19,6 +19,7 @@ side, and the cutoff goes in the gap.
     podman exec forge sh -c 'rm -rf /tmp/arm && mkdir -p /tmp/arm'
     podman cp src forge:/tmp/arm/
     podman cp bench/recall_distance.py forge:/tmp/arm/
+    podman cp bench/_harness.py forge:/tmp/arm/
     podman exec -it forge python /tmp/arm/recall_distance.py
 
 The rm -rf is not cosmetic: podman cp merges into an existing directory
@@ -156,8 +157,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
+
+from _harness import find_rank, misplaced, placeholders
 
 # Planted entries, and the questions they answer. Deliberately in the
 # register real memory entries are written in -- short, factual,
@@ -221,76 +223,6 @@ UNANSWERABLE: list[str] = [
     "Quelles sont les règles du jeu de tarot à cinq ?",
     "Quel est le prix moyen d'un vélo électrique ?",
 ]
-
-
-# Anything shaped like a slot someone forgot to fill. The 2026-08-23
-# run sent "<la 3e question hit du 22/08>" and "<la question
-# anniversaire cousin du 22/08>" straight to the embedding server;
-# they matched "Merci" and "Bonjour" at 0.8962 and 0.9601, and this
-# file printed NO GAP -- DO NOT SET A THRESHOLD off the back of it.
-#
-# That is the SECOND time this harness produced a confident verdict
-# from its own boilerplate. The first was the placeholder sentences in
-# its help text, which is why _MIN_QUESTIONS exists. A minimum count
-# does not catch this one: three placeholders are still three
-# questions. So the shape gets checked too.
-_PLACEHOLDER = re.compile(r"[<>]|\.\.\.|^\s*$|\bTODO\b|\bXXX\b")
-
-
-def _placeholders(questions: list[str]) -> list[str]:
-    return [q for q in questions if _PLACEHOLDER.search(q)]
-
-
-def find_rank(
-    results: list[dict], fixture_text: str | None, expect_id: str | None
-) -> int | None:
-    """
-    Where the entry that should have answered came back, 1-based.
-
-    Two ways to name it, because there are two modes. A planted
-    fixture is found by its text; with --no-plant the operator names
-    an id, since there is no planted text to look for.
-
-    None means "not in the results at all", which is NOT the same as
-    "no expectation given" -- see `misplaced`, which is where that
-    distinction has to be made, because this function cannot tell them
-    apart and once printed as `rank=None` neither could anyone else.
-    """
-    if fixture_text:
-        return next(
-            (
-                i + 1
-                for i, r in enumerate(results)
-                if (r.get("content") or "").startswith(fixture_text[:40])
-            ),
-            None,
-        )
-    if expect_id is not None:
-        return next(
-            (
-                i + 1
-                for i, r in enumerate(results)
-                if str(r.get("id")) == str(expect_id)
-            ),
-            None,
-        )
-    return None
-
-
-def misplaced(rows: list[tuple[str, str | None, int | None]]) -> list[str]:
-    """
-    The questions whose expected entry did not come back first.
-
-    rows are (question, expect_id, rank). An expectation that was
-    never given is not a failure; an expectation that came back second
-    is; and an expectation that did not come back AT ALL is the worst
-    of the three, which is exactly the case the first version of this
-    check let through -- it tested `rank != 1` while excluding None,
-    so a question whose answer was nowhere in the results passed
-    silently and its distance went into the gap as though it were a
-    hit.
-    """
-    return [q for q, expect, rank in rows if expect is not None and rank != 1]
 
 
 def _print_rows(results: list[dict], enabled: bool) -> None:
@@ -397,11 +329,11 @@ def main() -> int:
                 "to."
             )
             return 1
-        placeholders = _placeholders(args.hit + args.miss)
-        if placeholders:
+        unfilled = placeholders(args.hit + args.miss)
+        if unfilled:
             print(
                 "these look like unfilled placeholders, not questions:\n  "
-                + "\n  ".join(placeholders)
+                + "\n  ".join(unfilled)
                 + "\n\nThey would be embedded as literal text and matched "
                 "against the store,\nwhich is how the 2026-08-23 run got "
                 "0.8962 out of '<la 3e question\nhit du 22/08>' matching "
