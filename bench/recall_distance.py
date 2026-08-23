@@ -29,6 +29,28 @@ and never touches data/forge_rag.db. Planting fixtures in the real
 store would leave them there for the next real recall, which is the
 same class of mistake as a benchmark that writes to production.
 
+WHAT THE BEST DISTANCE DOES NOT TELL YOU
+----------------------------------------
+It does not tell you WHICH row came first, and with --no-plant this
+harness has no way to check: you supply a question, not the entry that
+should answer it. On 2026-08-22 that gap produced the best-looking
+number this file had ever printed and the wrong conclusion behind it.
+"Tu peux me lister mon matériel ?" returned 0.4519 -- and the row at
+0.4519 was an archived refusal to that same question, while the entry
+holding the hardware sat second at 0.7891.
+
+Since compaction indexes one entry per exchange, the question is
+inside the entry, so an exchange whose reply says nothing is a
+near-copy of the question and the best possible match for it. The
+emptier the entry, the better it matches. A summary line reporting
+only the closest distance cannot see that, and reports it as an
+excellent hit.
+
+--rows (on by default with --no-plant) prints every row that came
+back. Read them. This file cannot tell a good distance to the wrong
+entry from a good distance to the right one -- doing so would require
+knowing the answer, which is the thing you brought.
+
 READING IT
 ----------
 The number that matters is the GAP: the worst planted hit versus the
@@ -190,6 +212,35 @@ UNANSWERABLE: list[str] = [
 ]
 
 
+def _print_rows(results: list[dict], enabled: bool) -> None:
+    """
+    Every row the query returned, closest first.
+
+    The summary line above prints the best distance and calls it the
+    hit. On 2026-08-22 that reading was wrong in the most expensive
+    way available: "Tu peux me lister mon matériel ?" came back with a
+    best distance of 0.4519, the finest number this harness had ever
+    printed -- and the row at 0.4519 was an archived refusal to that
+    same question. The entry that holds the hardware was second, at
+    0.7891. A good distance to the wrong row looks exactly like a good
+    distance.
+
+    So the rows are printed, and whoever reads them decides whether
+    rank 1 is the entry they meant. Nothing here can decide that: it
+    would have to know the answer.
+    """
+    if not enabled:
+        return
+    for i, r in enumerate(results, start=1):
+        d = r.get("distance")
+        head = (r.get("content") or "").replace("\n", " / ")[:64]
+        print(
+            f"        {i}. #{r.get('id')}  "
+            f"{d if d is None else round(d, 4):<8} "
+            f"{r.get('kind', ''):<16} {head}…"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="/tmp/recall_bench.db")
@@ -217,7 +268,20 @@ def main() -> int:
         metavar="QUESTION",
         help="A question you know the store cannot answer. Repeatable.",
     )
+    parser.add_argument(
+        "--rows",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Print every row that came back, not just the closest one. "
+            "On by default with --no-plant, where the top-1 distance on "
+            "its own has already been misleading -- see WHAT THE BEST "
+            "DISTANCE DOES NOT TELL YOU."
+        ),
+    )
     args = parser.parse_args()
+    if args.rows is None:
+        args.rows = args.no_plant
 
     # Set before importing forge.rag: RAG_DB_FILE is read at import.
     os.environ["RAG_DB_FILE"] = args.db
@@ -286,6 +350,7 @@ def main() -> int:
                 f"  {distance if distance is None else round(distance, 4):<8} "
                 f"rank={rank}  {question}"
             )
+            _print_rows(results, args.rows)
 
         print("\n=== MISSES (nothing in the store answers this) ===")
         miss_distances = []
@@ -298,6 +363,7 @@ def main() -> int:
                 f"  {distance if distance is None else round(distance, 4):<8} "
                 f"        {question}"
             )
+            _print_rows(results, args.rows)
     finally:
         conn.close()
 
