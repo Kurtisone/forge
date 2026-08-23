@@ -365,12 +365,21 @@ def main() -> int:
             )
             return 1
         expected = args.expect or [None] * len(args.hit)
+        # (fixture text to match, entry id to match, question). Each
+        # field is read by its own name below. The first version
+        # reused the FIXTURES 3-tuple and put the --expect id where
+        # the fixture text goes, so the rank lookup ran startswith on
+        # "308" against every result and returned None for every
+        # question in every --no-plant run ever made -- printing
+        # rank=None, which is exactly what it prints when no id was
+        # given at all. Two different states, one indistinguishable
+        # output.
         hits = [(None, e, q) for e, q in zip(expected, args.hit)]
         misses = list(args.miss)
     else:
         if os.path.exists(args.db):
             os.remove(args.db)
-        hits = list(FIXTURES)
+        hits = [(content, None, question) for _kind, content, question in FIXTURES]
         misses = list(UNANSWERABLE)
 
     from forge import rag
@@ -386,7 +395,8 @@ def main() -> int:
 
         print("\n=== HITS (the answer is in the store) ===")
         hit_distances = []
-        for _kind, content, question in hits:
+        hit_ranks: list[int | None] = []
+        for fixture_text, expect_id, question in hits:
             results = rag.search(conn, query=question, top_k=args.top_k)
             best = results[0] if results else None
             # Rank matters as much as distance: an entry that comes
@@ -395,28 +405,28 @@ def main() -> int:
             # fixtures the entry is matched by its text; with
             # --no-plant it is whatever id --expect named.
             rank = None
-            if content:
+            if fixture_text:
                 rank = next(
                     (
                         i + 1
                         for i, r in enumerate(results)
-                        if r.get("content", "").startswith(content[:40])
+                        if r.get("content", "").startswith(fixture_text[:40])
                     ),
                     None,
                 )
-            elif _kind is not None:
-                # --no-plant: _kind carries the --expect id.
+            elif expect_id is not None:
                 rank = next(
                     (
                         i + 1
                         for i, r in enumerate(results)
-                        if str(r.get("id")) == str(_kind)
+                        if str(r.get("id")) == str(expect_id)
                     ),
                     None,
                 )
             distance = best.get("distance") if best else None
             if isinstance(distance, float):
                 hit_distances.append(distance)
+            hit_ranks.append(rank)
             print(
                 f"  {distance if distance is None else round(distance, 4):<8} "
                 f"rank={rank}  {question}"
@@ -439,6 +449,21 @@ def main() -> int:
         conn.close()
 
     print("\n=== VERDICT ===")
+    # The distance recorded for a hit is the distance to the CLOSEST
+    # row, which is only the hit's distance if the hit came back
+    # first. When --expect says rank is not 1, that number is the
+    # distance to something else and the verdict below is computed on
+    # it. Measured on 2026-08-23: "Tu peux me lister mon matériel ?"
+    # scored 0.9083 against an entry about tools, with every hardware
+    # fact outside the top 5 -- a retrieval failure being averaged in
+    # as a mediocre hit, which dragged the gap from 0.195 to 0.041 and
+    # produced a "too tight to act on" verdict about a threshold that
+    # was fine.
+    if any(r is not None and r != 1 for r in hit_ranks):
+        print("  /!\\ some --expect entries did not come back first. Their")
+        print("      distance below is the distance to a DIFFERENT row, and")
+        print("      the gap is computed on it. Fix retrieval before reading")
+        print("      the threshold.")
     if not hit_distances or not miss_distances:
         print("  no distances came back -- is the embedding server up?")
         return 1
