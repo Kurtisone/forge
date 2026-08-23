@@ -91,7 +91,7 @@ def is_non_answer(text: str) -> bool:
 
     Takes the text of a single assistant turn. Whether a whole exchange
     should be indexed is a question about the group, not this message
-    -- see forge.transcript.answered.
+    -- see forge.transcript.worth_indexing.
     """
     stripped = (text or "").strip()
     if not stripped:

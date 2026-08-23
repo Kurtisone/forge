@@ -1,5 +1,5 @@
 """
-Per-run channel for "this turn did not answer the question".
+Per-run channel for "do not put this turn in the vector store".
 
 THE PROBLEM OF REACH
 
@@ -44,15 +44,15 @@ any of this existed.
 
 LIFECYCLE, EXPLICIT RATHER THAN LAZY
 
-    orchestrator.run()   -> outcome.clear()        (reset)
-    graphs/*.run()       -> outcome.no_answer(...) (report)
-    orchestrator._finish -> outcome.taken()        (read, and clear)
+    orchestrator.run()   -> outcome.clear()          (reset)
+    graphs/*.run()       -> outcome.do_not_index(...) (report)
+    orchestrator._finish -> outcome.taken()          (read, and clear)
 
 clear() at the top of every run for the reason metrics.start_run()
 resets rather than creates-if-absent: without it a second run in the
 same context inherits the first one's verdict, and every turn after a
-failed recall is persisted as unanswered. That is worse than not
-marking at all -- it silently stops indexing a working conversation.
+recall is persisted as unindexable. That is worse than not marking at
+all -- it silently stops indexing a working conversation.
 """
 
 from __future__ import annotations
@@ -60,15 +60,24 @@ from __future__ import annotations
 import contextvars
 
 _current: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "forge_outcome_no_answer", default=None
+    "forge_outcome_do_not_index", default=None
 )
 
 
-def no_answer(reason: str) -> None:
+def do_not_index(reason: str) -> None:
     """
-    Called by a graph or tool that is about to return something which
-    does not answer the question. `reason` is for the log, not for the
-    user -- whatever the run already put in state.error is right.
+    Called by a graph or tool whose exchange must not reach the vector
+    store. `reason` is for the log, not for the user.
+
+    Two kinds of caller so far, and they are not the same claim:
+
+      - nothing answered the question (graphs/recall.py's error node)
+      - the answer CAME FROM the store (any recall at all), so
+        indexing it would feed the store its own output
+
+    They share a mechanism because they share a consequence. Keeping
+    them apart in the reason string is enough -- the log line says
+    which, and nothing downstream needs to.
     """
     _current.set(reason or "unspecified")
 

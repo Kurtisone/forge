@@ -592,7 +592,7 @@ class Orchestrator:
             self._remember(
                 state.user_input,
                 state.final_output or "",
-                answered=self._answered(state.final_output or ""),
+                index=self._indexable(state.final_output or ""),
             )
         # Snapshot taken here, on the way out but still inside the run:
         # see AgentState.to_result for why the caller cannot take it
@@ -709,14 +709,16 @@ class Orchestrator:
             log.warning("failed to load memory: %s", e)
             return []
 
-    def _answered(self, output: str) -> bool:
+    def _indexable(self, output: str) -> bool:
         """
-        Whether this turn produced something worth putting in the
-        vector store when the exchange is eventually compacted.
+        Whether this turn is worth putting in the vector store when
+        the exchange is eventually compacted.
 
         Two sources, checked in this order because they fail in
-        opposite ways. A run that reported its own failure is right
-        even if the wording of its reply changes; the text check is
+        opposite ways. A run that reported itself is right even if the
+        wording of its reply changes -- and it is the ONLY one of the
+        two that can catch a recall, whose answer may be perfectly
+        good and simply must not be written back. The text check is
         the net for every producer not wired to forge/outcome.py --
         which today is all of them but recall -- and is what
         deploy/rag_resplit.py has to use on blocks written down long
@@ -736,10 +738,10 @@ class Orchestrator:
             reason = "non-answer reply"
         if reason is None:
             return True
-        log.event("memory.unanswered", reason=reason, chars=len(output))
+        log.event("memory.not_indexed", reason=reason, chars=len(output))
         return False
 
-    def _remember(self, user_input: str, output: str, answered: bool = True) -> None:
+    def _remember(self, user_input: str, output: str, index: bool = True) -> None:
         # Content used to be hard-truncated to _MAX_MEMORY_CONTENT chars
         # here (pre-v3.9), to keep the router's own prompt from
         # ballooning on large pastes/tool output. That's now the job of
@@ -752,7 +754,7 @@ class Orchestrator:
         # cap on a tool result like a file read showed up as a broken
         # answer on screen, not just a shorter prompt.
         try:
-            memory.add_exchange(user_input, output, answered=answered)
+            memory.add_exchange(user_input, output, index=index)
         except Exception as e:  # noqa: BLE001
             log.warning("failed to persist memory: %s", e)
 

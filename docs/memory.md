@@ -154,6 +154,16 @@ Two filters keep those out, and they are deliberately different in kind:
   `Something went wrong: ` and the cutoff refusal). This is the only test available
   to `rag_resplit`, whose input was written down long before any of this existed.
 
+A recall answer is never indexed, good or bad. It was rebuilt from entries the
+store already holds, so writing it back gives the store a second, worse copy —
+worse because the copy carries the *question*, and an entry containing the
+question outranks the entry containing the answer. Measured on 2026-08-23,
+after the archived refusal was forgotten: `#138` came back at rank 1 for
+"Tu peux me lister mon matériel ?" — and `#138` is itself an archived recall,
+whose reply was already partial the day it was written. Left alone, every
+recall adds one. The cost is that a good synthesised answer is not kept; it is
+re-derivable from the entries it was built from, which are still there.
+
 Either one drops the **whole** exchange, question included. Dropping only the reply
 would leave an entry that is nothing but the question, which is the worst case rather
 than a smaller one.

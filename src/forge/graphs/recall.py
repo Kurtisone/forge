@@ -355,12 +355,26 @@ def run(query: str) -> str:
     state = build().run(query, initial_context={"query": query})
     results = state.context.get("results", [])
 
-    # The error node sets ok=True so the caller gets a message rather
-    # than a crash, which is right for the conversation and erases the
-    # only thing the store needs to know. state.error survives it, so
-    # report it before it goes out of scope -- see forge/outcome.py.
-    if state.error:
-        outcome.no_answer(f"recall: {state.error}")
+    # EVERY recall, not just the failed ones. What this function
+    # returns was rebuilt from entries the store already holds, so
+    # indexing the exchange writes a second, worse copy of material
+    # that is already in there -- worse because the copy carries the
+    # QUESTION, and an entry containing the question outranks the
+    # entry containing the answer for anyone who asks it again.
+    #
+    # Measured on the Deck on 2026-08-23, after #272 was forgotten:
+    # "Tu peux me lister mon matériel ?" came back with #138 at rank 1,
+    # 0.7891 -- and #138 is itself an archived recall, whose reply was
+    # already partial the day it was written. Forge was reciting a
+    # stale snapshot of itself. Left alone, every recall adds one.
+    #
+    # The cost, stated plainly: a good synthesised answer is not kept.
+    # It is re-derivable from the entries it was built from, which are
+    # still there. The stale copy is not worth the convenience.
+    reason = (
+        f"recall: {state.error}" if state.error else "recall: rebuilt from the store"
+    )
+    outcome.do_not_index(reason)
     subtrace.publish(
         subtrace.from_state(
             state,

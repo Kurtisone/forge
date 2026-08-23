@@ -16,15 +16,15 @@ compactés -- voir mémoire vectorielle #12]", plus a handful of raw
 router JSON out of the old entry #9. So the pipeline is shared here
 whole, and the two entry points are now the same sequence:
 
-    units(messages)  =  answered(groups(indexable(messages)))  , rendered
+    units(messages)  =  worth_indexing(groups(indexable(messages))) , rendered
     split(text)      =  units(parse(text))
 
 A test asserts that equality on the same input. Sharing one step out
 of three is how the second step drifts.
 
-ONE DELIBERATE DIVERGENCE. A message can carry `answered: False`, set
-when the exchange was persisted by a run that reported its own failure
-(see forge/outcome.py). render() does not write that mark down and
+ONE DELIBERATE DIVERGENCE. A message can carry `index: False`, set
+when the exchange was persisted by a run that reported itself
+unindexable (see forge/outcome.py). render() does not write that mark down and
 parse() cannot recover it, so the two paths part company on exactly
 those units: compaction drops them on the mark, the migration only on
 what the text says. That is not a leak in the shared pipeline, it is
@@ -217,9 +217,9 @@ def blocks(messages: list[dict]) -> list[str]:
     return [render(g) for g in groups(messages)]
 
 
-def answered(units: list[list[dict]]) -> list[list[dict]]:
+def worth_indexing(units: list[list[dict]]) -> list[list[dict]]:
     """
-    Drop the units where nothing answered the question.
+    Drop the units that must not reach the vector store.
 
     This is the filter `indexable` cannot be, and the difference is the
     whole reason it exists separately: `indexable` decides one message
@@ -234,8 +234,10 @@ def answered(units: list[list[dict]]) -> list[list[dict]]:
     Two ways a unit qualifies, and they fail in opposite directions:
 
       - the run said so, via forge/outcome.py, recorded on the messages
-        when the exchange was persisted. Survives any change to the
-        wording of the reply.
+        when the exchange was persisted. Two claims wear this mark:
+        nothing answered, and -- since 2026-08-23 -- the answer was
+        rebuilt from the store by a recall, which would otherwise feed
+        the store its own output. Survives any change to the wording.
       - the reply is one of the fixed strings Forge writes when it has
         nothing to say (forge/non_answer.py). The only test available
         to deploy/rag_resplit.py, whose input went through render and
@@ -250,7 +252,7 @@ def answered(units: list[list[dict]]) -> list[list[dict]]:
     """
     kept = []
     for unit in units:
-        if any(m.get("answered") is False for m in unit):
+        if any(m.get("index") is False for m in unit):
             continue
         replies = unit[1:] if unit and unit[0].get("role") == "user" else unit
         if replies and all(
@@ -275,7 +277,7 @@ def partition(
     that wants both must get both from the same walk.
     """
     cut = groups(indexable(messages, source))
-    keep = answered(cut)
+    keep = worth_indexing(cut)
     kept_ids = {id(unit) for unit in keep}
     return (
         [render(unit) for unit in keep],

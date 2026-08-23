@@ -177,8 +177,8 @@ def test_a_marked_exchange_is_dropped_whatever_it_says():
     # The structural half: the reply reads like an answer, the run said
     # otherwise when it was persisted.
     messages = [
-        {"role": "user", "content": "et ma voiture ?", "answered": False},
-        {"role": "assistant", "content": "Je vais regarder ça.", "answered": False},
+        {"role": "user", "content": "et ma voiture ?", "index": False},
+        {"role": "assistant", "content": "Je vais regarder ça.", "index": False},
     ]
 
     assert transcript.units(messages) == []
@@ -187,7 +187,7 @@ def test_a_marked_exchange_is_dropped_whatever_it_says():
 def test_a_mark_on_either_message_is_enough():
     messages = [
         _m("user", "et ma voiture ?"),
-        {"role": "assistant", "content": "Je vais regarder ça.", "answered": False},
+        {"role": "assistant", "content": "Je vais regarder ça.", "index": False},
     ]
 
     assert transcript.units(messages) == []
@@ -218,8 +218,8 @@ def test_the_mark_is_the_one_thing_the_two_paths_cannot_share():
     # write the mark down and parse() cannot recover it, so a block
     # already in the store can only ever be judged on its text.
     messages = [
-        {"role": "user", "content": "et ma voiture ?", "answered": False},
-        {"role": "assistant", "content": "Je vais regarder ça.", "answered": False},
+        {"role": "user", "content": "et ma voiture ?", "index": False},
+        {"role": "assistant", "content": "Je vais regarder ça.", "index": False},
     ]
 
     assert transcript.units(messages) == []

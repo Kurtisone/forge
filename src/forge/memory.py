@@ -163,14 +163,21 @@ def get_history() -> list[dict]:
     return load_memory().get("history", [])
 
 
-def _new_entry(memory: dict, role: str, content: str, answered: bool = True) -> dict:
+def _new_entry(memory: dict, role: str, content: str, index: bool = True) -> dict:
     """
     One history entry.
 
-    `answered` is written only when it is False, and read only by
-    compaction (see forge/transcript.py's `answered`). Absent means
-    True, so nothing has to be backfilled onto the entries already on
-    disk and a normal turn keeps exactly the shape it had.
+    `index` is written only when it is False, and read only by
+    compaction (see forge/transcript.py's `worth_indexing`). Absent
+    means True, so nothing has to be backfilled onto the entries
+    already on disk and a normal turn keeps exactly the shape it had.
+
+    It is called `index` and not `answered` because it now carries two
+    different claims -- the run answered nothing, or the run's answer
+    came out of the store -- which share only a consequence. Naming it
+    for the consequence is the honest option: a good recall IS an
+    answer, and a field called `answered: false` sitting on it would
+    be a lie a future reader has to discover.
 
     It marks BOTH messages of the exchange, not just the reply. The
     unit that reaches the vector store is the question plus whatever
@@ -185,8 +192,8 @@ def _new_entry(memory: dict, role: str, content: str, answered: bool = True) -> 
         "content": safe_text(content),
         "pinned": False,
     }
-    if not answered:
-        entry["answered"] = False
+    if not index:
+        entry["index"] = False
     memory["next_id"] += 1
     return entry
 
@@ -271,23 +278,21 @@ def add_message(role: str, content: str) -> None:
     save_memory(memory)
 
 
-def add_exchange(
-    user_content: str, assistant_content: str, answered: bool = True
-) -> None:
+def add_exchange(user_content: str, assistant_content: str, index: bool = True) -> None:
     """
     Persist one user/assistant turn in a single read-modify-write,
     instead of calling add_message() twice (which would read and
     rewrite the file twice for what is logically one turn).
 
-    `answered=False` records that the run produced no answer -- see
-    orchestrator._answered. The exchange is stored and displayed
-    either way; only compaction reads the mark.
+    `index=False` records that this exchange must not reach the vector
+    store -- see orchestrator._indexable. The exchange is stored and
+    displayed either way; only compaction reads the mark.
     """
     memory = load_memory()
     history = memory.get("history", [])
 
-    history.append(_new_entry(memory, "user", user_content, answered))
-    history.append(_new_entry(memory, "assistant", assistant_content, answered))
+    history.append(_new_entry(memory, "user", user_content, index))
+    history.append(_new_entry(memory, "assistant", assistant_content, index))
     memory["history"] = _apply_retention(history)
 
     save_memory(memory)

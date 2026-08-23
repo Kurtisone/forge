@@ -213,12 +213,12 @@ def test_a_refusal_never_reaches_the_store(indexed):
 def test_an_exchange_the_run_marked_never_reaches_the_store(indexed):
     compaction._strategy_rag_pointer(
         [
-            {"id": 1, "role": "user", "content": "et ma voiture ?", "answered": False},
+            {"id": 1, "role": "user", "content": "et ma voiture ?", "index": False},
             {
                 "id": 2,
                 "role": "assistant",
                 "content": "Je vais regarder ça.",
-                "answered": False,
+                "index": False,
             },
         ]
     )
