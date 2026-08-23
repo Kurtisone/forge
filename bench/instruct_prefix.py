@@ -66,9 +66,34 @@ DEFAULT_INSTRUCT = (
 _PLACEHOLDER = re.compile(r"[<>]|\.\.\.|^\s*$|\bTODO\b|\bXXX\b")
 
 
-def prefixed(instruct: str, query: str) -> str:
-    """Qwen3-Embedding's query format. Documents get nothing."""
-    return f"Instruct: {instruct}\nQuery: {query}"
+class _instruct:
+    """
+    Force what rag.search prefixes with, for the duration of one call.
+
+    Necessary from the moment the prefix shipped: rag.search reads
+    EMBEDDING_QUERY_INSTRUCT itself, so once it is set in production
+    this harness's "RAW" column was silently already prefixed and its
+    "PREFIXED" column was prefixed TWICE. The 2026-08-23 run after
+    deployment reported +0.0008 of change and recommended keeping
+    queries raw -- a verdict about stacking two instructions, printed
+    as if it were about using one.
+
+    Setting it here rather than asking the operator to export an
+    environment variable is the point: a measurement that depends on
+    the deployed configuration measures the deployment, not the thing.
+    """
+
+    def __init__(self, rag_module, value: str):
+        self.rag, self.value = rag_module, value
+
+    def __enter__(self):
+        self.previous = self.rag.EMBEDDING_QUERY_INSTRUCT
+        self.rag.EMBEDDING_QUERY_INSTRUCT = self.value
+        return self
+
+    def __exit__(self, *exc):
+        self.rag.EMBEDDING_QUERY_INSTRUCT = self.previous
+        return False
 
 
 def _row(results: list[dict], expect: str | None) -> tuple[float | None, int | None]:
@@ -126,10 +151,10 @@ def main() -> int:
 
         print("HITS")
         for question, expect in zip(args.hit, expects):
-            r_raw = rag.search(conn, query=question, top_k=args.top_k)
-            r_pre = rag.search(
-                conn, query=prefixed(args.instruct, question), top_k=args.top_k
-            )
+            with _instruct(rag, ""):
+                r_raw = rag.search(conn, query=question, top_k=args.top_k)
+            with _instruct(rag, args.instruct):
+                r_pre = rag.search(conn, query=question, top_k=args.top_k)
             d_raw, k_raw = _row(r_raw, expect)
             d_pre, k_pre = _row(r_pre, expect)
             if isinstance(d_raw, float):
@@ -146,13 +171,14 @@ def main() -> int:
 
         print("\nMISSES  (further is better here)")
         for question in args.miss:
-            d_raw, _ = _row(rag.search(conn, query=question, top_k=args.top_k), None)
-            d_pre, _ = _row(
-                rag.search(
-                    conn, query=prefixed(args.instruct, question), top_k=args.top_k
-                ),
-                None,
-            )
+            with _instruct(rag, ""):
+                d_raw, _ = _row(
+                    rag.search(conn, query=question, top_k=args.top_k), None
+                )
+            with _instruct(rag, args.instruct):
+                d_pre, _ = _row(
+                    rag.search(conn, query=question, top_k=args.top_k), None
+                )
             if isinstance(d_raw, float):
                 raw_misses.append(d_raw)
             if isinstance(d_pre, float):
