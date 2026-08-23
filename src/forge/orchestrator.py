@@ -27,7 +27,7 @@ import re
 import shlex
 from pathlib import Path
 
-from forge import delegation, memory, metrics, subtrace, trace, turn
+from forge import delegation, memory, metrics, non_answer, subtrace, trace, turn
 from forge.config import (
     ALLOW_MUTATION_AFTER_EXTERNAL_DATA,
     MAX_STEPS,
@@ -334,7 +334,7 @@ class Orchestrator:
                 ts.abandon(f"provider failure: {e}")
                 state.ok = False
                 state.error = str(e)
-                state.final_output = "The model backend is unavailable."
+                state.final_output = non_answer.BACKEND_UNAVAILABLE
                 state.final_tool = "none"
                 return self._finish(state, remember=False)
 
@@ -631,7 +631,10 @@ class Orchestrator:
             log.error(str(err))
             subtrace.clear()  # discard any stale publish, same as every other exit path
             return ToolResult(
-                tool=tool, output=f"Tool error: {tool}", ok=False, error=str(err)
+                tool=tool,
+                output=f"{non_answer.TOOL_ERROR_PREFIX}{tool}",
+                ok=False,
+                error=str(err),
             )
 
         capability = providers[0]
@@ -653,13 +656,19 @@ class Orchestrator:
             log.error("tool %r violated its contract: %s", tool, e)
             subtrace.pop()  # discard: a failed call's partial steps aren't useful
             return ToolResult(
-                tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
+                tool=tool,
+                output=f"{non_answer.TOOL_ERROR_PREFIX}{tool}",
+                ok=False,
+                error=str(e),
             )
         except Exception as e:  # noqa: BLE001
             log.error("tool %r raised: %s", tool, e)
             subtrace.pop()
             return ToolResult(
-                tool=tool, output=f"Tool error: {tool}", ok=False, error=str(e)
+                tool=tool,
+                output=f"{non_answer.TOOL_ERROR_PREFIX}{tool}",
+                ok=False,
+                error=str(e),
             )
 
         sub_steps = subtrace.pop()

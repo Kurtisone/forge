@@ -42,7 +42,7 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import lang, rag, subtrace
+from forge import lang, non_answer, rag, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RECALL_MAX_ANSWER_CHARS,
@@ -146,7 +146,7 @@ def _recall_node(state: AgentState) -> AgentState:
     if not results:
         state.ok = False
         state.error = "no results"
-        state.final_output = f"[no memory] for query: {query!r}"
+        state.final_output = f"{non_answer.NO_MEMORY_PREFIX}for query: {query!r}"
         return state
 
     results = _drop_distant(results, query)
@@ -157,9 +157,7 @@ def _recall_node(state: AgentState) -> AgentState:
         # fluent sentence built out of the five least-bad rows.
         state.ok = False
         state.error = "no results above the distance cutoff"
-        state.final_output = (
-            "Je n'ai rien d'assez proche en mémoire pour répondre à ça."
-        )
+        state.final_output = non_answer.NOTHING_CLOSE_ENOUGH
         return state
 
     state.context["results"] = results
