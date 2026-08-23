@@ -126,3 +126,60 @@ class TestPlaceholders:
 
     def test_an_ellipsis_is_caught(self, rd):
         assert rd.placeholders(["Quel est le ..."])
+
+
+@pytest.fixture(scope="module")
+def ip():
+    return _load("instruct_prefix")
+
+
+class TestReadRow:
+    """
+    The A/B's subject is the entry the operator named, not the row that
+    happened to win. On 2026-08-23 those were different rows for "Tu
+    peux me lister mon matériel ?" and the difference was the result.
+    """
+
+    def test_the_named_entry_is_what_gets_scored(self, rd):
+        assert rd.read_row(ROWS, "308") == (0.9741, 2, 0.9083)
+
+    def test_the_named_entry_winning_makes_the_two_agree(self, rd):
+        assert rd.read_row(ROWS, "176") == (0.9083, 1, 0.9083)
+
+    def test_nothing_named_falls_back_to_the_closest_row(self, rd):
+        assert rd.read_row(ROWS, None) == (0.9083, None, 0.9083)
+
+    def test_a_named_entry_that_never_came_back_reports_no_rank(self, rd):
+        # The distance is the closest row's, so the line still prints
+        # something -- and rank None is what tells the caller not to
+        # put that number in the verdict.
+        assert rd.read_row(ROWS, "999") == (0.9083, None, 0.9083)
+
+    def test_no_results_at_all(self, rd):
+        assert rd.read_row([], "308") == (None, None, None)
+
+
+class TestScoreable:
+    def test_the_named_entry_came_back_second_and_still_counts(self, ip):
+        assert ip._scoreable("308", (0.9741, 2, 0.9083))
+
+    def test_the_named_entry_never_came_back_and_does_not(self, ip):
+        # The fault this harness was carrying: that 0.9083 is the
+        # distance to an entry about tools, and it went into the gap
+        # as though it were a hardware hit.
+        assert not ip._scoreable("308", (0.9083, None, 0.9083))
+
+    def test_nothing_named_means_the_closest_row_is_all_there_is(self, ip):
+        assert ip._scoreable(None, (0.9083, None, 0.9083))
+
+    def test_no_distance_is_never_scoreable(self, ip):
+        assert not ip._scoreable(None, (None, None, None))
+
+
+class TestCell:
+    def test_a_missing_row_does_not_crash_the_format(self, ip):
+        assert ip._cell((None, None, None)).strip() == "--"
+
+    def test_the_closest_row_stays_visible_beside_the_scored_one(self, ip):
+        assert ip._cell((0.9741, 2, 0.9083)).startswith("0.9741 rank=2")
+        assert "[0.9083]" in ip._cell((0.9741, 2, 0.9083))

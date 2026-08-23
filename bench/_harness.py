@@ -100,3 +100,40 @@ def misplaced(rows: list[tuple[str, str | None, int | None]]) -> list[str]:
     hit.
     """
     return [q for q, expect, rank in rows if expect is not None and rank != 1]
+
+
+def read_row(
+    results: list[dict], expect_id: str | None
+) -> tuple[float | None, int | None, float | None]:
+    """
+    The three numbers a row of a comparison table needs.
+
+    Returns (scored, rank, closest):
+
+      scored   the distance to the entry the operator NAMED, when they
+               named one and it came back. Otherwise the closest
+               distance, because there is nothing better to read.
+      rank     where the named entry landed, 1-based, or None.
+      closest  the first row's distance, always -- "what came back"
+               stays visible next to "what should have".
+
+    `scored` and `closest` differing is the whole point. An A/B on the
+    query instruction asks whether the RIGHT entry moved closer, and
+    the closest row is only the right entry when rank is 1. On
+    2026-08-23 "Tu peux me lister mon matériel ?" scored 0.9083
+    against an entry about tools while every hardware fact sat outside
+    the top 5, and that number was read as a mediocre hit.
+
+    When the named entry did not come back at all, `scored` falls back
+    to the closest row and `rank` is None -- the caller has to decide
+    what to do with a question it could not score, and `misplaced`
+    is what tells it which ones those are.
+    """
+    if not results:
+        return None, None, None
+    closest = results[0].get("distance")
+    rank = find_rank(results, None, expect_id)
+    if rank is None:
+        return closest, None, closest
+    scored = results[rank - 1].get("distance")
+    return scored, rank, closest
