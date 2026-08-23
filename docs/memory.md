@@ -134,6 +134,35 @@ predictable way: `!remember`/`!recall` print a one-line error instead of crashin
 REPL, `/remember`/`/search` return `502`, and the `memory` tool returns a `[error]`
 string the router treats as a normal (if unhelpful) tool result rather than a crash.
 
+### What does not get indexed
+
+Compaction indexes one entry per exchange — a user turn plus whatever answered it.
+That means the question is *inside* the entry, and an exchange whose reply says
+nothing is therefore a near-copy of its own question, which makes it the closest
+possible match for anyone asking it again. **The emptier the entry, the better it
+matches.** Measured on 2026-08-22: asked "Tu peux me lister mon matériel ?", the store
+returned an archived refusal at distance `0.4519` ahead of the entry that actually
+holds the hardware at `0.7891`.
+
+Two filters keep those out, and they are deliberately different in kind:
+
+- **the run says so.** A graph that ends without an answer reports it through
+  `forge/outcome.py`, and the exchange is written to `memory.json` with
+  `"answered": false`. Survives any change to the wording of the reply.
+- **the text says so.** `forge/non_answer.py` holds the fixed strings Forge writes
+  when it has nothing to say (`[error] `, `[no memory] `, `Tool error: `,
+  `Something went wrong: ` and the cutoff refusal). This is the only test available
+  to `rag_resplit`, whose input was written down long before any of this existed.
+
+Either one drops the **whole** exchange, question included. Dropping only the reply
+would leave an entry that is nothing but the question, which is the worst case rather
+than a smaller one.
+
+Neither catches a refusal the *model* phrased itself ("je n'ai pas cette
+information") — that is prose like any other, and a phrase list aimed at it would
+start dropping real answers. Failed turns stay in the conversation and on screen
+either way; this only decides what the vector store is allowed to hold.
+
 ### Reading and repairing the store
 
 `search` was the only reader this store ever had, and it is semantic by construction —
@@ -156,6 +185,10 @@ python bench/rag_dilution.py
 python deploy/rag_resplit.py                      # dry run, the default
 python deploy/rag_resplit.py --apply --backup /tmp/forge_rag.db.bak
 ```
+
+A dry run prints every unit it would leave out as a non-answer, and lists the ids of
+entries that turn out to be a refusal and nothing else. Those are reported, never
+deleted — `!forget <id>` is the deliberate step.
 
 `rag_resplit` rewrites rows in place and there is no undo — take the backup. It inserts
 the pieces before deleting the block, so an interrupted run leaves a visible duplicate
