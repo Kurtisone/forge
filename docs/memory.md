@@ -197,11 +197,49 @@ overlap.** The semantic hit improved by 0.108; the two that got worse are the tw
 that were scoring on overlap, and one of them is a miss that was supposed to move
 away.
 
+Read those two rows with one caveat: at the time they were produced, the harness
+scored a hit on whatever row came back first rather than on the entry `--expect`
+named, so a question whose answer was outside the top 5 contributed the distance
+to something else. The mechanism story is unaffected — it rests on the direction
+each question moved, not on the size of the gap — but the **+0.0544** is not a
+number to calibrate anything against. Re-run `bench/instruct_prefix.py` for that;
+it reads the named entry now.
+
 Set `EMBEDDING_QUERY_INSTRUCT=` (empty) for an embedding model that is not
 instruction-aware — for those it is noise glued to every search.
 
-**`RECALL_MAX_DISTANCE` must be recalibrated after changing this.** The 0.95 was
-measured on unprefixed queries and means something else now.
+### A threshold belongs to the regime it was measured in
+
+`RECALL_MAX_DISTANCE` may carry the embedding configuration it was calibrated
+against, as `0.95@e3b0c4`, where the tag is `rag.query_fingerprint()` — six hex
+characters over the whole query wrapper, so changing the instruction *or* the
+`Instruct:/Query:` shape around it is a change of regime.
+
+| tag | what happens |
+|---|---|
+| matches | used, silently |
+| missing | used, with a startup warning naming the fingerprint to write back |
+| stale | **cutoff off**, loudly |
+
+Off rather than adjusted: a number from another regime is not too high or too
+low, it is unrelated, and the two ways of being wrong are not symmetric. Too high
+lets a bad answer through and a bad answer gets argued with; too low answers "je
+n'ai rien en mémoire" while the entry is sitting in the store, and that gets
+believed.
+
+This is not a hypothetical rule. The 0.95 in `.env.example` was measured on raw
+queries, the query instruction shipped on by default the next day, and in the new
+regime the best miss came back at 0.9495 — *under* the cutoff. The filter that had
+been validated in real use had quietly stopped cutting the case it was validated
+on. `.env.example` therefore ships `0.95@e3b0c4` (`e3b0c4` being "no
+instruction"), which means a default deployment starts with the cutoff
+deliberately inert and a line in the log explaining why. Re-measure against a copy
+of your own store, then write the value back with the fingerprint the warning
+prints.
+
+The limit, stated plainly: this fingerprints what Forge controls. Swapping the
+embedding model behind the same `EMBEDDING_URL` moves every distance in the store
+and leaves the tag identical.
 
 ### Reading and repairing the store
 
@@ -217,6 +255,9 @@ Two harnesses go with it, both writing to their own database and never to
 ```bash
 # what distance a good hit sits at, on this box, with this embedding model
 python bench/recall_distance.py
+
+# whether the query instruction helps on this store (needs --expect ids)
+python bench/instruct_prefix.py --db /tmp/copy.db --hit "..." --expect 308 --miss "..."
 
 # what burying a sentence in a compacted block costs
 python bench/rag_dilution.py
