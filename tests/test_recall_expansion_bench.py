@@ -352,3 +352,34 @@ def test_a_draw_with_no_usable_rewrites_counts_as_the_worst(store, monkeypatch):
 
     assert variants == []
     assert results == []
+
+
+def test_a_rescue_that_answers_with_another_entry_is_counted(store, monkeypatch):
+    """
+    The outcome the counts had no name for. On 2026-08-24 the rescue
+    put #307 at 0.9435 while something else came in at 0.8777 --
+    inside the cutoff, ahead of it. In the deployment the question
+    stops being refused and starts being answered out of the wrong
+    entry, and the verdict printed FALSE RESCUES 0 because it only
+    looked at the misses.
+    """
+    rows = [
+        {"id": 212, "distance": 0.8777, "content": "un échange archivé"},
+        {"id": 307, "distance": 0.9435, "content": "Matériel : NiPoGi"},
+    ]
+
+    found = recall_expansion._intruder(rows, "307", 0.88)
+
+    assert found["id"] == 212
+
+
+def test_the_named_entry_is_never_its_own_intruder(store):
+    rows = [{"id": 307, "distance": 0.72, "content": "Matériel : NiPoGi"}]
+
+    assert recall_expansion._intruder(rows, "307", 0.88) is None
+
+
+def test_nothing_within_the_cutoff_is_no_intruder(store):
+    rows = [{"id": 212, "distance": 0.95, "content": "loin"}]
+
+    assert recall_expansion._intruder(rows, "307", 0.88) is None

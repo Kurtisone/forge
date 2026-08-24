@@ -23,9 +23,18 @@ So the verdict is counted in questions, against a cutoff:
     already found  the expected entry was within the cutoff to begin
                    with. The expansion costs these nothing and does
                    nothing for them.
+    wrong entry    the rescue FIRED on a hit and answered with
+                   something that is not the named entry. The worst
+                   outcome there is: a refusal replaced by a fluent
+                   wrong answer, on a question whose answer exists.
     false rescue   a --miss that was correctly refused, and is not
-                   refused any more. This is the price, and it is the
-                   number that decides whether to ship the mode on.
+                   refused any more. Same failure, from the side where
+                   no right answer existed at all.
+
+The last two are the price, and they are what decides whether to ship
+a mode on. An intruder counted here also goes into the rescue regime
+below, on the MISS side, because that is what it is: an entry a cutoff
+for this pass would have to exclude.
 
 OUT OF REACH IS THE INTERESTING ROW
 
@@ -133,6 +142,25 @@ def _within(distance: float | None, cutoff: float) -> bool:
 def _closest_within(results: list[dict], cutoff: float) -> bool:
     """Would the cutoff have kept anything at all from this list?"""
     return any(_within(r.get("distance"), cutoff) for r in results)
+
+
+def _intruder(results: list[dict], expect: str | None, cutoff: float) -> dict | None:
+    """
+    The nearest row within the cutoff that is NOT the named entry.
+
+    This is the outcome the counts had no name for. On 2026-08-24 the
+    rescue put #307 at 0.9435 on 'Tu peux me lister mon matériel ?'
+    while something else came in at 0.8777 -- inside the cutoff, ahead
+    of it. In the deployment that question stops being refused and
+    starts being answered, out of the wrong entry, and the harness
+    printed FALSE RESCUES 0 because it only ever looked at the misses.
+    """
+    for row in sorted(results, key=lambda r: r.get("distance") or 0.0):
+        if expect is not None and str(row.get("id")) == str(expect):
+            continue
+        if _within(row.get("distance"), cutoff):
+            return row
+    return None
 
 
 def _expected_within(results: list[dict], expect: str | None, cutoff: float) -> bool:
@@ -350,7 +378,10 @@ def main() -> int:
     ] * len(args.hit)
     conn = rag.get_connection()
 
-    tallies = {mode: {k: 0 for k in ("rescued", "missed", "false")} for mode in modes}
+    tallies = {
+        mode: {k: 0 for k in ("rescued", "wrong", "missed", "false")} for mode in modes
+    }
+    intruders: dict[str, list[tuple[str, dict]]] = {mode: [] for mode in modes}
     # Only questions where the rescue actually FIRES land here. The
     # rest are not in this regime at all.
     regime: dict[str, dict[str, list[tuple[str, float]]]] = {
@@ -415,9 +446,22 @@ def main() -> int:
                     tallies[mode]["rescued"] += 1
                 else:
                     tallies[mode]["missed"] += 1
+
                 found = _distance_of(results, expect)
                 if found is not None:
                     regime[mode]["hits"].append((question, found))
+
+                # Counted whether or not the named entry also came
+                # back: an intruder ahead of it decides the answer.
+                gatecrasher = _intruder(results, expect, cutoff)
+                if gatecrasher is not None:
+                    tallies[mode]["wrong"] += 1
+                    intruders[mode].append((question, gatecrasher))
+                    distance = gatecrasher.get("distance")
+                    if isinstance(distance, float):
+                        regime[mode]["misses"].append(
+                            (f"{question[:34]} -> #{gatecrasher.get('id')}", distance)
+                        )
 
         print("\nMISSES  (nothing should come back within the cutoff)")
         for question in args.miss:
@@ -482,9 +526,16 @@ def main() -> int:
     for mode in modes:
         counts = tallies[mode]
         print(
-            f"  {mode:<6} rescued {counts['rescued']} | still missed "
-            f"{counts['missed']} | FALSE RESCUES {counts['false']}"
+            f"  {mode:<6} rescued {counts['rescued']} | WRONG ENTRY "
+            f"{counts['wrong']} | still missed {counts['missed']} | "
+            f"FALSE RESCUES {counts['false']}"
         )
+        for question, row in intruders[mode]:
+            distance = row.get("distance")
+            marker = f"{distance:.4f}" if isinstance(distance, float) else "  --  "
+            shown = " ".join(str(row.get("content", "")).split())[:56]
+            print(f"           {question[:44]}")
+            print(f"             answered with #{row.get('id')} at {marker}  {shown}")
 
     for mode in modes:
         _print_regime(mode, regime[mode], cutoff)
