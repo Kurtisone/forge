@@ -286,16 +286,17 @@ class TestWhatTheLogSays:
 
 def test_the_prompt_forbids_guessing_a_product_name():
     """
-    Measured 2026-08-24. Asked "Qu'est-ce que j'utilise comme
-    conteneurs ?", the model rewrote it as ['conteneurs Docker',
-    'machines virtuelles', 'conteneurs Kubernetes'] -- two brands the
-    question never mentioned, on a store whose answer says podman. The
-    fact that answers came back at 1.0480, pushed away by the
-    expansion that was supposed to find it.
+    Measured 2026-08-24 and then measured again. Asked "Qu'est-ce que
+    j'utilise comme conteneurs ?", the model rewrote it with two
+    brands the question never mentioned, on a store whose answer says
+    podman -- so the expansion searched for the wrong ecosystem and
+    pushed the fact that answers from 1.0400 to 1.0760.
 
-    Nothing structural can stop a guess; the grammar cannot know which
-    words are brands. The prompt names the failure instead, with the
-    case that produced it.
+    The first attempt at a rule NAMED those two brands as the thing
+    not to write. They came back anyway, in every draw, and the prompt
+    grew 75 tokens for it. Naming the wrong answer put the wrong
+    answer in front of the model; the rule is positive now, and says
+    where the nouns may come from instead of which ones are banned.
     """
-    assert "Docker" in expansion._PROMPT
-    assert "Kubernetes" in expansion._PROMPT
+    assert "Docker" not in expansion._PROMPT
+    assert "comes from the question" in expansion._PROMPT
