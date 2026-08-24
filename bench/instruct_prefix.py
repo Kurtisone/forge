@@ -34,14 +34,29 @@ amount has done nothing -- distances are only meaningful against each
 other. What would count as a win is the gap widening, or a hit that
 was outranked by noise coming back to rank 1.
 
-    podman exec forge sh -c 'rm -rf /tmp/arm && mkdir -p /tmp/arm'
-    podman cp src forge:/tmp/arm/
-    podman cp bench/instruct_prefix.py forge:/tmp/arm/
-    podman exec forge cp /app/data/forge_rag.db /tmp/real_copy.db
-    podman exec -it forge python /tmp/arm/instruct_prefix.py \\
-        --db /tmp/real_copy.db \\
+A hit is scored on the entry --expect NAMES, not on whatever came back
+first, and those are different numbers whenever rank is not 1. This is
+the one place this harness deliberately reads differently from
+recall_distance.py, which keeps the closest row and warns: that file
+is calibrating a cutoff, and a cutoff acts on whatever the store
+returns. This one is asking whether the instruction moved THE RIGHT
+ENTRY, and comparing the distance to an unrelated row in one column
+against the distance to the answer in the other measures nothing at
+all. The closest row is still printed in brackets, because an archived
+refusal outranking the answer is exactly the failure this store has.
+
+Without --expect there is nothing to name, so the hit column falls
+back to the closest row and the verdict says so. A question you cannot
+score is a question this harness should not be quietly averaging in.
+
+    bench/in_container.sh instruct_prefix --db /tmp/real_copy.db \\
         --hit "Quel processeur a mon NiPoGi ?" --expect 308 \\
         --miss "Comment s'appelle mon chat ?"
+
+The six-command copy dance lives in bench/in_container.sh now -- the
+faults in it are silent (a merged /tmp/arm holding two checkouts, a
+harness pointed at the real store) and it was duplicated across every
+file here.
 
 Read-only. It never writes to the database it is given, but pass a
 copy anyway -- the habit is what keeps a benchmark out of production.
@@ -51,8 +66,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
+
+from _harness import placeholders, read_row, split_misplaced
 
 # The task description Qwen's format expects. Theirs is written for
 # web search; this one says what Forge actually stores, because the
@@ -62,8 +78,6 @@ DEFAULT_INSTRUCT = (
     "Given a question asked in conversation, retrieve the stored facts, "
     "decisions and past exchanges that answer it"
 )
-
-_PLACEHOLDER = re.compile(r"[<>]|\.\.\.|^\s*$|\bTODO\b|\bXXX\b")
 
 
 class _instruct:
@@ -96,16 +110,32 @@ class _instruct:
         return False
 
 
-def _row(results: list[dict], expect: str | None) -> tuple[float | None, int | None]:
-    if not results:
-        return None, None
-    rank = None
-    if expect is not None:
-        rank = next(
-            (i + 1 for i, r in enumerate(results) if str(r.get("id")) == str(expect)),
-            None,
-        )
-    return results[0].get("distance"), rank
+def _cell(row: tuple[float | None, int | None, float | None]) -> str:
+    """One column of one line: what the named entry scored, and what won."""
+    scored, rank, closest = row
+    if scored is None:
+        return f"{'--':<24}"
+    rank_text = "-" if rank is None else str(rank)
+    return f"{scored:.4f} rank={rank_text:<3} [{closest:.4f}]"
+
+
+def _scoreable(
+    expect: str | None, row: tuple[float | None, int | None, float | None]
+) -> bool:
+    """
+    Whether this question's distance may go into the gap.
+
+    An expectation that came back at any rank is scored on that row.
+    An expectation that did not come back at all is not scored at all:
+    read_row falls back to the closest distance so the line still
+    prints, and averaging that into the verdict is precisely the fault
+    that made the sibling harness announce a gap "too tight to act on"
+    about a threshold that was fine.
+    """
+    scored, rank, _ = row
+    if not isinstance(scored, float):
+        return False
+    return rank is not None or expect is None
 
 
 def main() -> int:
@@ -118,7 +148,7 @@ def main() -> int:
     parser.add_argument("--miss", action="append", default=[], metavar="QUESTION")
     args = parser.parse_args()
 
-    bad = [q for q in args.hit + args.miss if _PLACEHOLDER.search(q)]
+    bad = placeholders(args.hit + args.miss)
     if bad:
         print("these look like unfilled placeholders, not questions:")
         for q in bad:
@@ -143,58 +173,106 @@ def main() -> int:
     expects = args.expect or [None] * len(args.hit)
     conn = rag.get_connection()
     raw_hits, pre_hits, raw_misses, pre_misses = [], [], [], []
+    raw_rows, pre_rows = [], []
 
     try:
         print(f"instruction: {args.instruct!r}\n")
-        print(f"{'':<44} {'RAW':<18} {'PREFIXED':<18}")
-        print("=" * 82)
+        print(f"{'':<44} {'RAW':<24} {'PREFIXED':<24}")
+        print("=" * 94)
 
-        print("HITS")
+        print("HITS  (distance to the --expect entry, [closest row] beside it)")
         for question, expect in zip(args.hit, expects):
             with _instruct(rag, ""):
-                r_raw = rag.search(conn, query=question, top_k=args.top_k)
+                raw = read_row(
+                    rag.search(conn, query=question, top_k=args.top_k), expect
+                )
             with _instruct(rag, args.instruct):
-                r_pre = rag.search(conn, query=question, top_k=args.top_k)
-            d_raw, k_raw = _row(r_raw, expect)
-            d_pre, k_pre = _row(r_pre, expect)
-            if isinstance(d_raw, float):
-                raw_hits.append(d_raw)
-            if isinstance(d_pre, float):
-                pre_hits.append(d_pre)
-            print(
-                f"  {question[:42]:<42} "
-                f"{d_raw:.4f} rank={k_raw!s:<5} "
-                f"{d_pre:.4f} rank={k_pre!s:<5}"
-            )
-            if expect is not None and k_raw != k_pre:
-                print(f"       #{expect} moved: rank {k_raw} -> {k_pre}")
+                pre = read_row(
+                    rag.search(conn, query=question, top_k=args.top_k), expect
+                )
+            raw_rows.append((question, expect, raw[1]))
+            pre_rows.append((question, expect, pre[1]))
+            # Both columns or neither. A question scored in one and
+            # dropped from the other would make the gap a comparison
+            # between two different sets of questions, which is the
+            # same class of mistake as comparing two different rows.
+            if _scoreable(expect, raw) and _scoreable(expect, pre):
+                raw_hits.append(raw[0])
+                pre_hits.append(pre[0])
+            print(f"  {question[:42]:<42} {_cell(raw)} {_cell(pre)}")
+            if expect is not None and raw[1] != pre[1]:
+                print(f"       #{expect} moved: rank {raw[1]} -> {pre[1]}")
 
         print("\nMISSES  (further is better here)")
         for question in args.miss:
             with _instruct(rag, ""):
-                d_raw, _ = _row(
-                    rag.search(conn, query=question, top_k=args.top_k), None
-                )
+                raw = read_row(rag.search(conn, query=question, top_k=args.top_k), None)
             with _instruct(rag, args.instruct):
-                d_pre, _ = _row(
-                    rag.search(conn, query=question, top_k=args.top_k), None
-                )
-            if isinstance(d_raw, float):
-                raw_misses.append(d_raw)
-            if isinstance(d_pre, float):
-                pre_misses.append(d_pre)
-            print(f"  {question[:42]:<42} {d_raw:.4f}{'':<12} {d_pre:.4f}")
+                pre = read_row(rag.search(conn, query=question, top_k=args.top_k), None)
+            if isinstance(raw[0], float):
+                raw_misses.append(raw[0])
+            if isinstance(pre[0], float):
+                pre_misses.append(pre[0])
+            print(f"  {question[:42]:<42} {_cell(raw)} {_cell(pre)}")
+
+        # Two states under one warning is how a reader draws the
+        # wrong conclusion from a correct message. Second place is
+        # scored and counted; absent is not scoreable at all. The
+        # first version printed both under one heading whose
+        # explanation only covered the second, so a question that WAS
+        # in the verdict read as though it had been thrown out.
+        outranked, absent = split_misplaced(raw_rows + pre_rows)
+        if outranked:
+            print("\n  /!\\ named entry came back, but not first, for:")
+            for question in outranked:
+                print(f"        {question}")
+            print("      Still scored on the right row, so these ARE in the")
+            print("      verdict. Something else in the store is closer to the")
+            print("      question than the entry that answers it -- the bracket")
+            print("      shows what.")
+        if absent:
+            print("\n  /!\\ named entry did not come back AT ALL for:")
+            for question in absent:
+                print(f"        {question}")
+            print("      Left out of the verdict: there is no distance to the")
+            print("      right row to compare. Fix retrieval before reading this.")
+        if not args.expect:
+            print("\n  No --expect given, so the hit column is whatever came back")
+            print("  first, which is the right entry only when it is. This store")
+            print("  holds archived exchanges that contain the question, and they")
+            print("  outrank the answer; name the entries.")
     finally:
         conn.close()
 
-    if not (raw_hits and raw_misses and pre_hits and pre_misses):
+    if not (raw_misses and pre_misses):
         print("\nno distances came back -- is the embedding server up?")
+        return 1
+    if not (raw_hits and pre_hits):
+        # Distances came back; none of them were about the entry that
+        # was supposed to answer. Printing a gap here would be a
+        # number about the wrong rows, which is the fault this harness
+        # was carrying.
+        print("\nno hit could be scored: every --expect entry was missing from")
+        print("its results. There is no gap to report -- this is a retrieval")
+        print("failure, and a threshold is not what fixes it.")
         return 1
 
     gap_raw = min(raw_misses) - max(raw_hits)
     gap_pre = min(pre_misses) - max(pre_hits)
 
     print("\n=== VERDICT ===")
+    if len(raw_hits) < 3 or len(raw_misses) < 3:
+        # recall_distance refuses outright below three of each, and it
+        # is right to: it hands back a threshold, and a threshold from
+        # two points is a coin flip with a decimal place. This one
+        # reports a DIRECTION, which survives a thin sample better --
+        # the 2026-08-23 result was trustworthy because all six
+        # questions moved the way one mechanism predicts, not because
+        # of the size of the gap. So: said out loud, not refused.
+        print(
+            f"  (on {len(raw_hits)} scored hit(s) and {len(raw_misses)} miss(es) "
+            "-- read the direction, not the number)"
+        )
     print(
         f"  raw       worst hit {max(raw_hits):.4f} | best miss "
         f"{min(raw_misses):.4f} | gap {gap_raw:+.4f}"

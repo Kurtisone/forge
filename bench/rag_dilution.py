@@ -47,10 +47,12 @@ RUNNING IT
 
 Needs the embedding server (forge-embedding), nothing else.
 
-    podman exec forge sh -c 'rm -rf /tmp/arm && mkdir -p /tmp/arm'
-    podman cp src forge:/tmp/arm/
-    podman cp bench/rag_dilution.py forge:/tmp/arm/
-    podman exec -it forge python /tmp/arm/rag_dilution.py
+    bench/in_container.sh rag_dilution
+
+The six-command copy dance lives in bench/in_container.sh now -- the
+faults in it are silent (a merged /tmp/arm holding two checkouts, a
+harness pointed at the real store) and it was duplicated across every
+file here.
 
 It writes to a SEPARATE database (--db, default /tmp/rag_dilution.db)
 and never touches data/forge_rag.db, for the same reason

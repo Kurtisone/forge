@@ -15,6 +15,7 @@ data/forge_rag.db) with two tables --
                    virtual table).
 """
 
+import hashlib
 import math
 import sqlite3
 from datetime import UTC, datetime
@@ -344,6 +345,31 @@ def _as_query(text: str) -> str:
     if not instruct:
         return text
     return f"Instruct: {instruct}\nQuery: {text}"
+
+
+def query_fingerprint() -> str:
+    """
+    Six hex characters naming the query-side transform in force.
+
+    Distances are only comparable within one embedding
+    configuration. A threshold measured before
+    EMBEDDING_QUERY_INSTRUCT was set means something else after it is,
+    and nothing in the code noticed: on 2026-08-23 the instruction
+    shipped on by default while .env.example kept a cutoff measured on
+    raw queries, sitting above the best miss of the new regime. The
+    only thing that said so was a comment.
+
+    Hashing _as_query("") rather than the setting itself covers the
+    whole wrapper -- the instruction AND the "Instruct:/Query:" shape
+    around it -- so a change to either is a change of regime.
+
+    LIMIT, and it is not a small one: this fingerprints what Forge
+    controls. Swapping the embedding model behind the same
+    EMBEDDING_URL changes every distance in the store and leaves this
+    string identical. Re-measure after that too; nothing here will
+    remind you.
+    """
+    return hashlib.sha256(_as_query("").encode("utf-8")).hexdigest()[:6]
 
 
 def search(

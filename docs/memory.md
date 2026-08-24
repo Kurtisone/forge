@@ -197,11 +197,67 @@ overlap.** The semantic hit improved by 0.108; the two that got worse are the tw
 that were scoring on overlap, and one of them is a miss that was supposed to move
 away.
 
+Read those two rows with one caveat: at the time they were produced, the harness
+scored a hit on whatever row came back first rather than on the entry `--expect`
+named, so a question whose answer was outside the top 5 contributed the distance
+to something else. The mechanism story is unaffected — it rests on the direction
+each question moved, not on the size of the gap — but the **+0.0544** is not a
+number to calibrate anything against. Re-run `bench/instruct_prefix.py` for that;
+it reads the named entry now.
+
 Set `EMBEDDING_QUERY_INSTRUCT=` (empty) for an embedding model that is not
 instruction-aware — for those it is noise glued to every search.
 
-**`RECALL_MAX_DISTANCE` must be recalibrated after changing this.** The 0.95 was
-measured on unprefixed queries and means something else now.
+### A threshold belongs to the regime it was measured in
+
+`RECALL_MAX_DISTANCE` may carry the embedding configuration it was calibrated
+against, as `0.95@e3b0c4`, where the tag is `rag.query_fingerprint()` — six hex
+characters over the whole query wrapper, so changing the instruction *or* the
+`Instruct:/Query:` shape around it is a change of regime.
+
+| tag | what happens |
+|---|---|
+| matches | used, silently |
+| missing | used, with a startup warning naming the fingerprint to write back |
+| stale | **cutoff off**, loudly |
+
+Off rather than adjusted: a number from another regime is not too high or too
+low, it is unrelated, and the two ways of being wrong are not symmetric. Too high
+lets a bad answer through and a bad answer gets argued with; too low answers "je
+n'ai rien en mémoire" while the entry is sitting in the store, and that gets
+believed.
+
+This is not a hypothetical rule. The 0.95 that used to be in `.env.example` was
+measured on raw queries, the query instruction shipped on by default the next day,
+and in the new regime the best miss came back at 0.9495 — *under* the cutoff. The
+filter that had been validated in real use had quietly stopped cutting the case it
+was validated on.
+
+Re-measured 2026-08-24 in the regime that actually ships — six real questions,
+known answers, hits scored on the entry `--expect` names:
+
+| | distance |
+|---|---|
+| hits | 0.7289 (`#308`), 0.6640 (`#17`), 0.6469 (`#309`) |
+| misses | 0.9495, 1.0451, 1.1578 |
+| gap | **0.2206** |
+
+`.env.example` ships `0.88@a5c47b` from that run: above the 0.8392 midpoint,
+because real entries are longer and messier than fixtures and the room belongs
+above the hits.
+
+**One thing the tag cannot tell you.** It catches a change of embedding
+configuration. It does not catch the number having been measured on somebody
+else's store — keep the default instruction and your fingerprint matches the one
+that ships, so an inherited 0.88 engages silently on data it has never seen. A
+store of a different size, language or subject puts its hits somewhere else.
+Comment the line out for no filtering at all, which is the safe starting point,
+and run the harness against a copy of your own store to earn a number of your
+own.
+
+The limit, stated plainly: this fingerprints what Forge controls. Swapping the
+embedding model behind the same `EMBEDDING_URL` moves every distance in the store
+and leaves the tag identical.
 
 ### Reading and repairing the store
 
@@ -211,15 +267,23 @@ you cannot ask it what is *in* there without already having a question. `GET /me
 embedding call at all, and report the breakdown by `kind`. `!forget <id>` /
 `DELETE /memory/{id}` remove one entry from both tables.
 
-Two harnesses go with it, both writing to their own database and never to
-`data/forge_rag.db`:
+Three harnesses go with it, none of which ever writes to
+`data/forge_rag.db`. `bench/in_container.sh` copies the checkout and a fresh copy
+of the store into the container and runs one of them there — it is the six-command
+`podman cp` sequence that used to sit at the top of each file, where forgetting a
+line was silent:
 
 ```bash
 # what distance a good hit sits at, on this box, with this embedding model
-python bench/recall_distance.py
+bench/in_container.sh recall_distance
+
+# whether the query instruction helps on this store (needs --expect ids)
+bench/in_container.sh instruct_prefix --db /tmp/real_copy.db \
+    --hit "Quel processeur a mon NiPoGi ?" --expect 308 \
+    --miss "Comment s'appelle mon chat ?"
 
 # what burying a sentence in a compacted block costs
-python bench/rag_dilution.py
+bench/in_container.sh rag_dilution
 
 # one-shot: re-slice blocks written before the per-exchange intake
 python deploy/rag_resplit.py                      # dry run, the default

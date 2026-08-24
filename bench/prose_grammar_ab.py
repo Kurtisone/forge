@@ -34,14 +34,12 @@ rather than copied: a harness that reimplements production's cleaning
 measures a path production does not use, which has already cost a
 finding on this repo twice.
 
-    podman exec forge sh -c 'rm -rf /tmp/arm && mkdir -p /tmp/arm'
-    podman cp src forge:/tmp/arm/
-    podman cp bench/prose_grammar_ab.py forge:/tmp/arm/
-    podman exec -it forge python /tmp/arm/prose_grammar_ab.py --repeat 2
+    bench/in_container.sh prose_grammar_ab --repeat 2
 
-The rm -rf is not cosmetic: podman cp MERGES into an existing
-directory instead of replacing it, so without it the run is a mixture
-of two checkouts.
+The six-command copy dance lives in bench/in_container.sh now -- the
+faults in it are silent (a merged /tmp/arm holding two checkouts, a
+harness pointed at the real store) and it was duplicated across every
+file here.
 
 Columns:
 
