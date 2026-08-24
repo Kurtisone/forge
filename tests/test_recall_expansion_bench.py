@@ -169,3 +169,66 @@ def test_no_cutoff_anywhere_is_refused(store, capsys, monkeypatch):
 def test_a_missing_store_is_refused(tmp_path, capsys):
     assert _run(tmp_path / "nowhere.db", "--cutoff", "0.88", "--hit", "q") == 1
     assert "does not exist" in capsys.readouterr().out
+
+
+def test_the_rescue_regime_is_reported_separately(store, capsys):
+    """
+    A variant is a short phrase and the question it replaced was a
+    sentence, so the whole distribution moves. Scoring the rescue pass
+    with the first-pass cutoff compares it against a scale it was not
+    measured on -- the fault docs/memory.md already names about the
+    threshold itself.
+    """
+    _run(
+        store,
+        "--cutoff",
+        "0.88",
+        "--mode",
+        "llm",
+        "--hit",
+        "Tu peux me lister mon matériel ?",
+        "--expect",
+        "1",
+        "--miss",
+        "Comment s'appelle mon chat ?",
+    )
+
+    out = capsys.readouterr().out
+    assert "the rescue regime" in out
+    assert "gap" in out
+
+
+def test_it_refuses_to_name_a_cutoff_on_two_questions(store, capsys):
+    """
+    Three a side, as recall_distance asks for, and for the same
+    reason: a gap over two numbers is an anecdote with a decimal point
+    on it.
+    """
+    _run(
+        store,
+        "--cutoff",
+        "0.88",
+        "--mode",
+        "llm",
+        "--hit",
+        "Tu peux me lister mon matériel ?",
+        "--expect",
+        "1",
+        "--miss",
+        "Comment s'appelle mon chat ?",
+    )
+
+    out = capsys.readouterr().out
+    assert "anecdote" in out or "overlap" in out
+
+
+def test_a_named_entry_that_never_came_back_is_not_a_distance(store):
+    """
+    read_row falls back to the closest row so the table always has a
+    number in it. That fallback is exactly wrong for a verdict: an
+    entry that never came back is not an entry at a distance.
+    """
+    rows = [{"id": 7, "distance": 0.4}]
+
+    assert recall_expansion._distance_of(rows, "308") is None
+    assert recall_expansion._distance_of(rows, "7") == 0.4

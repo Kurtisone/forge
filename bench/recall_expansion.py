@@ -68,6 +68,11 @@ from _harness import placeholders, read_row, split_misplaced
 
 _MODES = ("terms", "llm")
 
+# The floor bench/recall_distance.py works to, for the same reason:
+# one hit and one miss produce a gap, and a gap over two numbers is an
+# anecdote with a decimal point on it.
+_MIN_QUESTIONS = 3
+
 
 def _cell(row: tuple[float | None, int | None, float | None]) -> str:
     """scored (rank) [closest] -- the three numbers, in one column."""
@@ -76,6 +81,30 @@ def _cell(row: tuple[float | None, int | None, float | None]) -> str:
         return f"{'--':<22}"
     rank_text = f"r{rank}" if rank else "r?"
     return f"{f'{scored:.4f} {rank_text:<3} [{closest:.4f}]':<22}"
+
+
+def _distance_of(results: list[dict], expect: str | None) -> float | None:
+    """
+    The named entry's distance, or None when it is not in the list.
+
+    read_row falls back to the closest row so a table always has a
+    number in it. That fallback is exactly wrong for a verdict: an
+    entry that never came back is not an entry at a distance, and
+    averaging one into a threshold is how a cutoff ends up measured
+    against whatever happened to be nearby.
+    """
+    if expect is None:
+        return None
+    for row in results:
+        if str(row.get("id")) == str(expect):
+            distance = row.get("distance")
+            return distance if isinstance(distance, float) else None
+    return None
+
+
+def _closest(results: list[dict]) -> float | None:
+    distances = [r["distance"] for r in results if isinstance(r.get("distance"), float)]
+    return min(distances) if distances else None
 
 
 def _within(distance: float | None, cutoff: float) -> bool:
@@ -92,6 +121,64 @@ def _expected_within(results: list[dict], expect: str | None, cutoff: float) -> 
         if expect is not None and str(row.get("id")) == str(expect):
             return _within(row.get("distance"), cutoff)
     return False
+
+
+def _print_regime(
+    mode: str, rows: dict[str, list[tuple[str, float]]], cutoff: float
+) -> None:
+    """
+    The distances the RESCUE saw, which are not the ones the cutoff was
+    measured against.
+
+    A variant is a short phrase and the question it replaced was a
+    sentence, so the whole distribution moves -- an entry a well-worded
+    question finds at 0.73 can be the same entry a rephrasing finds at
+    0.98. Scoring the rescue pass with RECALL_MAX_DISTANCE compares it
+    against a scale it was not measured on, which is the fault
+    docs/memory.md already names one section earlier about the
+    threshold itself.
+
+    So this prints what a cutoff FOR THIS PASS would have to separate,
+    and refuses to name one on fewer than three questions a side.
+    """
+    hits, misses = rows["hits"], rows["misses"]
+    if not hits and not misses:
+        return
+
+    print(f"\n  --- the rescue regime, {mode} ---")
+    print("      distances the rephrasings saw, on the questions where the")
+    print(f"      rescue actually fired. NOT the scale {cutoff} was measured on.")
+    for question, distance in sorted(hits, key=lambda r: -r[1]):
+        print(f"      hit    {distance:.4f}  {question[:52]}")
+    for question, distance in sorted(misses, key=lambda r: r[1]):
+        print(f"      miss   {distance:.4f}  {question[:52]}")
+
+    if not hits or not misses:
+        print("      (need both sides to say anything)")
+        return
+
+    worst_hit, best_miss = max(d for _, d in hits), min(d for _, d in misses)
+    gap = best_miss - worst_hit
+    print(f"      gap    {gap:+.4f}")
+
+    if gap <= 0:
+        print("      The two overlap: no cutoff for this pass admits the hits")
+        print("      and refuses the misses. More rephrasings will not fix that;")
+        print("      it is the rescue telling you it cannot be made safe here.")
+    elif len(hits) < _MIN_QUESTIONS or len(misses) < _MIN_QUESTIONS:
+        print(
+            f"      Positive, on {len(hits)} hit(s) and {len(misses)} miss(es). "
+            f"Not enough to place\n      a number -- {_MIN_QUESTIONS} a side, as "
+            "recall_distance asks for, and for\n      the same reason: a gap over "
+            "two numbers is an anecdote."
+        )
+    else:
+        print(f"      A cutoff for this pass would sit above {worst_hit:.4f} and")
+        print(
+            f"      below {best_miss:.4f} -- midpoint {(worst_hit + best_miss) / 2:.4f},"
+        )
+        print("      and the room belongs above the hits, as it does for the")
+        print("      first-pass threshold.")
 
 
 def main() -> int:
@@ -159,6 +246,11 @@ def main() -> int:
     conn = rag.get_connection()
 
     tallies = {mode: {k: 0 for k in ("rescued", "missed", "false")} for mode in modes}
+    # Only questions where the rescue actually FIRES land here. The
+    # rest are not in this regime at all.
+    regime: dict[str, dict[str, list[tuple[str, float]]]] = {
+        mode: {"hits": [], "misses": []} for mode in modes
+    }
     out_of_reach: list[str] = []
     already_found: list[str] = []
     miss_already_answered: list[str] = []
@@ -215,6 +307,9 @@ def main() -> int:
                     tallies[mode]["rescued"] += 1
                 else:
                     tallies[mode]["missed"] += 1
+                found = _distance_of(results, expect)
+                if found is not None:
+                    regime[mode]["hits"].append((question, found))
 
         print("\nMISSES  (nothing should come back within the cutoff)")
         for question in args.miss:
@@ -233,6 +328,9 @@ def main() -> int:
                 line += f" {_cell(read_row(results, None))}"
                 if fires and _closest_within(results, cutoff):
                     tallies[mode]["false"] += 1
+                nearest = _closest(results)
+                if fires and nearest is not None:
+                    regime[mode]["misses"].append((question, nearest))
             print(line)
             if not fires:
                 miss_already_answered.append(question)
@@ -282,6 +380,9 @@ def main() -> int:
             f"  {mode:<6} rescued {counts['rescued']} | still missed "
             f"{counts['missed']} | FALSE RESCUES {counts['false']}"
         )
+
+    for mode in modes:
+        _print_regime(mode, regime[mode], cutoff)
 
     print(
         "\n  Read the last column first. A rescue that answers two questions and\n"
