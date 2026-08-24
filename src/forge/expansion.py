@@ -264,7 +264,24 @@ def variants(query: str, mode: str) -> list[str]:
         # A failed call therefore yields no variants and no rescue,
         # rather than a rescue built out of the rewrites that lost.
         # Unhelped, never wrong.
-        return keep(_from_llm(query), query)
+        proposed = _from_llm(query)
+        kept = keep(proposed, query)
+        log.event(
+            "recall.expansion_llm",
+            query=query[:120],
+            proposed=len(proposed),
+            kept=len(kept),
+            variants=[v[:80] for v in kept],
+        )
+        if proposed and not kept:
+            log.warning(
+                "expansion: every rephrasing was unusable, so there is nothing "
+                "to search with -- %r. A one-word rewrite matches everything "
+                "and answers nothing, and a rewrite identical to the question "
+                "is the question again.",
+                [p[:40] for p in proposed],
+            )
+        return kept
     log.warning(
         "unknown RECALL_EXPANSION=%r, expansion is off (expected one of: %s)",
         mode,
@@ -393,15 +410,14 @@ def _from_llm(query: str) -> list[str]:
         log.warning("expansion: could not read the rephrasings (%s): %r", e, raw[:200])
         return []
 
-    kept = [c for c in candidates if not _echoes_the_example(c, query)]
-    log.event(
-        "recall.expansion_llm",
-        query=query[:120],
-        proposed=len(candidates),
-        kept=len(kept),
-        variants=[c[:80] for c in kept],
-    )
-    return kept
+    # Deliberately NOT logged here. What this returns still has to
+    # pass `keep`, and on 2026-08-24 the model answered a question
+    # about containers with ["conteneurs", "conteneurs", "conteneurs"]
+    # -- three one-word rewrites, all dropped, while the log said
+    # kept=3 and the search that followed had nothing to search with.
+    # The count that means anything is the one taken after the
+    # filtering, so variants() does the logging.
+    return [c for c in candidates if not _echoes_the_example(c, query)]
 
 
 def _echoes_the_example(candidate: str, query: str) -> bool:

@@ -218,3 +218,56 @@ class TestLlmMode:
         monkeypatch.setattr(expansion, "call_llm", must_not_run)
 
         expansion.variants("Tu peux me lister mon matériel ?", "terms")
+
+
+class TestWhatTheLogSays:
+    def test_the_count_is_taken_after_the_filtering(self, monkeypatch, caplog):
+        """
+        Measured 2026-08-24: asked about containers, the model answered
+        ["conteneurs", "conteneurs", "conteneurs"]. All three were
+        dropped as one-word rewrites, the search that followed had
+        nothing to search with, and the log said kept=3.
+        """
+        monkeypatch.setattr(
+            expansion,
+            "call_llm",
+            lambda prompt, grammar=None: '["conteneurs", "conteneurs", "conteneurs"]',
+        )
+        events = []
+        monkeypatch.setattr(
+            expansion.log, "event", lambda name, **f: events.append((name, f))
+        )
+
+        assert (
+            expansion.variants("Qu'est-ce que j'utilise comme conteneurs ?", "llm")
+            == []
+        )
+
+        name, fields = events[-1]
+        assert name == "recall.expansion_llm"
+        assert fields["proposed"] == 3
+        assert fields["kept"] == 0
+
+    def test_a_collapse_to_nothing_is_said_out_loud(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            expansion,
+            "call_llm",
+            lambda prompt, grammar=None: '["conteneurs", "conteneurs", "conteneurs"]',
+        )
+
+        with caplog.at_level("WARNING"):
+            expansion.variants("Qu'est-ce que j'utilise comme conteneurs ?", "llm")
+
+        assert "nothing to search with" in caplog.text
+
+    def test_a_normal_call_says_nothing_alarming(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            expansion,
+            "call_llm",
+            lambda prompt, grammar=None: '["processeur mémoire disque"]',
+        )
+
+        with caplog.at_level("WARNING"):
+            expansion.variants("Tu peux me lister mon matériel ?", "llm")
+
+        assert "nothing to search with" not in caplog.text
