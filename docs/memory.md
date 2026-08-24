@@ -285,6 +285,43 @@ and it stays.
 | `terms` | strips the conversational frame and the stopwords. **Measured worse, four questions out of four** — see below. Kept so the finding stays reproducible; do not turn it on. |
 | `llm` | one model call under its own grammar, asking for three queries written with the words **the answer** would use. |
 
+### Measured, and shipped off
+
+**Verdict, 2026-08-24: `llm` works as a mechanism and there is no threshold to
+give it on this store. It ships `off`.** Six rounds of measurement, three
+readings of the gap between what the rescue finds and what it drags in, and the
+gap came out negative every time.
+
+The mechanism is not what failed. It moves the right entries closer — `#307`
+went from absent-from-the-top-5 to rank 1 — and pushes the wrong ones away: the
+cat question receded from 0.9495 to 1.1263, the tarte tatin and the social
+security number stopped returning anything at all. What it cannot do is
+*separate*. On a store holding five or six short facts that all overlap, every
+distance bunches between 0.94 and 1.14, answers and non-answers alike, and the
+closest competitor to the hardware question sits 0.009 from the answer.
+
+Every failure traced back to the store, not to the search:
+
+| what went wrong | what it really was |
+|---|---|
+| `#167` and `#176` beat every fact on technical questions | archived transcripts holding tool output — long, noun-dense, unbeatable by a one-line fact. Now excluded from the rescue. |
+| two questions of three had no answer at all | ~290 archived exchanges, most of them refusals, against five facts |
+| `#315` unreachable by any rewrite | stored as `NiPoGi AM06PRO, Arch, 5500U, 32Go RAM` — the words a question would use were dropped at write time |
+| category rewrites lost to brand-name rewrites | the facts are themselves bags of product names, so only product-name queries match them |
+
+That last row is the one to sit with. Forbidding the model to guess a brand made
+retrieval *worse* here — `#313` went from 0.9941 to 1.1341 — because `#313` is
+`Steam Deck, SteamOS, conteneurs Podman`, a telegram of product names. The rule
+is still right: a guessed brand is a wrong answer waiting to happen on any store
+whose owner runs something else. It looks wrong here only because the write path
+had already reduced the facts to the same shape as a bad query.
+
+**So the order of work is: fill the store, then calibrate the rescue.** Turning
+`RECALL_EXPANSION=llm` on today buys a 7-second model call on every refused
+question and rescues nothing. The harness is here, the numbers are here, and the
+question can be reopened in one command the day the store has enough facts to
+tell an answer from a neighbour.
+
 Measured against the real store, 2026-08-24, distance to the named entry (or to
 the closest row where it was absent):
 
