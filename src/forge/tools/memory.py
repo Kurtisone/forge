@@ -75,6 +75,54 @@ _ARCHIVE_KINDS = ("history_summary",)
 _VOCABULARY_ENTRIES = 500
 
 
+# A fact stored as a comma-separated list of fragments is a fact
+# written in the one shape this store retrieves WORST. Measured
+# 2026-08-24: the deterministic keyword rewrites lost against the
+# full question on four retrieval tests out of four, because the
+# embedding model is instruction-tuned on natural language and a
+# keyword bag is off-distribution for it. Then the router wrote three
+# new facts in exactly that shape.
+#
+#     stored   NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, …
+#     lost     "processeur", "Ryzen" -- the two words that made #307
+#              findable by a question about a processor
+#
+# The signature is short fragments: the average comma-separated piece
+# of a written fact runs three or four words, a telegram runs one or
+# two.
+_TERSE_FRAGMENT_WORDS = 2.5
+_MIN_FRAGMENTS = 3
+
+
+def _is_telegraphic(text: str) -> bool:
+    """
+    Does this read as a keyword list rather than a written fact?
+
+    Deliberately crude, and deliberately advisory. A genuine
+    enumeration -- a list of service names, a list of ports -- trips
+    it too, and that is acceptable because nothing here refuses
+    anything: losing a fact entirely is worse than storing a terse
+    one. The value is that the degradation becomes VISIBLE at the
+    moment it happens, instead of surfacing three weeks later in a
+    bench run as a question that cannot be answered.
+    """
+    fragments = [f.strip() for f in text.split(",")]
+    fragments = [f for f in fragments if f]
+    if len(fragments) < _MIN_FRAGMENTS:
+        return False
+    average = sum(len(f.split()) for f in fragments) / len(fragments)
+    return average < _TERSE_FRAGMENT_WORDS
+
+
+_TERSE_NOTE = (
+    "\n\n[note] Enregistré tel quel, mais rédigé comme une liste de "
+    "mots-clés. Ce magasin retrouve mal cette forme : une phrase "
+    "contenant les mots que tu emploierais pour la chercher (« processeur "
+    "», « mémoire », « conteneurs ») est retrouvée là où une énumération "
+    "ne l'est pas."
+)
+
+
 def _remember(instruction: dict) -> str:
     kind = instruction.get("kind", "").strip().lower() or "fact"
     text = instruction.get("content", "").strip()
@@ -105,14 +153,26 @@ def _remember(instruction: dict) -> str:
     finally:
         conn.close()
 
+    terse = _is_telegraphic(text)
     log.event(
         "memory.remember",
         entry_id=entry_id,
         kind=kind,
         project=project,
         unfamiliar=len(odd),
+        terse=terse,
     )
-    return _confirmation(entry_id, kind, text, project, total, odd)
+    if terse:
+        log.warning(
+            "memory tool: entry %s was written as a keyword list (%r) -- the "
+            "shape this store retrieves worst. Stored anyway; a fact nobody "
+            "can find still beats a fact nobody wrote.",
+            entry_id,
+            text[:80],
+        )
+
+    confirmation = _confirmation(entry_id, kind, text, project, total, odd)
+    return confirmation + _TERSE_NOTE if terse else confirmation
 
 
 def _confirmation(
