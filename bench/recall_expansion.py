@@ -57,6 +57,17 @@ actually answers, and run again naming it. Demanding an id the
 harness itself refused to help you find was a real dead end on
 2026-08-24, not a hypothetical one.
 
+--repeat N ASKS EACH QUESTION N TIMES. The expansion is a model call,
+and on 2026-08-24 the same question produced different rewrites on two
+consecutive runs -- 'processeur mémoire disque' once, 'processeur
+mémoire écran' the next -- putting the same entry at 0.9766 and then
+0.9435. Temperature is 0.0; greedy sampling on llama.cpp is still not
+reproducible across cache states. That is a third of the gap the two
+runs measured, so a threshold placed from a single draw is placed from
+a coin toss. With --repeat, every question keeps its WORST draw:
+farthest for a hit, nearest for a miss. A cutoff has to hold on a bad
+day, not on the best one it was shown.
+
 --mode llm SPENDS A MODEL CALL PER QUESTION. On the Deck that is the
 slow part of this harness by a wide margin; --mode terms is free and
 answers a different question (how much of the failure was phrasing
@@ -129,6 +140,47 @@ def _expected_within(results: list[dict], expect: str | None, cutoff: float) -> 
         if expect is not None and str(row.get("id")) == str(expect):
             return _within(row.get("distance"), cutoff)
     return False
+
+
+def _draws(
+    conn, question: str, mode: str, expect: str | None, top_k: int, repeat: int
+) -> tuple[list[str], list[dict]]:
+    """
+    The WORST of `repeat` attempts, and the rewrites that produced it.
+
+    Worst means farthest when an entry is named -- the draw where the
+    rescue is least likely to reach it -- and nearest when nothing is
+    named, which is the miss side: the draw most likely to break a
+    refusal. Both are the same rule stated from the two ends. A
+    threshold read off the best draw is a threshold that holds until
+    the next sampling.
+
+    A draw that produced no usable rewrites at all counts, and counts
+    as the worst of them: it is what the deployment would have done.
+    """
+    from forge import expansion, rag
+
+    worst_variants: list[str] = []
+    worst_results: list[dict] = []
+    worst_key: float | None = None
+
+    for _ in range(max(1, repeat)):
+        variants = expansion.variants(question, mode)
+        results = (
+            rag.search_many(conn, queries=variants, top_k=top_k) if variants else []
+        )
+        if expect is not None:
+            key = _distance_of(results, expect)
+            key = float("inf") if key is None else key
+            worse = worst_key is None or key > worst_key
+        else:
+            key = _closest(results)
+            key = float("inf") if key is None else key
+            worse = worst_key is None or key < worst_key
+        if worse:
+            worst_key, worst_variants, worst_results = key, variants, results
+
+    return worst_variants, worst_results
 
 
 def _print_candidates(results: list[dict]) -> None:
@@ -215,6 +267,16 @@ def main() -> int:
     parser.add_argument("--db", required=True)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help=(
+            "Ask each question this many times and keep the worst draw. The "
+            "rewrites are not reproducible run to run; one draw is one coin "
+            "toss."
+        ),
+    )
+    parser.add_argument(
         "--mode",
         action="append",
         default=[],
@@ -267,7 +329,7 @@ def main() -> int:
     modes = list(_MODES) if not args.mode or "both" in args.mode else args.mode
 
     os.environ["RAG_DB_FILE"] = args.db
-    from forge import expansion, rag
+    from forge import rag
     from forge.config import RECALL_MAX_DISTANCE
 
     cutoff = args.cutoff if args.cutoff is not None else RECALL_MAX_DISTANCE
@@ -302,7 +364,10 @@ def main() -> int:
     try:
         print(f"store     : {args.db}")
         print(f"cutoff    : {cutoff}  (regime {rag.query_fingerprint()})")
-        print(f"modes     : {', '.join(modes)}\n")
+        print(f"modes     : {', '.join(modes)}")
+        if args.repeat > 1:
+            print(f"draws     : {args.repeat} per question, worst one kept")
+        print()
 
         header = f"{'':<40} {'BASELINE':<22}"
         for mode in modes:
@@ -322,11 +387,8 @@ def main() -> int:
 
             per_mode = {}
             for mode in modes:
-                variants = expansion.variants(question, mode)
-                results = (
-                    rag.search_many(conn, queries=variants, top_k=args.top_k)
-                    if variants
-                    else []
+                variants, results = _draws(
+                    conn, question, mode, expect, args.top_k, args.repeat
                 )
                 per_mode[mode] = (variants, results)
                 line += f" {_cell(read_row(results, expect))}"
@@ -365,11 +427,8 @@ def main() -> int:
 
             fires = not _closest_within(base_results, cutoff)
             for mode in modes:
-                variants = expansion.variants(question, mode)
-                results = (
-                    rag.search_many(conn, queries=variants, top_k=args.top_k)
-                    if variants
-                    else []
+                variants, results = _draws(
+                    conn, question, mode, None, args.top_k, args.repeat
                 )
                 line += f" {_cell(read_row(results, None))}"
                 if fires and _closest_within(results, cutoff):
