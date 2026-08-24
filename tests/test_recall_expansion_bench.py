@@ -481,3 +481,30 @@ def test_a_draw_that_finds_the_entry_beats_one_that_refuses(store):
     assert recall_expansion._badness(refusal, "307", 0.88) > recall_expansion._badness(
         found, "307", 0.88
     )
+
+
+def test_the_nearest_other_row_is_found_at_any_distance(store):
+    """
+    Not the same question as _intruder, which asks what gets in under
+    the first pass's cutoff. At any threshold admitting the answer,
+    every row nearer than it is admitted first -- so a regime block
+    scoring only the named entries measures a search with no
+    competitors in it.
+
+    Measured 2026-08-24: #314 came back at 1.0480 with something at
+    0.9618 ahead of it. Nothing was within 0.88, so WRONG ENTRY was 0
+    and the regime printed a gap of +0.1032 that no threshold could
+    actually deliver.
+    """
+    rows = [
+        {"id": 314, "distance": 1.0480, "content": "services podman"},
+        {"id": 313, "distance": 0.9618, "content": "Steam Deck, SteamOS"},
+    ]
+
+    assert recall_expansion._nearest_other(rows, "314")["id"] == 313
+
+
+def test_the_named_entry_is_never_its_own_rival(store):
+    rows = [{"id": 307, "distance": 0.72, "content": "Matériel : NiPoGi"}]
+
+    assert recall_expansion._nearest_other(rows, "307") is None

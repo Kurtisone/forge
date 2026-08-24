@@ -171,6 +171,30 @@ def _intruder(results: list[dict], expect: str | None, cutoff: float) -> dict | 
     return None
 
 
+def _nearest_other(results: list[dict], expect: str | None) -> dict | None:
+    """
+    The nearest row that is not the named entry, at ANY distance.
+
+    Not the same question as _intruder, which asks what gets in under
+    the first pass's cutoff. This one asks what a cutoff for the
+    RESCUE would have to let in alongside the answer: at any threshold
+    admitting the named entry, every row nearer than it is admitted
+    first. A regime block that scores only the named entries measures
+    a search with no competitors in it.
+
+    It is not automatically wrong, and the harness does not call it
+    wrong. On a store holding several overlapping facts the nearest
+    other row may be a second correct answer. That is why it is
+    printed with its id and its content, and judged by the reader.
+    """
+    for row in sorted(results, key=lambda r: r.get("distance") or 0.0):
+        if expect is not None and str(row.get("id")) == str(expect):
+            continue
+        if isinstance(row.get("distance"), float):
+            return row
+    return None
+
+
 def _expected_within(results: list[dict], expect: str | None, cutoff: float) -> bool:
     for row in results:
         if expect is not None and str(row.get("id")) == str(expect):
@@ -333,6 +357,9 @@ def _print_regime(
     print(f"\n  --- the rescue regime, {mode} ---")
     print("      distances the rephrasings saw, on the questions where the")
     print(f"      rescue actually fired. NOT the scale {cutoff} was measured on.")
+    print("      A '#id vs question' line is the nearest row that is not the")
+    print("      answer: at any threshold admitting the answer, it is admitted")
+    print("      too. It may be a second correct entry -- read it and decide.")
     for question, distance in sorted(hits, key=lambda r: -r[1]):
         print(f"      hit    {distance:.4f}  {question[:52]}")
     for question, distance in sorted(misses, key=lambda r: r[1]):
@@ -542,6 +569,18 @@ def main() -> int:
                 found = _distance_of(results, expect)
                 if found is not None:
                     regime[mode]["hits"].append((question, found))
+
+                    # Every row nearer than the answer is a row a
+                    # cutoff for this pass cannot avoid admitting.
+                    rival = _nearest_other(results, expect)
+                    if rival is not None:
+                        content = " ".join(str(rival.get("content", "")).split())
+                        regime[mode]["misses"].append(
+                            (
+                                f"#{rival.get('id')} vs {question[:26]} — {content[:28]}",
+                                rival["distance"],
+                            )
+                        )
 
                 # Counted whether or not the named entry also came
                 # back: an intruder ahead of it decides the answer.
