@@ -195,3 +195,51 @@ class TestWhenItRuns:
         assert not state.ok
         assert state.final_output == recall.non_answer.NOTHING_CLOSE_ENOUGH
         assert "[error]" not in state.final_output
+
+
+class TestWhatTheRescueIsAllowedToSee:
+    def test_it_never_searches_archived_conversation(self, monkeypatch):
+        """
+        Measured 2026-08-24. Rephrased as "processeur mémoire disque",
+        the hardware question put #307 -- the fact that answers it --
+        at 0.9435, and #167 at 0.8777. #167 is an archived exchange
+        where someone asked to display a Containerfile and got the
+        file back: long, dense with technical nouns, and it beats a
+        one-line fact on almost any technical question. With it in
+        scope no threshold admits 0.9435 and refuses 0.8777.
+        """
+        monkeypatch.setattr(recall, "RECALL_MAX_DISTANCE", 0.88)
+        monkeypatch.setattr(recall, "RECALL_EXPANSION", "terms")
+        monkeypatch.setattr(recall.memory_tool, "search", lambda q, **kw: _hits(1.05))
+        monkeypatch.setattr(recall.expansion, "variants", lambda q, mode: ["autre"])
+        seen = {}
+        monkeypatch.setattr(
+            recall.memory_tool,
+            "search_many",
+            lambda queries, **kw: (seen.update(kw), _hits(0.72))[1],
+        )
+
+        recall._recall_node(_state())
+
+        assert seen["exclude_kind"] == recall.rag.ARCHIVED_KIND
+
+    def test_the_first_pass_still_searches_everything(self, monkeypatch):
+        """
+        Archived transcript is not excluded because it is worthless.
+        It is excluded from the RESCUE because that pass has already
+        loosened the query, and loosening the query while keeping the
+        noisiest half of the store in scope is what manufactures the
+        intruder.
+        """
+        monkeypatch.setattr(recall, "RECALL_MAX_DISTANCE", 0.88)
+        monkeypatch.setattr(recall, "RECALL_EXPANSION", "terms")
+        seen = {}
+        monkeypatch.setattr(
+            recall.memory_tool,
+            "search",
+            lambda q, **kw: (seen.update(kw), _hits(0.72))[1],
+        )
+
+        recall._recall_node(_state())
+
+        assert "exclude_kind" not in seen

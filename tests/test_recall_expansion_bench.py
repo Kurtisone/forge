@@ -307,7 +307,9 @@ def test_repeating_keeps_the_worst_draw_for_a_hit(store, monkeypatch):
 
     monkeypatch.setattr(expansion, "variants", lambda q, mode: ["une reformulation"])
     draws = iter([[{"id": 1, "distance": 0.70}], [{"id": 1, "distance": 0.95}]])
-    monkeypatch.setattr(rag, "search_many", lambda conn, queries, top_k: next(draws))
+    monkeypatch.setattr(
+        rag, "search_many", lambda conn, queries, top_k, exclude_kind=None: next(draws)
+    )
 
     best = recall_expansion._collect(
         None, [(("hit", 0), "une question", "1")], ["terms"], 5, 2
@@ -323,7 +325,9 @@ def test_repeating_keeps_the_worst_draw_for_a_miss(store, monkeypatch):
 
     monkeypatch.setattr(expansion, "variants", lambda q, mode: ["une reformulation"])
     draws = iter([[{"id": 9, "distance": 1.20}], [{"id": 9, "distance": 0.91}]])
-    monkeypatch.setattr(rag, "search_many", lambda conn, queries, top_k: next(draws))
+    monkeypatch.setattr(
+        rag, "search_many", lambda conn, queries, top_k, exclude_kind=None: next(draws)
+    )
 
     best = recall_expansion._collect(
         None, [(("miss", 0), "une question", None)], ["terms"], 5, 2
@@ -343,7 +347,9 @@ def test_a_draw_with_no_usable_rewrites_counts_as_the_worst(store, monkeypatch):
     calls = iter([[], ["une reformulation"]])
     monkeypatch.setattr(expansion, "variants", lambda q, mode: next(calls))
     monkeypatch.setattr(
-        rag, "search_many", lambda conn, queries, top_k: [{"id": 1, "distance": 0.1}]
+        rag,
+        "search_many",
+        lambda conn, queries, top_k, exclude_kind=None: [{"id": 1, "distance": 0.1}],
     )
 
     best = recall_expansion._collect(
@@ -372,7 +378,9 @@ def test_the_draws_are_interleaved_not_repeated_back_to_back(store, monkeypatch)
         "variants",
         lambda q, mode: (asked.append(q), ["une reformulation"])[1],
     )
-    monkeypatch.setattr(rag, "search_many", lambda conn, queries, top_k: [])
+    monkeypatch.setattr(
+        rag, "search_many", lambda conn, queries, top_k, exclude_kind=None: []
+    )
 
     recall_expansion._collect(
         None,

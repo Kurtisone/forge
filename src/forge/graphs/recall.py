@@ -337,6 +337,25 @@ def _rescue(query: str) -> list[dict]:
     with the id, the distance AND the variant that produced it --
     bench/recall_expansion.py counts them on a copy of the real store
     before this is worth turning on.
+
+    IT DOES NOT SEARCH ARCHIVED CONVERSATION, and that is the whole
+    difference between a rescue that works on this store and one that
+    cannot be made safe. Measured 2026-08-24: rephrased as "processeur
+    mémoire disque", the question about hardware put #307 -- the fact
+    that answers it -- at 0.9435, and #167 at 0.8777. #167 is an
+    archived exchange where someone asked to display a Containerfile
+    and got the file back. It is long, it is dense with technical
+    nouns, and it beats a one-line fact on almost any technical
+    question. With it in scope there is no threshold that admits
+    0.9435 and refuses 0.8777; the harness said so in those words.
+
+    Archived transcript is not excluded because it is worthless -- the
+    first pass still searches all of it. It is excluded HERE because
+    this pass has already loosened the query, and loosening the query
+    while keeping the noisiest half of the store in scope is what
+    manufactures the intruder. A second, looser attempt gets the
+    tighter corpus: whatever this returns, someone chose to write it
+    down.
     """
     if RECALL_EXPANSION == "off":
         return []
@@ -352,7 +371,7 @@ def _rescue(query: str) -> list[dict]:
         variants=variants,
     )
     try:
-        results = memory_tool.search_many(variants)
+        results = memory_tool.search_many(variants, exclude_kind=rag.ARCHIVED_KIND)
     except rag.EmbeddingError as e:
         # The first search reached the server, so this is a failure
         # between the two. Not worth an error the user reads: the

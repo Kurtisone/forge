@@ -36,6 +36,14 @@ a mode on. An intruder counted here also goes into the rescue regime
 below, on the MISS side, because that is what it is: an entry a cutoff
 for this pass would have to exclude.
 
+THE RESCUE COLUMN DOES NOT SEE ARCHIVED CONVERSATION, because the
+deployment's rescue does not either -- see graphs/recall.py for the
+measurement that put it there. The BASELINE column sees everything,
+as the first pass does. So the two columns are searching different
+corpora on purpose, and a row that improves between them may have
+improved by losing a competitor rather than by finding an answer.
+Read the ids.
+
 OUT OF REACH IS THE INTERESTING ROW
 
 The rescue only runs when EVERY row of the first pass was dropped. A
@@ -220,7 +228,15 @@ def _collect(
             for mode in modes:
                 variants = expansion.variants(question, mode)
                 results = (
-                    rag.search_many(conn, queries=variants, top_k=top_k)
+                    rag.search_many(
+                        conn,
+                        queries=variants,
+                        top_k=top_k,
+                        # The deployment's rescue does not search
+                        # archived conversation. A harness that does
+                        # is measuring a mechanism nobody runs.
+                        exclude_kind=rag.ARCHIVED_KIND,
+                    )
                     if variants
                     else []
                 )

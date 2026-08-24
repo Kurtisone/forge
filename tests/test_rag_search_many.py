@@ -25,7 +25,7 @@ def _row(entry_id, distance, content="entry"):
 def _canned(by_query, monkeypatch):
     """rag.search returning a fixed list per query string."""
 
-    def fake_search(conn, query, top_k=5, kind=None, project=None):
+    def fake_search(conn, query, top_k=5, kind=None, project=None, exclude_kind=None):
         return by_query.get(query, [])[:top_k]
 
     monkeypatch.setattr(rag, "search", fake_search)
@@ -150,7 +150,9 @@ def test_the_tool_wrapper_opens_one_connection_for_the_batch(monkeypatch):
         rag, "get_connection", lambda: (opened.append("open"), FakeConn())[1]
     )
     monkeypatch.setattr(
-        rag, "search_many", lambda conn, queries, top_k, kind, project: [_row(1, 0.5)]
+        rag,
+        "search_many",
+        lambda conn, queries, top_k, kind, project, exclude_kind: [_row(1, 0.5)],
     )
 
     assert memory_tool.search_many(["a", "b"])[0]["id"] == 1

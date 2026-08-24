@@ -372,12 +372,20 @@ def query_fingerprint() -> str:
     return hashlib.sha256(_as_query("").encode("utf-8")).hexdigest()[:6]
 
 
+#: The kind that is archived conversation rather than something
+#: anyone chose to write down. Named here because two different
+#: callers need to talk about it: format_results ranks it last, and
+#: the recall rescue pass refuses to search it at all.
+ARCHIVED_KIND = "history_summary"
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
     top_k: int = 5,
     kind: str | None = None,
     project: str | None = None,
+    exclude_kind: str | None = None,
 ) -> list[dict]:
     query_embedding = _embed(_as_query(query))
 
@@ -386,6 +394,9 @@ def search(
     if kind is not None:
         filters.append("e.kind = ?")
         params.append(kind)
+    if exclude_kind is not None:
+        filters.append("e.kind != ?")
+        params.append(exclude_kind)
     if project is not None:
         filters.append("e.project = ?")
         params.append(project)
@@ -443,6 +454,7 @@ def search_many(
     top_k: int = 5,
     kind: str | None = None,
     project: str | None = None,
+    exclude_kind: str | None = None,
 ) -> list[dict]:
     """
     Search once per query, merged on entry id, keeping each entry's
@@ -477,7 +489,14 @@ def search_many(
     """
     merged: dict[int, dict] = {}
     for query in queries:
-        for row in search(conn, query=query, top_k=top_k, kind=kind, project=project):
+        for row in search(
+            conn,
+            query=query,
+            top_k=top_k,
+            kind=kind,
+            project=project,
+            exclude_kind=exclude_kind,
+        ):
             row = dict(row, matched_query=query)
             current = merged.get(row["id"])
             if current is None or _is_closer(row, current):
