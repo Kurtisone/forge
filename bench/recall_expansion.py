@@ -178,25 +178,60 @@ def _expected_within(results: list[dict], expect: str | None, cutoff: float) -> 
     return False
 
 
-def _worse(candidate: float | None, current: float | None, expect: str | None) -> bool:
+def _badness(results: list[dict], expect: str | None, cutoff: float) -> tuple:
     """
-    Is this draw worse than the one already kept?
+    How bad this draw's OUTCOME is, worst first.
 
-    Worse means FARTHEST when an entry is named -- the draw where the
-    rescue is least likely to reach it -- and NEAREST when nothing is
-    named, which is the miss side: the draw most likely to break a
-    refusal. Two statements of one rule, from the two ends. A
-    threshold read off the best draw holds until the next sampling.
+    The first version of this ranked a hit's draws by distance to the
+    named entry -- farthest was worst -- and it hid the only thing
+    worth seeing. Measured 2026-08-24: three interleaved draws of the
+    hardware question produced
+
+        draw A   #307 at 0.9435, nothing else within the cutoff
+        draw C   #307 at 0.9766, #167 at 0.8777 within the cutoff
+
+    Draw A is farther from #307, so it "won" as the worst and the
+    verdict printed WRONG ENTRY 0. Draw C is the one where the
+    deployment answers out of an archived Containerfile dump. A
+    single-draw run of the same question found it by accident; the
+    three-draw run buried it. A sampling rule that makes more
+    measurement less informative is the wrong rule.
+
+    So draws are ranked by what the user would GET, not by a distance:
+
+        2  an intruder is within the cutoff and the named entry is
+           not -- the question gets answered out of the wrong row
+        1  nothing within the cutoff -- the refusal it already was
+        0  the named entry is within the cutoff
+
+    with distance only breaking ties inside a tier. For a miss there
+    is no named entry and the rule is unchanged: nearest is worst,
+    because nearest is what breaks the refusal.
     """
-    if current is None:
-        return True
-    if expect is not None:
-        return candidate > current
-    return candidate < current
+    if expect is None:
+        nearest = _closest(results)
+        return (0, -(nearest if nearest is not None else float("inf")))
+
+    found = _distance_of(results, expect)
+    intruder = _intruder(results, expect, cutoff)
+    within = _within(found, cutoff)
+
+    if intruder is not None and not within:
+        tier = 2
+    elif not within:
+        tier = 1
+    else:
+        tier = 0
+    return (tier, found if found is not None else float("inf"))
 
 
 def _collect(
-    conn, questions: list[tuple], modes: list[str], top_k: int, repeat: int
+    conn,
+    questions: list[tuple],
+    modes: list[str],
+    top_k: int,
+    repeat: int,
+    cutoff: float,
 ) -> dict:
     """
     Every question expanded `repeat` times, ROUND ROBIN, keeping each
@@ -222,7 +257,7 @@ def _collect(
     """
     from forge import expansion, rag
 
-    best: dict[tuple, tuple[list[str], list[dict], float | None]] = {}
+    best: dict[tuple, tuple[list[str], list[dict], tuple]] = {}
     for _ in range(max(1, repeat)):
         for key, question, expect in questions:
             for mode in modes:
@@ -240,19 +275,15 @@ def _collect(
                     if variants
                     else []
                 )
-                measured = (
-                    _distance_of(results, expect)
-                    if expect is not None
-                    else _closest(results)
-                )
-                # A draw that produced nothing counts, and counts as
-                # the worst: it is what the deployment would have done
-                # that time. Preferring the draws that produced
-                # rewrites would measure a mechanism nobody runs.
-                measured = float("inf") if measured is None else measured
+                # A draw that produced nothing counts, and counts
+                # among the worst: it is what the deployment would
+                # have done that time. Preferring the draws that
+                # produced rewrites would measure a mechanism nobody
+                # runs.
+                score = _badness(results, expect, cutoff)
                 current = best.get((key, mode))
-                if current is None or _worse(measured, current[2], expect):
-                    best[(key, mode)] = (variants, results, measured)
+                if current is None or score > current[2]:
+                    best[(key, mode)] = (variants, results, score)
     return best
 
 
@@ -461,7 +492,7 @@ def main() -> int:
             )
         print()
 
-        expanded = _collect(conn, plan, modes, args.top_k, args.repeat)
+        expanded = _collect(conn, plan, modes, args.top_k, args.repeat, cutoff)
 
         header = f"{'':<40} {'BASELINE':<22}"
         for mode in modes:

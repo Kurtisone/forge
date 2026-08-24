@@ -312,7 +312,7 @@ def test_repeating_keeps_the_worst_draw_for_a_hit(store, monkeypatch):
     )
 
     best = recall_expansion._collect(
-        None, [(("hit", 0), "une question", "1")], ["terms"], 5, 2
+        None, [(("hit", 0), "une question", "1")], ["terms"], 5, 2, 0.88
     )
 
     assert best[(("hit", 0), "terms")][1][0]["distance"] == 0.95
@@ -330,7 +330,7 @@ def test_repeating_keeps_the_worst_draw_for_a_miss(store, monkeypatch):
     )
 
     best = recall_expansion._collect(
-        None, [(("miss", 0), "une question", None)], ["terms"], 5, 2
+        None, [(("miss", 0), "une question", None)], ["terms"], 5, 2, 0.88
     )
 
     assert best[(("miss", 0), "terms")][1][0]["distance"] == 0.91
@@ -353,7 +353,7 @@ def test_a_draw_with_no_usable_rewrites_counts_as_the_worst(store, monkeypatch):
     )
 
     best = recall_expansion._collect(
-        None, [(("hit", 0), "une question", "1")], ["llm"], 5, 2
+        None, [(("hit", 0), "une question", "1")], ["llm"], 5, 2, 0.88
     )
 
     assert best[(("hit", 0), "llm")][0] == []
@@ -391,6 +391,7 @@ def test_the_draws_are_interleaved_not_repeated_back_to_back(store, monkeypatch)
         ["terms"],
         5,
         2,
+        0.88,
     )
 
     assert asked == [
@@ -430,3 +431,53 @@ def test_nothing_within_the_cutoff_is_no_intruder(store):
     rows = [{"id": 212, "distance": 0.95, "content": "loin"}]
 
     assert recall_expansion._intruder(rows, "307", 0.88) is None
+
+
+def test_the_worst_draw_is_the_one_that_answers_wrong(store, monkeypatch):
+    """
+    Measured 2026-08-24, three interleaved draws of the hardware
+    question:
+
+        draw A   #307 at 0.9435, nothing else within the cutoff
+        draw C   #307 at 0.9766, #167 at 0.8777 within the cutoff
+
+    Ranked by distance to the named entry, draw A is farther and
+    "wins" as the worst -- and the verdict printed WRONG ENTRY 0. Draw
+    C is the one where the deployment answers out of an archived
+    Containerfile dump. A single-draw run found it by accident and the
+    three-draw run buried it: a sampling rule that makes more
+    measurement less informative is the wrong rule.
+    """
+    from forge import expansion, rag
+
+    monkeypatch.setattr(expansion, "variants", lambda q, mode: ["une reformulation"])
+    draws = iter(
+        [
+            [{"id": 307, "distance": 0.9435}],
+            [{"id": 307, "distance": 0.9766}, {"id": 167, "distance": 0.8777}],
+        ]
+    )
+    monkeypatch.setattr(
+        rag, "search_many", lambda conn, queries, top_k, exclude_kind=None: next(draws)
+    )
+
+    best = recall_expansion._collect(
+        None, [(("hit", 0), "une question", "307")], ["terms"], 5, 2, 0.88
+    )
+
+    assert any(r["id"] == 167 for r in best[(("hit", 0), "terms")][1])
+
+
+def test_a_draw_that_finds_the_entry_beats_one_that_refuses(store):
+    """Worst by outcome: a refusal is bad, a wrong answer is worse,
+    and finding the entry is what we were after."""
+    found = [{"id": 307, "distance": 0.72}]
+    refusal = [{"id": 307, "distance": 1.4}]
+    wrong = [{"id": 167, "distance": 0.80}]
+
+    assert recall_expansion._badness(wrong, "307", 0.88) > recall_expansion._badness(
+        refusal, "307", 0.88
+    )
+    assert recall_expansion._badness(refusal, "307", 0.88) > recall_expansion._badness(
+        found, "307", 0.88
+    )
