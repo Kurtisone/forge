@@ -37,9 +37,15 @@ did not produce; bench/recall_expansion.py scores the two modes in
 separate columns for that reason.
 
 `llm` is the half that can bridge vocabulary, at the price of one
-model call. It is built ON TOP of `terms` rather than instead of it:
-the deterministic rewrites cost an embedding call each and are
-independent of whether the model had a good day.
+model call. MEASURED ON THE REAL STORE, 2026-08-24: it moved #308
+from absent-from-the-top-5 to rank 2, on the exact question that
+motivated this module.
+
+AND `terms` LOST, on every question it was asked -- see its docstring
+for the four numbers. It is kept because a measured negative is worth
+being able to reproduce, and because it is free to re-run if the
+embedding model ever changes. It is no longer composed into `llm`,
+and it should not be turned on.
 """
 
 import json
@@ -192,6 +198,27 @@ def terms(query: str) -> list[str]:
     """
     The deterministic variants: unframed, then content words only.
 
+    MEASURED WORSE, and kept only so that stays reproducible. Against
+    the real store on 2026-08-24, distance to the named entry (or to
+    the closest row where it was absent):
+
+        question                            baseline    terms
+        Tu peux me lister mon matériel ?      0.9083   1.0277
+        Combien de RAM a le NiPoGi ?          0.7336   0.8591
+        Comment s'appelle mon chat ?          0.9495   1.0821
+        Quelle est la recette … tatin ?       1.1578   1.1609
+
+    Four out of four, in the same direction, hits and misses alike.
+    The embedding model is instruction-tuned on natural-language
+    queries; a keyword bag is off-distribution for it, and even the
+    mild rewrite ("lister mon matériel", still a phrase) lost by more
+    than a tenth. Stripping words from a question does not make it a
+    better query here -- it makes it a worse sentence.
+
+    Which is the useful shape of the finding: what worked was the
+    model's rewrites, and those are PHRASES in the store's own
+    vocabulary, not the question with its function words removed.
+
     No model, no network, no configuration. Either can come back
     identical to the query or to each other, in which case `keep`
     drops it and the caller pays nothing.
@@ -226,13 +253,18 @@ def variants(query: str, mode: str) -> list[str]:
     if mode == "terms":
         return terms(query)
     if mode == "llm":
-        # Model-written first, deterministic second: MAX_VARIANTS is
-        # what decides who gets dropped when both produce a full set,
-        # and the model's are the ones aimed at the failure this lot
-        # exists for. Three of those still leaves a slot for a term
-        # rewrite, and on a call that failed the terms are all there
-        # is.
-        return keep(_from_llm(query) + _term_candidates(query), query)
+        # The model's rewrites ALONE. `terms` used to be appended here
+        # on the theory that a free variant costs nothing -- measured
+        # on 2026-08-24, it costs two things. It pushes distances up
+        # on this embedding model (four questions out of four), and
+        # its rows compete for the merge's top_k slots, so a variant
+        # that finds nothing useful can still push the rescued entry
+        # out of the list.
+        #
+        # A failed call therefore yields no variants and no rescue,
+        # rather than a rescue built out of the rewrites that lost.
+        # Unhelped, never wrong.
+        return keep(_from_llm(query), query)
     log.warning(
         "unknown RECALL_EXPANSION=%r, expansion is off (expected one of: %s)",
         mode,

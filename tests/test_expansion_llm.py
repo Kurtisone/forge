@@ -158,11 +158,14 @@ class TestFromLlm:
 
 
 class TestLlmMode:
-    def test_it_carries_the_deterministic_variants_too(self, monkeypatch):
+    def test_it_does_not_carry_the_deterministic_variants(self, monkeypatch):
         """
-        Built on top of `terms`, not instead of it: the free rewrites
-        cost an embedding call each and do not depend on the model
-        having had a good day.
+        `terms` used to be appended here on the theory that a free
+        variant costs nothing. Measured 2026-08-24, it costs two
+        things: it pushes distances up on this embedding model (four
+        questions out of four), and its rows compete for the merge's
+        top_k slots, so a variant that finds nothing useful can push
+        the rescued entry out of the list.
         """
         monkeypatch.setattr(
             expansion,
@@ -172,25 +175,28 @@ class TestLlmMode:
 
         produced = expansion.variants("Tu peux me lister mon matériel ?", "llm")
 
-        assert "processeur mémoire disque" in produced
-        assert "lister mon matériel" in produced
+        assert produced == ["processeur mémoire disque"]
 
-    def test_a_dead_provider_leaves_the_free_ones(self, monkeypatch):
+    def test_a_dead_provider_leaves_nothing_rather_than_the_losers(self, monkeypatch):
+        """
+        No rescue beats a rescue built out of the rewrites that lost
+        the measurement.
+        """
+
         def dead(prompt, grammar=None):
             raise ProviderError("connection refused")
 
         monkeypatch.setattr(expansion, "call_llm", dead)
 
-        assert expansion.variants("Tu peux me lister mon matériel ?", "llm") == [
-            "lister mon matériel",
-            "lister matériel",
-        ]
+        assert expansion.variants("Tu peux me lister mon matériel ?", "llm") == []
 
     def test_the_total_is_still_capped(self, monkeypatch):
         monkeypatch.setattr(
             expansion,
             "call_llm",
-            lambda prompt, grammar=None: '["un deux", "trois quatre", "cinq six"]',
+            lambda prompt, grammar=None: (
+                '["un deux", "trois quatre", "cinq six", "sept huit", "neuf dix"]'
+            ),
         )
 
         produced = expansion.variants("Tu peux me lister mon matériel ?", "llm")

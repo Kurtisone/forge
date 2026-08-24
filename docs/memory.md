@@ -282,8 +282,28 @@ and it stays.
 | mode | what it does |
 |---|---|
 | `off` | nothing. The default. |
-| `terms` | strips the conversational frame and the stopwords: *Tu peux me lister mon matériel ?* → `lister mon matériel`, `lister matériel`. Free apart from one embedding call each. |
-| `llm` | the above, plus one model call under its own grammar asking for three queries written with the words **the answer** would use. |
+| `terms` | strips the conversational frame and the stopwords. **Measured worse, four questions out of four** — see below. Kept so the finding stays reproducible; do not turn it on. |
+| `llm` | one model call under its own grammar, asking for three queries written with the words **the answer** would use. |
+
+Measured against the real store, 2026-08-24, distance to the named entry (or to
+the closest row where it was absent):
+
+| question | baseline | `terms` | `llm` |
+|---|---|---|---|
+| `Tu peux me lister mon matériel ?` | 0.9083 *(#308 absent)* | 1.0277 | **0.9766** *(#308 at rank 2)* |
+| `Combien de RAM a le NiPoGi ?` | 0.7336 | 0.8591 | — *(already within the cutoff)* |
+| `Comment s'appelle mon chat ?` *(miss)* | 0.9495 | 1.0821 | 1.0431 |
+
+`terms` lost on every question it was asked, hits and misses alike. The embedding
+model is instruction-tuned on natural-language queries, and a keyword bag is
+off-distribution for it — even the mild rewrite, still a phrase, lost by more
+than a tenth. What worked was the model's rewrites, and those are *phrases in the
+store's own vocabulary* (`matériel ordinateur portable`, `processeur mémoire
+disque`), not the question with its function words removed. Stripping words from
+a question does not make it a better query here; it makes it a worse sentence.
+
+The model call costs ~7 s on the Deck for a ~330-token prompt — against the ~47 s
+the router already spends, and only on the path that was going to refuse.
 
 It runs on **one path**: after the cutoff has dropped everything, instead of "je
 n'ai rien d'assez proche". Three things follow.
