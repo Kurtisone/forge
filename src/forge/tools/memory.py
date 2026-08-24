@@ -247,6 +247,30 @@ def search(
         conn.close()
 
 
+def search_many(
+    queries: list[str],
+    top_k: int = 5,
+    kind: str | None = None,
+    project: str | None = None,
+) -> list[dict]:
+    """
+    search(), asked several ways at once -- see rag.search_many for
+    what the merge keeps and why.
+
+    Here for the same reason search() is: graphs/recall.py goes
+    through this module rather than reaching into forge.rag itself, so
+    that both ways of reading the store cross the same boundary. One
+    connection for the whole batch, not one per query.
+    """
+    conn = rag.get_connection()
+    try:
+        return rag.search_many(
+            conn, queries=queries, top_k=top_k, kind=kind, project=project
+        )
+    finally:
+        conn.close()
+
+
 def format_results(results: list[dict]) -> str:
     """
     Format raw search() hits as the ranked, clipped bullet list this
