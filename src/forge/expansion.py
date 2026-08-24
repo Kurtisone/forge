@@ -36,17 +36,22 @@ it should help is exactly the kind that gets credited for a result it
 did not produce; bench/recall_expansion.py scores the two modes in
 separate columns for that reason.
 
-The half that can bridge vocabulary needs a model, and it is the
-next layer -- built on top of this one rather than instead of it.
+`llm` is the half that can bridge vocabulary, at the price of one
+model call. It is built ON TOP of `terms` rather than instead of it:
+the deterministic rewrites cost an embedding call each and are
+independent of whether the model had a good day.
 """
 
+import json
 import re
 import unicodedata
 
+from forge.errors import ProviderError
+from forge.llm import call_llm
 from forge.logger import log
 
 #: The modes RECALL_EXPANSION accepts.
-MODES = ("off", "terms")
+MODES = ("off", "terms", "llm")
 
 # Ceiling on how many EXTRA queries leave this module, whatever the
 # mode. Each one costs an embedding call on the rescue path, and past
@@ -196,8 +201,13 @@ def terms(query: str) -> list[str]:
     plaît" survives a stopword filter as `plaît` -- a word no stored
     fact has ever contained.
     """
+    return keep(_term_candidates(query), query)
+
+
+def _term_candidates(query: str) -> list[str]:
+    """The two rewrites, before `keep` has had an opinion on them."""
     unframed = _without_frame(query)
-    return keep([unframed, _content_words(unframed)], query)
+    return [unframed, _content_words(unframed)]
 
 
 def variants(query: str, mode: str) -> list[str]:
@@ -215,9 +225,168 @@ def variants(query: str, mode: str) -> list[str]:
         return []
     if mode == "terms":
         return terms(query)
+    if mode == "llm":
+        # Model-written first, deterministic second: MAX_VARIANTS is
+        # what decides who gets dropped when both produce a full set,
+        # and the model's are the ones aimed at the failure this lot
+        # exists for. Three of those still leaves a slot for a term
+        # rewrite, and on a call that failed the terms are all there
+        # is.
+        return keep(_from_llm(query) + _term_candidates(query), query)
     log.warning(
         "unknown RECALL_EXPANSION=%r, expansion is off (expected one of: %s)",
         mode,
         ", ".join(MODES),
     )
     return []
+
+
+# Exactly three strings, fixed shape. Not `{1,3}` and not a free
+# array: a fixed-arity rule is the simplest thing a 9B can be held to,
+# which is the same reason spec.py fixes its key order rather than
+# allowing any order. What comes back is then trimmed by `keep`, so
+# "three" is a sampling constraint and not a promise about the output.
+#
+# Rule names are hyphen-free by construction here, but gbnf.validate
+# is still what checks it: llama.cpp's lexer rejects underscores in
+# rule names and answers 400 to EVERY completion when it does, which
+# is a dead router rather than a degraded one (v3.10, ffa9542).
+_GRAMMAR = r"""root ::= ws "[" ws string ws "," ws string ws "," ws string ws "]" ws
+string ::= "\"" schar* "\""
+schar ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n]*
+"""
+
+# The example's subject, which must never appear in a variant that
+# came back. Same net as recall's _EXAMPLE_LEAK_FRAGMENTS and for the
+# same measured reason: this model copies a worked example verbatim
+# when the real input is unfamiliar. The tarte tatin is this
+# repository's own standing example of a question the store cannot
+# answer (bench/recall_distance.py), so a variant about it is
+# recognisable AND harmless to drop.
+_EXAMPLE_SUBJECT = "tatin"
+
+_PROMPT = """/no_think
+The question below will be matched against short notes stored in a
+personal memory. Retrieval there follows the WORDS as much as the
+meaning: a note is found when it is written with the words the query
+uses. Measured on this store -- a note reading "processeur Ryzen
+5500U, 32 Go de RAM" is not found by a question that says "matériel".
+
+So rewrite the question as three short search queries, using the
+words THE ANSWER would be written with rather than the words of the
+question.
+
+Rules:
+- Same language as the question.
+- No question mark, no politeness, no verb of asking. These are
+  search queries, not questions.
+- Name things. If the question says "matériel", one rewrite says
+  "processeur mémoire disque".
+- Under twelve words each, and each different from the other two.
+- Rephrase the question. Never answer it, and never invent a detail
+  about the person asking -- a name, a brand, a number they did not
+  give you.
+
+Question: {query}
+
+EXAMPLE -- form only. Its subject is not yours and its words belong
+to it alone. For "Tu peux me parler de la tarte tatin ?":
+["recette tarte tatin pommes", "cuisson tarte tatin moule", "tarte tatin caramel beurre"]
+
+Now answer for the real question above, with a JSON array of exactly
+three strings and nothing else."""
+
+
+def _parse(raw: str) -> list[str]:
+    """
+    The strings out of a model answer.
+
+    Under the grammar this is a plain json.loads, and it is not
+    written that way for the same reason spec.parse is not: the
+    grammar only exists on llama.cpp. On ollama or OpenRouter the
+    same call runs unconstrained and the array arrives inside a fence
+    or trailed by a sentence.
+
+    Non-strings are dropped rather than raised on -- a model that
+    returns two strings and a number has still produced two usable
+    queries.
+    """
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1] if "```" in text[3:] else text[3:]
+        text = text.removeprefix("json").strip()
+
+    start, end = text.find("["), text.rfind("]")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON array in the answer")
+
+    data = json.loads(text[start : end + 1])
+    if not isinstance(data, list):
+        # ValueError and not TypeError: json.JSONDecodeError is itself
+        # a ValueError, and _from_llm treats every unreadable answer
+        # the same way. One except clause, one behaviour.
+        raise ValueError("the answer is not a JSON array")  # noqa: TRY004
+    return [item for item in data if isinstance(item, str)]
+
+
+def _from_llm(query: str) -> list[str]:
+    """
+    Ask the model for rephrasings. NEVER raises, and that is the
+    contract.
+
+    Everything this returns is a suggestion for where else to look,
+    and every one of them is filtered afterwards by the same distance
+    cutoff the original query answers to. So the failure modes are
+    cheap and they are all the same failure: no extra queries, and a
+    recall that behaves exactly as it did before this module existed.
+    A provider that is down, a grammar the server refuses, an answer
+    that is not an array -- none of them is worth turning into an
+    error the user reads, because none of them makes the answer WRONG,
+    only unhelped.
+
+    The call is priced honestly in graphs/recall.py: it happens only
+    on the path that was about to answer "je n'ai rien en mémoire".
+    """
+    try:
+        raw = call_llm(_PROMPT.format(query=query), grammar=_GRAMMAR)
+    except ProviderError as e:
+        log.warning("expansion: no rephrasings, the provider failed (%s)", e)
+        return []
+
+    try:
+        candidates = _parse(raw)
+    except (ValueError, json.JSONDecodeError) as e:
+        log.warning("expansion: could not read the rephrasings (%s): %r", e, raw[:200])
+        return []
+
+    kept = [c for c in candidates if not _echoes_the_example(c, query)]
+    log.event(
+        "recall.expansion_llm",
+        query=query[:120],
+        proposed=len(candidates),
+        kept=len(kept),
+        variants=[c[:80] for c in kept],
+    )
+    return kept
+
+
+def _echoes_the_example(candidate: str, query: str) -> bool:
+    """
+    True when a variant is the worked example coming back instead of
+    an answer to the real question.
+
+    Asked of the QUERY first: someone whose store really is about
+    baking gets to ask about it, and this check must not be the reason
+    their own subject is refused.
+    """
+    if _EXAMPLE_SUBJECT in _fold(query):
+        return False
+    if _EXAMPLE_SUBJECT not in _fold(candidate):
+        return False
+    log.warning(
+        "expansion: dropped a rephrasing copied from the prompt example: %r",
+        candidate[:80],
+    )
+    return True

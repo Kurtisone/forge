@@ -42,13 +42,14 @@ _SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
 # safe but exactly right.
 _ROUTER_CALLERS = {"forge/orchestrator.py", "forge/graphs/default.py"}
 
-# The one caller that names its own grammar and is right to. delegate
-# asks for a spec under spec.build_spec_grammar() -- a CLOSED shape
-# with required fields and a terminator, which is what the router
-# grammar also is. That is the difference from the prose callers
-# below: constraining the model to a different structure works,
+# The callers that name their own grammar and are right to. delegate
+# asks for a spec under spec.build_spec_grammar(); expansion asks for
+# an array of exactly three strings. Both are a CLOSED shape with
+# required parts and a terminator, which is what the router grammar
+# also is. That is the difference from the prose callers below:
+# constraining the model to a different structure works,
 # unconstraining it does not.
-_OWN_GRAMMAR_CALLERS = {"forge/graphs/delegate.py"}
+_OWN_GRAMMAR_CALLERS = {"forge/graphs/delegate.py", "forge/expansion.py"}
 
 # Callers whose prompt asks for prose and which take the fallback
 # ANYWAY, on the measurement above. Each one must undo the shape it
