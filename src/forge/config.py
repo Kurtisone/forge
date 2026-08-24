@@ -582,6 +582,36 @@ RECALL_MAX_DISTANCE = float(_recall_value) if _recall_value.strip() else None
 # None if whoever set it did not say.
 RECALL_CALIBRATED_FOR = _recall_tag.strip() or None
 
+# --- Recall query expansion (v3.16) ---------------------------------------
+# How to ask again when the cutoff drops everything. One of:
+#
+#   off     never. Recall answers "je n'ai rien d'assez proche", which
+#           is what it did before this existed.
+#   terms   deterministic rewrites only -- the conversational frame
+#           stripped, then the content words alone. Free apart from one
+#           embedding call per rewrite.
+#   llm     the above, plus one model call asking for three search
+#           queries written with the words the ANSWER would use.
+#
+# WHY IT IS OFF BY DEFAULT, and it is the same argument
+# RECALL_MAX_DISTANCE makes: `llm` spends a model call, and a
+# mechanism nobody has measured on their own store should not turn
+# itself on in a deployment nobody measured it in.
+# bench/recall_expansion.py is what earns the setting.
+#
+# It only ever runs on the path that was about to say "nothing is
+# close enough", so it costs exactly nothing on a question that
+# already works -- and, because it never touches the first pass, it
+# changes no distance the threshold was calibrated against. The
+# fingerprint stays valid; see forge/expansion.py for why the query
+# side is the safe side to extend.
+#
+# COROLLARY WORTH KNOWING: with no RECALL_MAX_DISTANCE set, Forge
+# never says "nothing is close enough", so the rescue can never fire
+# and this setting is inert. graphs/recall.py says so at startup
+# rather than leaving it to be discovered.
+RECALL_EXPANSION = os.getenv("RECALL_EXPANSION", "off").strip().lower() or "off"
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the

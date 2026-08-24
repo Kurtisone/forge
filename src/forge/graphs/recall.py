@@ -42,10 +42,11 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import lang, non_answer, outcome, rag, subtrace
+from forge import expansion, lang, non_answer, outcome, rag, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RECALL_CALIBRATED_FOR,
+    RECALL_EXPANSION,
     RECALL_MAX_ANSWER_CHARS,
 )
 from forge.config import RECALL_MAX_DISTANCE as _CONFIGURED_CUTOFF
@@ -208,6 +209,25 @@ RECALL_MAX_DISTANCE, _calibration_note = cutoff_for(
 if _calibration_note:
     log.warning("%s", _calibration_note)
 
+# Same class of statement as the calibration note above: a fact about
+# the configuration, said once at startup rather than repeated into
+# every run.
+if RECALL_EXPANSION not in expansion.MODES:
+    log.warning(
+        "RECALL_EXPANSION=%r is not one of %s -- expansion is off",
+        RECALL_EXPANSION,
+        ", ".join(expansion.MODES),
+    )
+elif RECALL_EXPANSION != "off" and RECALL_MAX_DISTANCE is None:
+    log.warning(
+        "RECALL_EXPANSION=%s is set but no distance cutoff is in force, so it "
+        "can never run: the rescue pass only fires when the cutoff drops "
+        "everything, and with no cutoff nothing is ever dropped. Measure one "
+        "with bench/recall_distance.py and set RECALL_MAX_DISTANCE, or expect "
+        "this setting to do nothing at all.",
+        RECALL_EXPANSION,
+    )
+
 
 def _recall_node(state: AgentState) -> AgentState:
     query = state.context.get("query", state.user_input.strip())
@@ -225,8 +245,11 @@ def _recall_node(state: AgentState) -> AgentState:
         state.final_output = f"{non_answer.NO_MEMORY_PREFIX}for query: {query!r}"
         return state
 
-    results = _drop_distant(results, query)
-    if not results:
+    kept = _drop_distant(results, query)
+    if not kept:
+        kept = _rescue(query)
+        state.context["expanded"] = bool(kept)
+    if not kept:
         # Not an error: the store was reachable, it simply holds
         # nothing close enough to the question. Saying that is the
         # entire value of the cutoff -- the failure it replaces is a
@@ -235,6 +258,7 @@ def _recall_node(state: AgentState) -> AgentState:
         state.error = "no results above the distance cutoff"
         state.final_output = non_answer.NOTHING_CLOSE_ENOUGH
         return state
+    results = kept
 
     state.context["results"] = results
     # What the RAG actually returned, not just how many.
@@ -274,6 +298,86 @@ def _recall_node(state: AgentState) -> AgentState:
         ],
     )
     return state
+
+
+def _rescue(query: str) -> list[dict]:
+    """
+    Ask the same question in other words, once the cutoff has dropped
+    everything.
+
+    HERE AND NOWHERE ELSE, and that placement is the design. Measured
+    on the real store on 2026-08-24, both questions about the same
+    hardware:
+
+        "Quel processeur a mon NiPoGi ?"     #308 at rank 1, 0.7289
+        "Tu peux me lister mon matériel ?"   nothing within the cutoff
+
+    The second one is not a threshold problem -- the entry never came
+    back to be filtered. So this runs on that path only, and three
+    things follow from that.
+
+    It is free on every question that already works: a recall whose
+    first pass keeps something never reaches this function, never
+    builds a variant, never spends the model call.
+
+    It cannot make an answer worse. The alternative outcome on this
+    path is "je n'ai rien d'assez proche" -- there is no good answer
+    being displaced, only a refusal.
+
+    And it changes no distance the threshold was calibrated against.
+    The first pass is untouched, every variant goes through the same
+    _as_query wrapper, and rag.search_many keeps real query-to-entry
+    distances rather than a statistic over several. RECALL_MAX_DISTANCE
+    stays valid, its @tag stays valid, and nothing here needs
+    re-measuring before it can be used.
+
+    What it CAN do is let a miss in: a rephrasing that happens to sit
+    nearer some unrelated entry than the question did. That is the
+    risk, it is not hypothetical, and it is why every rescue is logged
+    with the id, the distance AND the variant that produced it --
+    bench/recall_expansion.py counts them on a copy of the real store
+    before this is worth turning on.
+    """
+    if RECALL_EXPANSION == "off":
+        return []
+
+    variants = expansion.variants(query, RECALL_EXPANSION)
+    if not variants:
+        return []
+
+    log.event(
+        "recall.expansion",
+        mode=RECALL_EXPANSION,
+        query=query[:120],
+        variants=variants,
+    )
+    try:
+        results = memory_tool.search_many(variants)
+    except rag.EmbeddingError as e:
+        # The first search reached the server, so this is a failure
+        # between the two. Not worth an error the user reads: the
+        # answer without it is the answer they were getting anyway.
+        log.warning("recall: the rescue search failed (%s)", e)
+        return []
+
+    kept = _drop_distant(results, query)
+    if kept:
+        log.event(
+            "recall.rescued",
+            query=query[:120],
+            kept=len(kept),
+            entries=[
+                {
+                    "id": r.get("id"),
+                    "distance": round(d, 4)
+                    if isinstance(d := r.get("distance"), float)
+                    else d,
+                    "matched_query": r.get("matched_query"),
+                }
+                for r in kept
+            ],
+        )
+    return kept
 
 
 def _drop_distant(results: list[dict], query: str) -> list[dict]:
@@ -459,6 +563,7 @@ def run(query: str) -> str:
             {
                 "recall": lambda: (
                     f"{len(results)} entrée(s) retenue(s)"
+                    + (" après reformulation" if state.context.get("expanded") else "")
                     if results
                     else "aucune entrée assez proche"
                 ),
