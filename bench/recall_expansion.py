@@ -49,6 +49,14 @@ ever printed (2026-08-22, 0.4519 against a refusal). The hit column
 falls back to the closest row and every verdict about hits is
 suppressed, loudly.
 
+AND IF YOU DO NOT KNOW THE ID, that is what the first run is for.
+Pass `--expect -` for any question you cannot name yet, or leave
+--expect off entirely, and the baseline rows are printed with their
+ids and a slice of their content -- read them, pick the one that
+actually answers, and run again naming it. Demanding an id the
+harness itself refused to help you find was a real dead end on
+2026-08-24, not a hypothetical one.
+
 --mode llm SPENDS A MODEL CALL PER QUESTION. On the Deck that is the
 slow part of this harness by a wide margin; --mode terms is free and
 answers a different question (how much of the failure was phrasing
@@ -121,6 +129,27 @@ def _expected_within(results: list[dict], expect: str | None, cutoff: float) -> 
         if expect is not None and str(row.get("id")) == str(expect):
             return _within(row.get("distance"), cutoff)
     return False
+
+
+def _print_candidates(results: list[dict]) -> None:
+    """
+    The rows themselves, with their ids, for a question nobody could
+    name an entry for.
+
+    The harness demanded an --expect id and offered no way to find
+    one, which stopped a real measurement on 2026-08-24. These are the
+    candidates: read them, pick the one that actually ANSWERS the
+    question rather than the one that merely mentions it, and name it
+    on the next run.
+    """
+    print("       candidates -- name one with --expect on the next run:")
+    for row in results:
+        distance = row.get("distance")
+        shown = " ".join(str(row.get("content", "")).split())[:74]
+        marker = f"{distance:.4f}" if isinstance(distance, float) else "  --  "
+        print(
+            f"         #{row.get('id'):<5} {marker}  {row.get('kind', ''):<16} {shown}"
+        )
 
 
 def _print_regime(
@@ -203,7 +232,13 @@ def main() -> int:
         ),
     )
     parser.add_argument("--hit", action="append", default=[], metavar="QUESTION")
-    parser.add_argument("--expect", action="append", default=[], metavar="ID")
+    parser.add_argument(
+        "--expect",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="Matched by position to --hit. Use - for one you cannot name yet.",
+    )
     parser.add_argument("--miss", action="append", default=[], metavar="QUESTION")
     args = parser.parse_args()
 
@@ -219,7 +254,10 @@ def main() -> int:
     if args.expect and len(args.expect) != len(args.hit):
         print(
             f"--expect given {len(args.expect)} times for {len(args.hit)} --hit "
-            "questions. Matched by position: one each, or none at all."
+            "questions. Matched by position, so it has to line up: one each, or "
+            "none at all.\n"
+            "Pass - for the ones you cannot name yet and their candidate rows "
+            "will be printed with their ids."
         )
         return 1
     if not os.path.exists(args.db):
@@ -242,7 +280,12 @@ def main() -> int:
         )
         return 1
 
-    expects = args.expect or [None] * len(args.hit)
+    # "-" is "I do not know this one yet", which is a different thing
+    # from "score it against whatever came back first". Both end up as
+    # None, but the first prints the candidates.
+    expects = [None if e.strip() in ("-", "") else e for e in args.expect] or [
+        None
+    ] * len(args.hit)
     conn = rag.get_connection()
 
     tallies = {mode: {k: 0 for k in ("rescued", "missed", "false")} for mode in modes}
@@ -292,6 +335,9 @@ def main() -> int:
             for mode in modes:
                 variants, _ = per_mode[mode]
                 print(f"       {mode:<6} {variants if variants else '(aucune)'}")
+
+            if expect is None:
+                _print_candidates(base_results)
 
             if expect is None:
                 continue

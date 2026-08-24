@@ -232,3 +232,67 @@ def test_a_named_entry_that_never_came_back_is_not_a_distance(store):
 
     assert recall_expansion._distance_of(rows, "308") is None
     assert recall_expansion._distance_of(rows, "7") == 0.4
+
+
+def test_a_question_with_no_named_entry_gets_its_candidates_printed(store, capsys):
+    """
+    The harness demanded an --expect id and offered no way to find
+    one, which stopped a real measurement on 2026-08-24. The first run
+    is what finds the ids.
+    """
+    _run(
+        store,
+        "--cutoff",
+        "0.88",
+        "--mode",
+        "terms",
+        "--hit",
+        "Tu peux me lister mon matériel ?",
+    )
+
+    out = capsys.readouterr().out
+    assert "candidates" in out
+    assert "NiPoGi" in out
+
+
+def test_a_dash_means_not_known_yet(store, capsys):
+    """
+    Different from omitting --expect entirely: it lets the ids you DO
+    have stay aligned with their questions.
+    """
+    assert (
+        _run(
+            store,
+            "--cutoff",
+            "0.88",
+            "--mode",
+            "terms",
+            "--hit",
+            "Tu peux me lister mon matériel ?",
+            "--expect",
+            "1",
+            "--hit",
+            "Une question dont j'ignore la réponse",
+            "--expect",
+            "-",
+        )
+        == 0
+    )
+
+    assert "candidates" in capsys.readouterr().out
+
+
+def test_the_misalignment_message_says_how_to_fix_it(store, capsys):
+    _run(
+        store,
+        "--cutoff",
+        "0.88",
+        "--hit",
+        "une question",
+        "--hit",
+        "une autre",
+        "--expect",
+        "1",
+    )
+
+    assert "Pass - for the ones" in capsys.readouterr().out
