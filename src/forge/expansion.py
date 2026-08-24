@@ -301,9 +301,8 @@ def variants(query: str, mode: str) -> list[str]:
 # rule names and answers 400 to EVERY completion when it does, which
 # is a dead router rather than a degraded one (v3.10, ffa9542).
 _GRAMMAR = r"""root ::= ws "[" ws string ws "," ws string ws "," ws string ws "]" ws
-string ::= "\"" schar* "\""
-schar ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" hex hex hex hex)
-hex ::= [0-9a-fA-F]
+string ::= "\"" word (" " word)+ "\""
+word ::= [^"\\ \x7F\x00-\x1F]+
 ws ::= [ \t\n]*
 """
 

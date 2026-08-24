@@ -27,6 +27,17 @@ class TestGrammar:
     def test_it_admits_exactly_three_strings(self):
         assert expansion._GRAMMAR.count("string ws") == 3
 
+    def test_a_one_word_rewrite_is_unrepresentable(self):
+        """
+        Measured 2026-08-24: two of three real questions came back as
+        single nouns -- ['config', 'développement', 'matériel'] and
+        ['conteneurs', 'conteneurs', 'conteneurs']. Every one was
+        dropped by keep(), every rescue silently cancelled. Filtering
+        after the fact left the mechanism doing nothing; the floor
+        belongs where the model cannot produce it.
+        """
+        assert 'word (" " word)+' in expansion._GRAMMAR
+
 
 class TestParse:
     def test_a_plain_array(self):
