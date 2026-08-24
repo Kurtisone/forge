@@ -16,14 +16,12 @@ itself, asks questions it knows the answers to, and asks the same store
 questions it knows are unanswerable. Both distributions printed side by
 side, and the cutoff goes in the gap.
 
-    podman exec forge sh -c 'rm -rf /tmp/arm && mkdir -p /tmp/arm'
-    podman cp src forge:/tmp/arm/
-    podman cp bench/recall_distance.py forge:/tmp/arm/
-    podman cp bench/_harness.py forge:/tmp/arm/
-    podman exec -it forge python /tmp/arm/recall_distance.py
+    bench/in_container.sh recall_distance
 
-The rm -rf is not cosmetic: podman cp merges into an existing directory
-instead of replacing it, so without it the run is a mix of checkouts.
+The six-command copy dance lives in bench/in_container.sh now -- the
+faults in it are silent (a merged /tmp/arm holding two checkouts, a
+harness pointed at the real store) and it was duplicated across every
+file here.
 
 It writes to a SEPARATE database (--db, default /tmp/recall_bench.db)
 and never touches data/forge_rag.db. Planting fixtures in the real

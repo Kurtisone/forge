@@ -249,18 +249,23 @@ you cannot ask it what is *in* there without already having a question. `GET /me
 embedding call at all, and report the breakdown by `kind`. `!forget <id>` /
 `DELETE /memory/{id}` remove one entry from both tables.
 
-Two harnesses go with it, both writing to their own database and never to
-`data/forge_rag.db`:
+Three harnesses go with it, none of which ever writes to
+`data/forge_rag.db`. `bench/in_container.sh` copies the checkout and a fresh copy
+of the store into the container and runs one of them there — it is the six-command
+`podman cp` sequence that used to sit at the top of each file, where forgetting a
+line was silent:
 
 ```bash
 # what distance a good hit sits at, on this box, with this embedding model
-python bench/recall_distance.py
+bench/in_container.sh recall_distance
 
 # whether the query instruction helps on this store (needs --expect ids)
-python bench/instruct_prefix.py --db /tmp/copy.db --hit "..." --expect 308 --miss "..."
+bench/in_container.sh instruct_prefix --db /tmp/real_copy.db \
+    --hit "Quel processeur a mon NiPoGi ?" --expect 308 \
+    --miss "Comment s'appelle mon chat ?"
 
 # what burying a sentence in a compacted block costs
-python bench/rag_dilution.py
+bench/in_container.sh rag_dilution
 
 # one-shot: re-slice blocks written before the per-exchange intake
 python deploy/rag_resplit.py                      # dry run, the default

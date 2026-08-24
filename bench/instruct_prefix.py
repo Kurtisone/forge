@@ -49,15 +49,14 @@ Without --expect there is nothing to name, so the hit column falls
 back to the closest row and the verdict says so. A question you cannot
 score is a question this harness should not be quietly averaging in.
 
-    podman exec forge sh -c 'rm -rf /tmp/arm && mkdir -p /tmp/arm'
-    podman cp src forge:/tmp/arm/
-    podman cp bench/instruct_prefix.py forge:/tmp/arm/
-    podman cp bench/_harness.py forge:/tmp/arm/
-    podman exec forge cp /app/data/forge_rag.db /tmp/real_copy.db
-    podman exec -it forge python /tmp/arm/instruct_prefix.py \\
-        --db /tmp/real_copy.db \\
+    bench/in_container.sh instruct_prefix --db /tmp/real_copy.db \\
         --hit "Quel processeur a mon NiPoGi ?" --expect 308 \\
         --miss "Comment s'appelle mon chat ?"
+
+The six-command copy dance lives in bench/in_container.sh now -- the
+faults in it are silent (a merged /tmp/arm holding two checkouts, a
+harness pointed at the real store) and it was duplicated across every
+file here.
 
 Read-only. It never writes to the database it is given, but pass a
 copy anyway -- the habit is what keeps a benchmark out of production.

@@ -38,13 +38,12 @@ for an unrelated reason.
 Everything goes through forge.llm.call_llm, so both arms see production
 conditions: same temperature, stop sequences, slot, and grammar.
 
-    podman exec forge sh -c 'rm -rf /tmp/arm && mkdir -p /tmp/arm'
-    podman cp src forge:/tmp/arm/
-    podman cp bench/no_think_ab.py forge:/tmp/arm/
-    podman exec -it forge python /tmp/arm/no_think_ab.py --repeat 2
+    bench/in_container.sh no_think_ab --repeat 2
 
-The rm -rf is not cosmetic: podman cp merges into an existing directory
-instead of replacing it, so without it the run is a mix of checkouts.
+The six-command copy dance lives in bench/in_container.sh now -- the
+faults in it are silent (a merged /tmp/arm holding two checkouts, a
+harness pointed at the real store) and it was duplicated across every
+file here.
 
 Use --dry to print both prompt variants and call nothing, --only to run
 a single graph.
