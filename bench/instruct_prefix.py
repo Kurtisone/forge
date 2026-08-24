@@ -68,7 +68,7 @@ import argparse
 import os
 import sys
 
-from _harness import misplaced, placeholders, read_row
+from _harness import placeholders, read_row, split_misplaced
 
 # The task description Qwen's format expects. Theirs is written for
 # web search; this one says what Forge actually stores, because the
@@ -215,13 +215,26 @@ def main() -> int:
                 pre_misses.append(pre[0])
             print(f"  {question[:42]:<42} {_cell(raw)} {_cell(pre)}")
 
-        off = sorted(set(misplaced(raw_rows) + misplaced(pre_rows)))
-        if off:
-            print("\n  /!\\ the entry named by --expect did not come back first for:")
-            for question in off:
+        # Two states under one warning is how a reader draws the
+        # wrong conclusion from a correct message. Second place is
+        # scored and counted; absent is not scoreable at all. The
+        # first version printed both under one heading whose
+        # explanation only covered the second, so a question that WAS
+        # in the verdict read as though it had been thrown out.
+        outranked, absent = split_misplaced(raw_rows + pre_rows)
+        if outranked:
+            print("\n  /!\\ named entry came back, but not first, for:")
+            for question in outranked:
                 print(f"        {question}")
-            print("      Where it did not come back AT ALL, the question is left")
-            print("      out of the verdict below -- there is no distance to the")
+            print("      Still scored on the right row, so these ARE in the")
+            print("      verdict. Something else in the store is closer to the")
+            print("      question than the entry that answers it -- the bracket")
+            print("      shows what.")
+        if absent:
+            print("\n  /!\\ named entry did not come back AT ALL for:")
+            for question in absent:
+                print(f"        {question}")
+            print("      Left out of the verdict: there is no distance to the")
             print("      right row to compare. Fix retrieval before reading this.")
         if not args.expect:
             print("\n  No --expect given, so the hit column is whatever came back")
@@ -248,6 +261,18 @@ def main() -> int:
     gap_pre = min(pre_misses) - max(pre_hits)
 
     print("\n=== VERDICT ===")
+    if len(raw_hits) < 3 or len(raw_misses) < 3:
+        # recall_distance refuses outright below three of each, and it
+        # is right to: it hands back a threshold, and a threshold from
+        # two points is a coin flip with a decimal place. This one
+        # reports a DIRECTION, which survives a thin sample better --
+        # the 2026-08-23 result was trustworthy because all six
+        # questions moved the way one mechanism predicts, not because
+        # of the size of the gap. So: said out loud, not refused.
+        print(
+            f"  (on {len(raw_hits)} scored hit(s) and {len(raw_misses)} miss(es) "
+            "-- read the direction, not the number)"
+        )
     print(
         f"  raw       worst hit {max(raw_hits):.4f} | best miss "
         f"{min(raw_misses):.4f} | gap {gap_raw:+.4f}"

@@ -99,7 +99,32 @@ def misplaced(rows: list[tuple[str, str | None, int | None]]) -> list[str]:
     silently and its distance went into the gap as though it were a
     hit.
     """
-    return [q for q, expect, rank in rows if expect is not None and rank != 1]
+    outranked, absent = split_misplaced(rows)
+    return outranked + absent
+
+
+def split_misplaced(
+    rows: list[tuple[str, str | None, int | None]],
+) -> tuple[list[str], list[str]]:
+    """
+    `misplaced`, told apart: (came back but not first, never came back).
+
+    Same rows, and the same expectation that an expectation never
+    given is not a failure. The split exists because the two halves
+    want opposite handling by anything that scores on the named row:
+    second place is still the right row and still scoreable, absent is
+    not scoreable at all. Printing them under one heading is how a
+    reader concludes a question was thrown out of a verdict it is
+    actually in -- observed on the first real run of the fixed
+    instruct_prefix, 2026-08-24.
+    """
+    outranked = sorted(
+        {q for q, expect, rank in rows if expect is not None and rank not in (None, 1)}
+    )
+    absent = sorted(
+        {q for q, expect, rank in rows if expect is not None and rank is None}
+    )
+    return outranked, absent
 
 
 def read_row(

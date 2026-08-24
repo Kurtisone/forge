@@ -107,6 +107,21 @@ class TestMisplaced:
     def test_no_expectation_is_not_a_failure(self, rd):
         assert rd.misplaced([("q", None, None)]) == []
 
+    def test_the_split_keeps_second_place_apart_from_absent(self, rd):
+        # They want opposite handling from anything that scores on the
+        # named row, and one heading over both reads as "thrown out"
+        # for a question that is still in the verdict.
+        rows = [("second", "308", 2), ("gone", "308", None), ("fine", "308", 1)]
+        assert rd.split_misplaced(rows) == (["second"], ["gone"])
+
+    def test_the_split_still_ignores_questions_with_no_expectation(self, rd):
+        assert rd.split_misplaced([("q", None, None)]) == ([], [])
+
+    def test_the_split_covers_everything_misplaced_reports(self, rd):
+        rows = [("second", "308", 2), ("gone", "176", None), ("fine", "1", 1)]
+        outranked, absent = rd.split_misplaced(rows)
+        assert sorted(rd.misplaced(rows)) == sorted(outranked + absent)
+
     def test_the_real_run(self, rd):
         # 2026-08-23, the three hit questions as measured.
         rows = [
