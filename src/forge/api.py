@@ -115,6 +115,7 @@ def log_effective_settings() -> None:
     constants, so what is printed is what the code will actually use.
     """
     from forge import compaction
+    from forge.graphs import recall
     from forge.providers import llama_cpp
 
     log.event(
@@ -123,6 +124,8 @@ def log_effective_settings() -> None:
         cache_prompt=llama_cpp.LLAMA_CPP_CACHE_PROMPT,
         use_grammar=llama_cpp.LLAMA_CPP_USE_GRAMMAR,
         memory_enabled=MEMORY_ENABLED,
+        recall_cutoff=recall.RECALL_MAX_DISTANCE,
+        recall_expansion=recall.RECALL_EXPANSION,
         compaction_enabled=compaction.COMPACTION_ENABLED,
         compaction_threshold=compaction.COMPACTION_THRESHOLD,
         compaction_token_threshold=compaction.COMPACTION_TOKEN_THRESHOLD,

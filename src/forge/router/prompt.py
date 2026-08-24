@@ -83,7 +83,15 @@ TOOL_DESCRIPTIONS = {
         'unsure, use "fact". "project" is optional. Only use this '
         "tool when the user explicitly asks you to remember/save "
         "something -- never as a side effect of an unrelated answer. "
-        'To look something up, use "recall" instead, not this tool.'
+        'To look something up, use "recall" instead, not this tool. '
+        "WRITE THE FACT AS A SENTENCE, IN THE USER'S OWN WORDS. Do "
+        "not compress it into a keyword list: this memory is searched "
+        "by meaning and wording, so a fact keeps the words someone "
+        'would use to look for it later. Store "Le serveur NiPoGi '
+        "AM06PRO tourne sous Arch avec un processeur Ryzen 5500U et 32 "
+        'Go de RAM", never "NiPoGi AM06PRO, Arch, 5500U, 32Go RAM" -- '
+        'the second one drops "processeur" and "Ryzen", and a question '
+        "about the processor will never find it again."
     ),
     "recall": (
         "content is a question in plain text (not JSON), e.g. "

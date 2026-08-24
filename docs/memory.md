@@ -259,6 +259,114 @@ The limit, stated plainly: this fingerprints what Forge controls. Swapping the
 embedding model behind the same `EMBEDDING_URL` moves every distance in the store
 and leaves the tag identical.
 
+### When the question is the problem, not the threshold
+
+Measured on the real store, 2026-08-24, both questions about the same hardware:
+
+| question | result |
+|---|---|
+| `Quel processeur a mon NiPoGi ?` | `#308` at rank 1, 0.7289 |
+| `Tu peux me lister mon matériel ?` | `#308` nowhere in the top 5 |
+
+No value of `RECALL_MAX_DISTANCE` separates those, because the entry never comes
+back to be filtered. Retrieval here follows the wording as much as the meaning,
+and a note reading *processeur Ryzen 5500U, 32 Go de RAM* does not share a word
+with a question that says *matériel*.
+
+So `RECALL_EXPANSION` asks again, in other words — **on the query, never on the
+stored fact**. A wrong expansion of a query searches somewhere useless and the
+cutoff throws the result away; a wrong expansion of a fact writes something
+nobody said into memory, where it is indistinguishable from something they did,
+and it stays.
+
+| mode | what it does |
+|---|---|
+| `off` | nothing. The default. |
+| `terms` | strips the conversational frame and the stopwords. **Measured worse, four questions out of four** — see below. Kept so the finding stays reproducible; do not turn it on. |
+| `llm` | one model call under its own grammar, asking for three queries written with the words **the answer** would use. |
+
+### Measured, and shipped off
+
+**Verdict, 2026-08-24: `llm` works as a mechanism and there is no threshold to
+give it on this store. It ships `off`.** Six rounds of measurement, three
+readings of the gap between what the rescue finds and what it drags in, and the
+gap came out negative every time.
+
+The mechanism is not what failed. It moves the right entries closer — `#307`
+went from absent-from-the-top-5 to rank 1 — and pushes the wrong ones away: the
+cat question receded from 0.9495 to 1.1263, the tarte tatin and the social
+security number stopped returning anything at all. What it cannot do is
+*separate*. On a store holding five or six short facts that all overlap, every
+distance bunches between 0.94 and 1.14, answers and non-answers alike, and the
+closest competitor to the hardware question sits 0.009 from the answer.
+
+Every failure traced back to the store, not to the search:
+
+| what went wrong | what it really was |
+|---|---|
+| `#167` and `#176` beat every fact on technical questions | archived transcripts holding tool output — long, noun-dense, unbeatable by a one-line fact. Now excluded from the rescue. |
+| two questions of three had no answer at all | ~290 archived exchanges, most of them refusals, against five facts |
+| `#315` unreachable by any rewrite | stored as `NiPoGi AM06PRO, Arch, 5500U, 32Go RAM` — the words a question would use were dropped at write time |
+| category rewrites lost to brand-name rewrites | the facts are themselves bags of product names, so only product-name queries match them |
+
+That last row is the one to sit with. Forbidding the model to guess a brand made
+retrieval *worse* here — `#313` went from 0.9941 to 1.1341 — because `#313` is
+`Steam Deck, SteamOS, conteneurs Podman`, a telegram of product names. The rule
+is still right: a guessed brand is a wrong answer waiting to happen on any store
+whose owner runs something else. It looks wrong here only because the write path
+had already reduced the facts to the same shape as a bad query.
+
+**So the order of work is: fill the store, then calibrate the rescue.** Turning
+`RECALL_EXPANSION=llm` on today buys a 7-second model call on every refused
+question and rescues nothing. The harness is here, the numbers are here, and the
+question can be reopened in one command the day the store has enough facts to
+tell an answer from a neighbour.
+
+Measured against the real store, 2026-08-24, distance to the named entry (or to
+the closest row where it was absent):
+
+| question | baseline | `terms` | `llm` |
+|---|---|---|---|
+| `Tu peux me lister mon matériel ?` | 0.9083 *(#308 absent)* | 1.0277 | **0.9766** *(#308 at rank 2)* |
+| `Combien de RAM a le NiPoGi ?` | 0.7336 | 0.8591 | — *(already within the cutoff)* |
+| `Comment s'appelle mon chat ?` *(miss)* | 0.9495 | 1.0821 | 1.0431 |
+
+`terms` lost on every question it was asked, hits and misses alike. The embedding
+model is instruction-tuned on natural-language queries, and a keyword bag is
+off-distribution for it — even the mild rewrite, still a phrase, lost by more
+than a tenth. What worked was the model's rewrites, and those are *phrases in the
+store's own vocabulary* (`matériel ordinateur portable`, `processeur mémoire
+disque`), not the question with its function words removed. Stripping words from
+a question does not make it a better query here; it makes it a worse sentence.
+
+The model call costs ~7 s on the Deck for a ~330-token prompt — against the ~47 s
+the router already spends, and only on the path that was going to refuse.
+
+It runs on **one path**: after the cutoff has dropped everything, instead of "je
+n'ai rien d'assez proche". Three things follow.
+
+- **Free on every question that already works.** A recall whose first pass keeps
+  something never builds a variant and never spends the model call.
+- **It cannot displace a good answer.** The alternative outcome on that path is a
+  refusal.
+- **It changes no distance the threshold was calibrated against.** The first pass
+  is untouched, every variant goes through the same query wrapper, and the merge
+  keeps real query-to-entry distances — the minimum across phrasings, never a
+  statistic over several. `0.88@a5c47b` and its tag stay valid; nothing has to be
+  re-measured before this can be used.
+
+**With no cutoff set it can never fire** — nothing is ever dropped, so there is
+never a failure to rescue. Forge says so at startup rather than leaving it to be
+discovered.
+
+What it *can* do is let a miss in: a rephrasing that sits nearer some unrelated
+entry than the question did. That is the price, and `recall.rescued` logs every
+one with the entry id, the distance and the **variant** that found it, because
+when a rescued answer turns out to be wrong the question is which rephrasing
+dragged it in. The sub-trace says *après reformulation* for the same reason.
+`bench/in_container.sh recall_expansion` counts both sides on a copy of the real
+store; it is what earns the setting.
+
 ### Reading and repairing the store
 
 `search` was the only reader this store ever had, and it is semantic by construction —
@@ -267,7 +375,7 @@ you cannot ask it what is *in* there without already having a question. `GET /me
 embedding call at all, and report the breakdown by `kind`. `!forget <id>` /
 `DELETE /memory/{id}` remove one entry from both tables.
 
-Three harnesses go with it, none of which ever writes to
+Four harnesses go with it, none of which ever writes to
 `data/forge_rag.db`. `bench/in_container.sh` copies the checkout and a fresh copy
 of the store into the container and runs one of them there — it is the six-command
 `podman cp` sequence that used to sit at the top of each file, where forgetting a
@@ -280,6 +388,11 @@ bench/in_container.sh recall_distance
 # whether the query instruction helps on this store (needs --expect ids)
 bench/in_container.sh instruct_prefix --db /tmp/real_copy.db \
     --hit "Quel processeur a mon NiPoGi ?" --expect 308 \
+    --miss "Comment s'appelle mon chat ?"
+
+# what asking again in other words rescues, and what it lets in
+bench/in_container.sh recall_expansion --db /tmp/real_copy.db \
+    --hit "Tu peux me lister mon matériel ?" --expect 308 \
     --miss "Comment s'appelle mon chat ?"
 
 # what burying a sentence in a compacted block costs

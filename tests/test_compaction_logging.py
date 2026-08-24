@@ -136,5 +136,12 @@ def test_startup_prints_the_settings_whose_wrong_value_only_costs_latency(monkey
         "compaction_threshold",
         "compaction_token_threshold",
         "compaction_strategy",
+        # Whether the rescue pass is armed cost a real round trip to
+        # the Deck to determine, on 2026-08-24: the store said one
+        # thing, the container said nothing at all, and the only way
+        # to tell was the ABSENCE of a recall.expansion event in a log
+        # of a failed question.
+        "recall_cutoff",
+        "recall_expansion",
     ):
         assert key in fields

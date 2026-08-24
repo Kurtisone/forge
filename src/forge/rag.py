@@ -372,12 +372,20 @@ def query_fingerprint() -> str:
     return hashlib.sha256(_as_query("").encode("utf-8")).hexdigest()[:6]
 
 
+#: The kind that is archived conversation rather than something
+#: anyone chose to write down. Named here because two different
+#: callers need to talk about it: format_results ranks it last, and
+#: the recall rescue pass refuses to search it at all.
+ARCHIVED_KIND = "history_summary"
+
+
 def search(
     conn: sqlite3.Connection,
     query: str,
     top_k: int = 5,
     kind: str | None = None,
     project: str | None = None,
+    exclude_kind: str | None = None,
 ) -> list[dict]:
     query_embedding = _embed(_as_query(query))
 
@@ -386,6 +394,9 @@ def search(
     if kind is not None:
         filters.append("e.kind = ?")
         params.append(kind)
+    if exclude_kind is not None:
+        filters.append("e.kind != ?")
+        params.append(exclude_kind)
     if project is not None:
         filters.append("e.project = ?")
         params.append(project)
@@ -416,6 +427,82 @@ def search(
         }
         for r in rows
     ]
+
+
+def _distance_key(row: dict) -> tuple[int, float]:
+    """
+    Sort key putting rows with no distance LAST rather than first.
+
+    A missing distance is not a distance of zero. rag.search always
+    reports one, but _drop_distant in graphs/recall.py already treats
+    "not reported" as "keep" rather than "too far", and sorting the
+    same row to the front would put an unmeasured entry above every
+    measured one.
+    """
+    d = row.get("distance")
+    return (0, float(d)) if isinstance(d, (int, float)) else (1, 0.0)
+
+
+def _is_closer(candidate: dict, current: dict) -> bool:
+    """Does *candidate* beat *current*, missing distances included."""
+    return _distance_key(candidate) < _distance_key(current)
+
+
+def search_many(
+    conn: sqlite3.Connection,
+    queries: list[str],
+    top_k: int = 5,
+    kind: str | None = None,
+    project: str | None = None,
+    exclude_kind: str | None = None,
+) -> list[dict]:
+    """
+    Search once per query, merged on entry id, keeping each entry's
+    BEST distance and the query that produced it.
+
+    One embedding call and one SQL query per string, so the caller
+    pays for the list it passes. Nothing is written and nothing is
+    re-embedded on the store side -- the asymmetry that makes query
+    expansion cheap is the same one that made the query instruction
+    cheap (see _as_query): documents stay exactly as they were
+    stored.
+
+    MIN and not mean. An entry that one phrasing finds at 0.72 and
+    another at 1.10 IS at 0.72 from the question, asked the right way;
+    averaging the two would punish an entry for the phrasings that
+    missed it, which is the opposite of what asking several ways is
+    for. It also keeps the numbers on the scale RECALL_MAX_DISTANCE
+    was measured against: every distance here is a real query-to-entry
+    distance, not a statistic over several.
+
+    Each row carries `matched_query`, the string that found it at that
+    distance. Without it a merged list is unattributable -- when a
+    rescued answer turns out to be wrong, the question is which
+    rephrasing dragged it in, and that has to be readable in the log
+    rather than reconstructed.
+
+    `top_k` applies twice, deliberately: each query returns its own
+    top_k, and the merge is truncated to top_k again. So an entry
+    reaches the caller only if at least one phrasing ranked it in its
+    own top_k -- a merge of N queries does not hand synthesis N times
+    the material.
+    """
+    merged: dict[int, dict] = {}
+    for query in queries:
+        for row in search(
+            conn,
+            query=query,
+            top_k=top_k,
+            kind=kind,
+            project=project,
+            exclude_kind=exclude_kind,
+        ):
+            row = dict(row, matched_query=query)
+            current = merged.get(row["id"])
+            if current is None or _is_closer(row, current):
+                merged[row["id"]] = row
+
+    return sorted(merged.values(), key=_distance_key)[:top_k]
 
 
 def list_entries(
