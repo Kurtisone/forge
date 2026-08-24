@@ -41,6 +41,32 @@ model call. MEASURED ON THE REAL STORE, 2026-08-24: it moved #308
 from absent-from-the-top-5 to rank 2, on the exact question that
 motivated this module.
 
+WHAT THE SECOND PASS OF 2026-08-24 FOUND, and what this module now
+does about it. Run again against the real store, `llm` put the named
+entry at rank 1 on both hit questions -- and FURTHER AWAY than the
+baseline it replaced:
+
+    question                                baseline      llm
+    Tu peux me lister mon matériel ?     0.9083 r?    0.9488 r1
+    Qu'est-ce que j'utilise comme … ?    1.0400 r?    1.1341 r1
+    Comment s'appelle mon chat ? (miss)  0.9979 r?    1.1865 r?
+
+Rank up, distance down, and the cutoff filters on DISTANCE -- so
+every rescue landed above 0.88 and the pass rescued nothing. The
+variants say why: `['matériel ordinateur', 'équipement informatique',
+'configuration système']`. Keyword bags. Which is what the prompt
+ASKED for: it said "no question mark, no politeness -- these are
+search queries, not questions", and the model obeyed it exactly.
+
+So the mode that lost was never really `terms` versus `llm`. It was
+the keyword form, twice, once written by a regex and once by a model
+told to write one. The vocabulary bridging is what worked ("matériel"
+-> "processeur mémoire disque" is what moved #308); the shape it was
+delivered in is what cost the distance, on an embedding model
+instruction-tuned for natural-language queries. The rewrites are
+QUESTIONS now, in the answer's vocabulary, and the grammar is what
+enforces it.
+
 AND `terms` LOST, on every question it was asked -- see its docstring
 for the four numbers. It is kept because a measured negative is worth
 being able to reproduce, and because it is free to re-run if the
@@ -119,6 +145,18 @@ _STOPWORDS = frozenset(_STOPWORD_TEXT.split())
 # side of the search.
 _MIN_VARIANT_WORDS = 2
 
+# A token carrying no word character at all. Split out of the count
+# because the rewrites now END in a question mark: "matériel ?" splits
+# into two tokens and would have passed a floor written to refuse one
+# content word, which is the exact rewrite the floor exists to refuse.
+_PUNCTUATION_ONLY_RE = re.compile(r"^\W+$", re.UNICODE)
+
+# What separates a question from a bag of nouns, spelled as the one
+# character that survives every phrasing. Checked in code and not only
+# in the prompt because the grammar is llama.cpp's alone: on ollama or
+# OpenRouter the same call runs unconstrained.
+_QUESTION_MARK_RE = re.compile(r"[?\uFF1F]\s*$")
+
 
 def _fold(text: str) -> str:
     """
@@ -133,6 +171,11 @@ def _fold(text: str) -> str:
     stripped = unicodedata.normalize("NFD", text.lower())
     stripped = "".join(c for c in stripped if unicodedata.category(c) != "Mn")
     return " ".join(re.findall(r"[\w-]+", stripped))
+
+
+def _content_tokens(text: str) -> int:
+    """How many of the whitespace-separated tokens carry a word."""
+    return sum(1 for token in text.split() if not _PUNCTUATION_ONLY_RE.match(token))
 
 
 def _without_frame(query: str) -> str:
@@ -168,7 +211,7 @@ def _acceptable(variant: str, query: str, seen: set[str]) -> bool:
     # splits `m'appelle` into two tokens, so a variant that is visibly
     # one word passed this check and reached the store as a query
     # matching everything.
-    if len(variant.split()) < _MIN_VARIANT_WORDS:
+    if _content_tokens(variant) < _MIN_VARIANT_WORDS:
         return False
     return len(variant) <= _MAX_VARIANT_CHARS
 
@@ -219,6 +262,16 @@ def terms(query: str) -> list[str]:
     model's rewrites, and those are PHRASES in the store's own
     vocabulary, not the question with its function words removed.
 
+    Sharpened by the second pass of the same day, which measured the
+    model writing keyword bags of its own (because the prompt asked
+    for them) and losing distance in the same direction: it is the
+    keyword SHAPE that this embedding model scores badly, whoever
+    writes it. `terms` is not a bad implementation of a good idea, it
+    is a correct implementation of the shape that loses -- which is
+    the version of this finding worth keeping, because the next
+    person to think "surely stripping the stopwords helps" gets a
+    number instead of an opinion.
+
     No model, no network, no configuration. Either can come back
     identical to the query or to each other, in which case `keep`
     drops it and the caller pays nothing.
@@ -265,7 +318,12 @@ def variants(query: str, mode: str) -> list[str]:
         # rather than a rescue built out of the rewrites that lost.
         # Unhelped, never wrong.
         proposed = _from_llm(query)
-        kept = keep(proposed, query)
+        # Filtered HERE and not inside _from_llm, so that `proposed`
+        # still counts what the model actually said. A rewrite dropped
+        # before the count is a rescue that cancels itself while the
+        # log reports a healthy call -- the exact failure the
+        # kept-after-filtering split was introduced to end.
+        kept = keep([p for p in proposed if _asks_a_question(p)], query)
         log.event(
             "recall.expansion_llm",
             query=query[:120],
@@ -300,9 +358,17 @@ def variants(query: str, mode: str) -> list[str]:
 # is still what checks it: llama.cpp's lexer rejects underscores in
 # rule names and answers 400 to EVERY completion when it does, which
 # is a dead router rather than a degraded one (v3.10, ffa9542).
+#
+# The trailing "?" is part of the grammar and not part of the prompt,
+# for the reason this repository has now met nine times: a rule the
+# model is ASKED to follow is a rule it follows most of the time, and
+# the times it does not are the ones nobody sees. Measured 2026-08-24
+# (second pass), the prompt said "no question mark, these are search
+# queries" and the model obeyed perfectly -- which is how the
+# keyword form got measured as if it were the model's own idea.
 _GRAMMAR = r"""root ::= ws "[" ws string ws "," ws string ws "," ws string ws "]" ws
-string ::= "\"" word (" " word)+ "\""
-word ::= [^"\\ \x7F\x00-\x1F]+
+string ::= "\"" word (" " word)+ " "? "?" "\""
+word ::= [^"\\ ?\x7F\x00-\x1F]+
 ws ::= [ \t\n]*
 """
 
@@ -313,6 +379,14 @@ ws ::= [ \t\n]*
 # repository's own standing example of a question the store cannot
 # answer (bench/recall_distance.py), so a variant about it is
 # recognisable AND harmless to drop.
+#
+# The example's three strings are deliberately NOT the sentence the
+# bench sends as its tatin miss ("Quelle est la recette de la tarte
+# tatin ?"). Now that the rewrites are questions, an example string
+# could be word-for-word the query under measurement -- and on that
+# one question _echoes_the_example steps aside by design, because the
+# subject really is the user's. A copied example would then be scored
+# as a rephrasing.
 _EXAMPLE_SUBJECT = "tatin"
 
 _PROMPT = """/no_think
@@ -322,16 +396,16 @@ meaning: a note is found when it is written with the words the query
 uses. Measured on this store -- a note reading "processeur Ryzen
 5500U, 32 Go de RAM" is not found by a question that says "matériel".
 
-So rewrite the question as three short search queries, using the
-words THE ANSWER would be written with rather than the words of the
-question.
+So ask the same thing three more times, using the words THE ANSWER
+would be written with rather than the words of the question.
 
 Rules:
 - Same language as the question.
-- No question mark, no politeness, no verb of asking. These are
-  search queries, not questions.
-- Name things. If the question says "matériel", one rewrite says
-  "processeur mémoire disque".
+- Each rewrite is a COMPLETE question and ends with a question mark.
+  Not keywords: the retrieval model was trained on questions, and a
+  bag of nouns scores worse than the question it came from.
+- Name things. If the question says "matériel", one rewrite asks
+  about the processor, the memory and the disk.
 - Under twelve words each, and each different from the other two.
 - Every noun you write comes from the question, or is a plain
   category word. NEVER a product, brand or vendor name the question
@@ -345,7 +419,7 @@ Question: {query}
 
 EXAMPLE -- form only. Its subject is not yours and its words belong
 to it alone. For "Tu peux me parler de la tarte tatin ?":
-["recette tarte tatin pommes", "cuisson tarte tatin moule", "tarte tatin caramel beurre"]
+["Comment prépare-t-on une tarte tatin ?", "Quelle cuisson pour une tarte tatin ?", "Quels ingrédients dans le caramel d'une tarte tatin ?"]
 
 Now answer for the real question above, with a JSON array of exactly
 three strings and nothing else."""
@@ -421,6 +495,26 @@ def _from_llm(query: str) -> list[str]:
     # The count that means anything is the one taken after the
     # filtering, so variants() does the logging.
     return [c for c in candidates if not _echoes_the_example(c, query)]
+
+
+def _asks_a_question(candidate: str) -> bool:
+    """
+    True when a rewrite is still a question.
+
+    NOT repaired by appending the missing mark. A keyword bag with a
+    question mark on the end is a keyword bag: what the embedding
+    model scores badly is the shape of the sentence, and `terms`
+    measured exactly how badly -- four questions out of four, in the
+    same direction. Punctuating the losing form would produce the
+    losing distances under a passing check, which is worse than
+    having no rewrite at all.
+    """
+    if _QUESTION_MARK_RE.search(candidate.strip()):
+        return True
+    log.warning(
+        "expansion: dropped a rephrasing that is not a question: %r", candidate[:80]
+    )
+    return False
 
 
 def _echoes_the_example(candidate: str, query: str) -> bool:

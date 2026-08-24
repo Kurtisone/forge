@@ -283,7 +283,7 @@ and it stays.
 |---|---|
 | `off` | nothing. The default. |
 | `terms` | strips the conversational frame and the stopwords. **Measured worse, four questions out of four** — see below. Kept so the finding stays reproducible; do not turn it on. |
-| `llm` | one model call under its own grammar, asking for three queries written with the words **the answer** would use. |
+| `llm` | one model call under its own grammar, asking for three **questions** rewritten with the words **the answer** would use. |
 
 ### Measured, and shipped off
 
@@ -338,6 +338,37 @@ than a tenth. What worked was the model's rewrites, and those are *phrases in th
 store's own vocabulary* (`matériel ordinateur portable`, `processeur mémoire
 disque`), not the question with its function words removed. Stripping words from
 a question does not make it a better query here; it makes it a worse sentence.
+
+### The rewrites are questions, and that is a grammar rule
+
+The second pass of 2026-08-24 ran `llm` again on the real store and found the
+mechanism sorting correctly and scoring worse. `#307` and `#313` both came back
+at **rank 1**, and both *further away* than the baseline they replaced —
+0.9083 → 0.9488 and 1.0400 → 1.1341. The cutoff filters on distance, not on
+rank, so every rescue landed above `0.88` and the pass rescued nothing.
+
+The variants said why: `['matériel ordinateur', 'équipement informatique',
+'configuration système']`. Keyword bags — which is what the prompt had asked
+for, in as many words: *"no question mark, no politeness — these are search
+queries, not questions."*
+
+So `terms` versus `llm` was never the comparison. The keyword **shape** lost
+twice: once written by a regex, once by a model told to write one. The
+vocabulary bridging is the half that worked; the shape it arrived in is what
+cost the distance, on an embedding model instruction-tuned for natural-language
+queries.
+
+The rewrites are complete questions now, in the answer's vocabulary, and the
+grammar is what enforces it — `string ::= "\"" word (" " word)+ " "? "?" "\""`,
+with `?` excluded from `word`. Not the prompt: a rule the model is *asked* to
+follow is one it follows most of the time, and the times it does not are the
+ones nobody sees. That makes ten occasions on this repository where a
+deterministic constraint replaced a phrasing that had been trusted. A rewrite
+without a question mark is **dropped, never repaired** — punctuating a keyword
+bag produces the losing distances under a passing check.
+
+Re-measurement pending; the numbers above are the keyword-form pass and the
+comparison to beat.
 
 The model call costs ~7 s on the Deck for a ~330-token prompt — against the ~47 s
 the router already spends, and only on the path that was going to refuse.

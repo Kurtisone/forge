@@ -46,7 +46,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(rag, "_embed", _bag_of_words_embedding)
     monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "bench.db"))
     monkeypatch.setattr(
-        expansion, "call_llm", lambda prompt, grammar=None: '["processeur mémoire"]'
+        expansion, "call_llm", lambda prompt, grammar=None: '["Quel processeur ?"]'
     )
 
     conn = rag.get_connection()

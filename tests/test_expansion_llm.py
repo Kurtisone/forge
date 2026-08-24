@@ -38,6 +38,18 @@ class TestGrammar:
         """
         assert 'word (" " word)+' in expansion._GRAMMAR
 
+    def test_a_keyword_bag_is_unrepresentable(self):
+        """
+        Measured 2026-08-24 (second pass): asked for search queries,
+        the model produced ['matériel ordinateur', 'équipement
+        informatique', 'configuration système'] and every rescue
+        landed FURTHER from the answer than the question it replaced.
+        The prompt had asked for exactly that shape. Asking for the
+        other shape is not enough -- the sampler is where it holds.
+        """
+        assert 'word (" " word)+ " "? "?"' in expansion._GRAMMAR
+        assert '[^"\\\\ ?' in expansion._GRAMMAR
+
 
 class TestParse:
     def test_a_plain_array(self):
@@ -86,14 +98,14 @@ class TestFromLlm:
             expansion,
             "call_llm",
             lambda prompt, grammar=None: (
-                '["processeur mémoire disque", "NiPoGi AM06PRO", "32 Go de RAM"]'
+                '["Quel processeur et quelle mémoire ?", "Quel modèle de NiPoGi ?", "Combien de Go de RAM ?"]'
             ),
         )
 
         assert expansion._from_llm("Tu peux me lister mon matériel ?") == [
-            "processeur mémoire disque",
-            "NiPoGi AM06PRO",
-            "32 Go de RAM",
+            "Quel processeur et quelle mémoire ?",
+            "Quel modèle de NiPoGi ?",
+            "Combien de Go de RAM ?",
         ]
 
     def test_the_call_is_grammar_constrained(self, monkeypatch):
@@ -101,7 +113,7 @@ class TestFromLlm:
 
         def fake(prompt, grammar=None):
             seen["grammar"] = grammar
-            return '["a b", "c d", "e f"]'
+            return '["a b ?", "c d ?", "e f ?"]'
 
         monkeypatch.setattr(expansion, "call_llm", fake)
         expansion._from_llm("Quel processeur ?")
@@ -143,12 +155,12 @@ class TestFromLlm:
             expansion,
             "call_llm",
             lambda prompt, grammar=None: (
-                '["recette tarte tatin pommes", "processeur NiPoGi", "cuisson tarte tatin moule"]'
+                '["Quelle recette de tarte tatin ?", "Quel processeur a mon NiPoGi ?", "Quelle cuisson pour la tatin ?"]'
             ),
         )
 
         assert expansion._from_llm("Quel processeur a mon NiPoGi ?") == [
-            "processeur NiPoGi"
+            "Quel processeur a mon NiPoGi ?"
         ]
 
     def test_someone_whose_store_is_about_baking_may_still_ask(self, monkeypatch):
@@ -161,7 +173,7 @@ class TestFromLlm:
             expansion,
             "call_llm",
             lambda prompt, grammar=None: (
-                '["recette tarte tatin pommes", "cuisson tarte tatin moule", "tarte tatin caramel"]'
+                '["Quelle recette de tarte tatin ?", "Quelle cuisson pour la tatin ?", "Quel caramel pour la tatin ?"]'
             ),
         )
 
@@ -181,12 +193,12 @@ class TestLlmMode:
         monkeypatch.setattr(
             expansion,
             "call_llm",
-            lambda prompt, grammar=None: '["processeur mémoire disque"]',
+            lambda prompt, grammar=None: '["Quel processeur et quelle mémoire ?"]',
         )
 
         produced = expansion.variants("Tu peux me lister mon matériel ?", "llm")
 
-        assert produced == ["processeur mémoire disque"]
+        assert produced == ["Quel processeur et quelle mémoire ?"]
 
     def test_a_dead_provider_leaves_nothing_rather_than_the_losers(self, monkeypatch):
         """
@@ -206,7 +218,7 @@ class TestLlmMode:
             expansion,
             "call_llm",
             lambda prompt, grammar=None: (
-                '["un deux", "trois quatre", "cinq six", "sept huit", "neuf dix"]'
+                '["un deux ?", "trois quatre ?", "cinq six ?", "sept huit ?", "neuf dix ?"]'
             ),
         )
 
@@ -275,13 +287,102 @@ class TestWhatTheLogSays:
         monkeypatch.setattr(
             expansion,
             "call_llm",
-            lambda prompt, grammar=None: '["processeur mémoire disque"]',
+            lambda prompt, grammar=None: '["Quel processeur et quelle mémoire ?"]',
         )
 
         with caplog.at_level("WARNING"):
             expansion.variants("Tu peux me lister mon matériel ?", "llm")
 
         assert "nothing to search with" not in caplog.text
+
+
+class TestTheRewritesAreQuestions:
+    def test_a_keyword_bag_is_dropped(self, monkeypatch):
+        """
+        The grammar is llama.cpp's alone. On ollama or OpenRouter the
+        same call runs unconstrained, and this is the only thing
+        standing between the losing shape and the store.
+        """
+        monkeypatch.setattr(
+            expansion,
+            "call_llm",
+            lambda prompt, grammar=None: (
+                '["matériel ordinateur", "Quel processeur ai-je ?",'
+                ' "configuration système"]'
+            ),
+        )
+
+        assert expansion.variants("Tu peux me lister mon matériel ?", "llm") == [
+            "Quel processeur ai-je ?"
+        ]
+
+    def test_it_is_not_repaired_by_adding_the_mark(self, monkeypatch):
+        """
+        A keyword bag with a question mark on the end is a keyword
+        bag. `terms` measured what that shape scores, four questions
+        out of four; punctuating it would produce those distances
+        under a passing check.
+        """
+        monkeypatch.setattr(
+            expansion,
+            "call_llm",
+            lambda prompt, grammar=None: '["matériel ordinateur"]',
+        )
+
+        assert expansion.variants("Tu peux me lister mon matériel ?", "llm") == []
+
+    def test_the_drop_is_said_out_loud(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            expansion,
+            "call_llm",
+            lambda prompt, grammar=None: '["matériel ordinateur"]',
+        )
+
+        with caplog.at_level("WARNING"):
+            expansion.variants("Tu peux me lister mon matériel ?", "llm")
+
+        assert "not a question" in caplog.text
+
+    def test_terms_is_still_allowed_to_produce_its_losing_shape(self):
+        """
+        The check belongs to the model path, not to `keep`. `terms`
+        exists to keep a measured negative reproducible, and putting
+        the question floor in the shared filter would silently turn
+        it into a mode that returns nothing -- a negative result
+        deleted rather than kept.
+        """
+        assert expansion.variants("Tu peux me lister mon matériel ?", "terms")
+
+    def test_one_content_word_and_a_mark_is_still_one_content_word(self):
+        """
+        The floor counts words, and every rewrite now ends in a
+        token that is not one.
+        """
+        assert expansion.keep(["matériel ?"], "Quel matériel ?") == []
+        assert expansion.keep(["Quel processeur ?"], "Quel matériel ?") == [
+            "Quel processeur ?"
+        ]
+
+
+def test_the_prompt_asks_for_questions():
+    """
+    The prompt used to say the opposite, in as many words, and the
+    model did what it was told -- which is how the keyword form came
+    to be measured as though the model had chosen it.
+    """
+    assert "ends with a question mark" in expansion._PROMPT
+    assert "not questions" not in expansion._PROMPT
+
+
+def test_the_worked_example_is_not_a_question_the_bench_sends():
+    """
+    _echoes_the_example steps aside when the query is about the
+    example's own subject -- correctly, someone may ask about baking.
+    Now that the rewrites are questions, an example string that is
+    word-for-word the bench's tatin miss would be scored as a
+    rephrasing on the one question where nothing would catch it.
+    """
+    assert "Quelle est la recette de la tarte tatin ?" not in expansion._PROMPT
 
 
 def test_the_prompt_forbids_guessing_a_product_name():
