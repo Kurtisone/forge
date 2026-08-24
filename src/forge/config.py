@@ -538,21 +538,40 @@ RECALL_MAX_ANSWER_CHARS = int(os.getenv("RECALL_MAX_ANSWER_CHARS", "800"))
 # The two errors are not symmetric. Too high lets a bad answer through,
 # and a bad answer gets argued with. Too low produces "je n'ai rien en
 # mémoire" while the answer is sitting in the store, and that gets
-# believed. 0.95 cuts both real misses with ~0.18 of headroom and does
-# not pretend to solve a near-duplicate by picking a number.
+# believed. That argument stands; the number it produced did not.
+#
+# MEASURED AGAIN 2026-08-24, and this is the one to trust: six real
+# questions with known answers, all three hits at rank 1, scored on
+# the entry named rather than on whatever came back first -- which is
+# what every earlier run on this list got wrong.
+#
+#     hits    0.7289 (#308)  0.6640 (#17)  0.6469 (#309)
+#     misses  0.9495  1.0451  1.1578
+#     worst hit 0.7289 < best miss 0.9495 -> gap 0.2206
+#
+# 0.88, above the 0.8392 midpoint on the same reasoning as before:
+# real entries are longer and messier than fixtures, so leave the room
+# above the hits rather than below the misses. It cuts every miss with
+# 0.07 to spare and clears the worst hit by 0.15.
+#
+# The near-duplicate that made 0.95 awkward is still there and still
+# unsolved by any number: the best miss IS the archived "Comment je
+# m'appelle ? / Je ne sais pas encore" exchanges. It just sits far
+# enough out now, because the query instruction moved weight off
+# literal overlap, that a threshold no longer has to thread it.
 #
 # recall.dropped logs every cut with its id and distance, so a value
 # that bites in the wrong place is visible rather than silent. Empty
 # means no filtering at all.
 #
-# THE VALUE MAY CARRY THE REGIME IT WAS MEASURED IN, as "0.95@a5c47b",
+# THE VALUE MAY CARRY THE REGIME IT WAS MEASURED IN, as "0.88@a5c47b",
 # where the tag is rag.query_fingerprint() at the time of the
 # measurement. Distances are only comparable within one embedding
 # configuration, and on 2026-08-23 that stopped being theoretical:
 # EMBEDDING_QUERY_INSTRUCT shipped on by default, every distance
-# moved, and the 0.95 above -- measured on raw queries -- landed above
-# the best miss of the new regime, which is the wrong side. Nothing in
-# the code noticed. graphs/recall.py turns a cutoff off when the tag
+# moved, and the 0.95 then in .env.example -- measured on raw queries
+# -- landed above the best miss of the new regime, which is the wrong
+# side. Nothing in the code noticed. graphs/recall.py turns a cutoff off when the tag
 # does not match, rather than filtering with a number that means
 # something else; an untagged value is used as-is, with a warning
 # naming the fingerprint to write back once it has been re-measured.

@@ -227,15 +227,33 @@ lets a bad answer through and a bad answer gets argued with; too low answers "je
 n'ai rien en mémoire" while the entry is sitting in the store, and that gets
 believed.
 
-This is not a hypothetical rule. The 0.95 in `.env.example` was measured on raw
-queries, the query instruction shipped on by default the next day, and in the new
-regime the best miss came back at 0.9495 — *under* the cutoff. The filter that had
-been validated in real use had quietly stopped cutting the case it was validated
-on. `.env.example` therefore ships `0.95@e3b0c4` (`e3b0c4` being "no
-instruction"), which means a default deployment starts with the cutoff
-deliberately inert and a line in the log explaining why. Re-measure against a copy
-of your own store, then write the value back with the fingerprint the warning
-prints.
+This is not a hypothetical rule. The 0.95 that used to be in `.env.example` was
+measured on raw queries, the query instruction shipped on by default the next day,
+and in the new regime the best miss came back at 0.9495 — *under* the cutoff. The
+filter that had been validated in real use had quietly stopped cutting the case it
+was validated on.
+
+Re-measured 2026-08-24 in the regime that actually ships — six real questions,
+known answers, hits scored on the entry `--expect` names:
+
+| | distance |
+|---|---|
+| hits | 0.7289 (`#308`), 0.6640 (`#17`), 0.6469 (`#309`) |
+| misses | 0.9495, 1.0451, 1.1578 |
+| gap | **0.2206** |
+
+`.env.example` ships `0.88@a5c47b` from that run: above the 0.8392 midpoint,
+because real entries are longer and messier than fixtures and the room belongs
+above the hits.
+
+**One thing the tag cannot tell you.** It catches a change of embedding
+configuration. It does not catch the number having been measured on somebody
+else's store — keep the default instruction and your fingerprint matches the one
+that ships, so an inherited 0.88 engages silently on data it has never seen. A
+store of a different size, language or subject puts its hits somewhere else.
+Comment the line out for no filtering at all, which is the safe starting point,
+and run the harness against a copy of your own store to earn a number of your
+own.
 
 The limit, stated plainly: this fingerprints what Forge controls. Swapping the
 embedding model behind the same `EMBEDDING_URL` moves every distance in the store

@@ -174,14 +174,18 @@ class TestCalibrationRegime:
         assert cutoff is None
         assert "e3b0c4" in note and "a5c47b" in note
 
-    def test_the_env_example_tag_is_the_regime_it_was_measured_in(self):
+    def test_the_env_example_tag_matches_what_the_file_ships(self):
         """
-        e3b0c4 is the fingerprint of no instruction at all, which is
-        how that 0.95 was measured. If this ever equals the fingerprint
-        of the shipped configuration, someone has re-tagged a number
-        without re-measuring it.
+        The 0.88 was measured 2026-08-24 under the query instruction
+        this file ships, so its tag has to be that configuration's
+        fingerprint. Changing EMBEDDING_QUERY_INSTRUCT's default
+        without re-measuring the threshold fails here -- which is the
+        whole point of writing the two next to each other.
+
+        It cannot check the thing that actually matters to a stranger,
+        that the number was measured on THEIR store. Nothing can. That
+        warning is in the file, in prose, where it will be skipped.
         """
-        import hashlib
         import re
         from pathlib import Path
 
@@ -190,8 +194,7 @@ class TestCalibrationRegime:
         env = (Path(__file__).resolve().parents[1] / ".env.example").read_text()
         tag = re.search(r"^RECALL_MAX_DISTANCE=[\d.]+@(\w+)$", env, re.MULTILINE)
         assert tag, ".env.example no longer tags the threshold with its regime"
-        assert tag.group(1) == hashlib.sha256(b"").hexdigest()[:6]
-        assert tag.group(1) != rag.query_fingerprint()
+        assert tag.group(1) == rag.query_fingerprint()
 
 
 class TestQueryFingerprint:
