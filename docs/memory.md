@@ -259,6 +259,57 @@ The limit, stated plainly: this fingerprints what Forge controls. Swapping the
 embedding model behind the same `EMBEDDING_URL` moves every distance in the store
 and leaves the tag identical.
 
+### When the question is the problem, not the threshold
+
+Measured on the real store, 2026-08-24, both questions about the same hardware:
+
+| question | result |
+|---|---|
+| `Quel processeur a mon NiPoGi ?` | `#308` at rank 1, 0.7289 |
+| `Tu peux me lister mon matériel ?` | `#308` nowhere in the top 5 |
+
+No value of `RECALL_MAX_DISTANCE` separates those, because the entry never comes
+back to be filtered. Retrieval here follows the wording as much as the meaning,
+and a note reading *processeur Ryzen 5500U, 32 Go de RAM* does not share a word
+with a question that says *matériel*.
+
+So `RECALL_EXPANSION` asks again, in other words — **on the query, never on the
+stored fact**. A wrong expansion of a query searches somewhere useless and the
+cutoff throws the result away; a wrong expansion of a fact writes something
+nobody said into memory, where it is indistinguishable from something they did,
+and it stays.
+
+| mode | what it does |
+|---|---|
+| `off` | nothing. The default. |
+| `terms` | strips the conversational frame and the stopwords: *Tu peux me lister mon matériel ?* → `lister mon matériel`, `lister matériel`. Free apart from one embedding call each. |
+| `llm` | the above, plus one model call under its own grammar asking for three queries written with the words **the answer** would use. |
+
+It runs on **one path**: after the cutoff has dropped everything, instead of "je
+n'ai rien d'assez proche". Three things follow.
+
+- **Free on every question that already works.** A recall whose first pass keeps
+  something never builds a variant and never spends the model call.
+- **It cannot displace a good answer.** The alternative outcome on that path is a
+  refusal.
+- **It changes no distance the threshold was calibrated against.** The first pass
+  is untouched, every variant goes through the same query wrapper, and the merge
+  keeps real query-to-entry distances — the minimum across phrasings, never a
+  statistic over several. `0.88@a5c47b` and its tag stay valid; nothing has to be
+  re-measured before this can be used.
+
+**With no cutoff set it can never fire** — nothing is ever dropped, so there is
+never a failure to rescue. Forge says so at startup rather than leaving it to be
+discovered.
+
+What it *can* do is let a miss in: a rephrasing that sits nearer some unrelated
+entry than the question did. That is the price, and `recall.rescued` logs every
+one with the entry id, the distance and the **variant** that found it, because
+when a rescued answer turns out to be wrong the question is which rephrasing
+dragged it in. The sub-trace says *après reformulation* for the same reason.
+`bench/in_container.sh recall_expansion` counts both sides on a copy of the real
+store; it is what earns the setting.
+
 ### Reading and repairing the store
 
 `search` was the only reader this store ever had, and it is semantic by construction —
@@ -267,7 +318,7 @@ you cannot ask it what is *in* there without already having a question. `GET /me
 embedding call at all, and report the breakdown by `kind`. `!forget <id>` /
 `DELETE /memory/{id}` remove one entry from both tables.
 
-Three harnesses go with it, none of which ever writes to
+Four harnesses go with it, none of which ever writes to
 `data/forge_rag.db`. `bench/in_container.sh` copies the checkout and a fresh copy
 of the store into the container and runs one of them there — it is the six-command
 `podman cp` sequence that used to sit at the top of each file, where forgetting a
@@ -280,6 +331,11 @@ bench/in_container.sh recall_distance
 # whether the query instruction helps on this store (needs --expect ids)
 bench/in_container.sh instruct_prefix --db /tmp/real_copy.db \
     --hit "Quel processeur a mon NiPoGi ?" --expect 308 \
+    --miss "Comment s'appelle mon chat ?"
+
+# what asking again in other words rescues, and what it lets in
+bench/in_container.sh recall_expansion --db /tmp/real_copy.db \
+    --hit "Tu peux me lister mon matériel ?" --expect 308 \
     --miss "Comment s'appelle mon chat ?"
 
 # what burying a sentence in a compacted block costs
