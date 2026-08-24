@@ -300,10 +300,6 @@ def test_the_misalignment_message_says_how_to_fix_it(store, capsys):
 
 def test_repeating_keeps_the_worst_draw_for_a_hit(store, monkeypatch):
     """
-    Same question, two consecutive runs on the Deck, 2026-08-24: the
-    same entry at 0.9766 and then 0.9435. A third of the gap the two
-    runs measured, so one draw is one coin toss.
-
     Worst means FARTHEST for a named entry -- the draw where the
     rescue is least likely to reach it.
     """
@@ -313,25 +309,27 @@ def test_repeating_keeps_the_worst_draw_for_a_hit(store, monkeypatch):
     draws = iter([[{"id": 1, "distance": 0.70}], [{"id": 1, "distance": 0.95}]])
     monkeypatch.setattr(rag, "search_many", lambda conn, queries, top_k: next(draws))
 
-    _, results = recall_expansion._draws(None, "une question", "terms", "1", 5, 2)
+    best = recall_expansion._collect(
+        None, [(("hit", 0), "une question", "1")], ["terms"], 5, 2
+    )
 
-    assert results[0]["distance"] == 0.95
+    assert best[(("hit", 0), "terms")][1][0]["distance"] == 0.95
 
 
 def test_repeating_keeps_the_worst_draw_for_a_miss(store, monkeypatch):
-    """
-    The same rule from the other end: nearest, the draw most likely to
-    break a refusal.
-    """
+    """The same rule from the other end: nearest, the draw most likely
+    to break a refusal."""
     from forge import expansion, rag
 
     monkeypatch.setattr(expansion, "variants", lambda q, mode: ["une reformulation"])
     draws = iter([[{"id": 9, "distance": 1.20}], [{"id": 9, "distance": 0.91}]])
     monkeypatch.setattr(rag, "search_many", lambda conn, queries, top_k: next(draws))
 
-    _, results = recall_expansion._draws(None, "une question", "terms", None, 5, 2)
+    best = recall_expansion._collect(
+        None, [(("miss", 0), "une question", None)], ["terms"], 5, 2
+    )
 
-    assert results[0]["distance"] == 0.91
+    assert best[(("miss", 0), "terms")][1][0]["distance"] == 0.91
 
 
 def test_a_draw_with_no_usable_rewrites_counts_as_the_worst(store, monkeypatch):
@@ -348,10 +346,51 @@ def test_a_draw_with_no_usable_rewrites_counts_as_the_worst(store, monkeypatch):
         rag, "search_many", lambda conn, queries, top_k: [{"id": 1, "distance": 0.1}]
     )
 
-    variants, results = recall_expansion._draws(None, "une question", "llm", "1", 5, 2)
+    best = recall_expansion._collect(
+        None, [(("hit", 0), "une question", "1")], ["llm"], 5, 2
+    )
 
-    assert variants == []
-    assert results == []
+    assert best[(("hit", 0), "llm")][0] == []
+    assert best[(("hit", 0), "llm")][1] == []
+
+
+def test_the_draws_are_interleaved_not_repeated_back_to_back(store, monkeypatch):
+    """
+    Three consecutive calls on llama.cpp measure nothing: the first
+    warms the prompt cache and the next two are cache hits returning
+    byte-identical output -- prompt_ms 4116, then 189, then 186, same
+    107 characters back each time (2026-08-24).
+
+    The variance lives BETWEEN cache states, so a draw has to follow a
+    different predecessor to be a different draw.
+    """
+    from forge import expansion, rag
+
+    asked = []
+    monkeypatch.setattr(
+        expansion,
+        "variants",
+        lambda q, mode: (asked.append(q), ["une reformulation"])[1],
+    )
+    monkeypatch.setattr(rag, "search_many", lambda conn, queries, top_k: [])
+
+    recall_expansion._collect(
+        None,
+        [
+            (("hit", 0), "première question", "1"),
+            (("miss", 0), "deuxième question", None),
+        ],
+        ["terms"],
+        5,
+        2,
+    )
+
+    assert asked == [
+        "première question",
+        "deuxième question",
+        "première question",
+        "deuxième question",
+    ]
 
 
 def test_a_rescue_that_answers_with_another_entry_is_counted(store, monkeypatch):

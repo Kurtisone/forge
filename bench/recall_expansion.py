@@ -66,7 +66,7 @@ actually answers, and run again naming it. Demanding an id the
 harness itself refused to help you find was a real dead end on
 2026-08-24, not a hypothetical one.
 
---repeat N ASKS EACH QUESTION N TIMES. The expansion is a model call,
+--repeat N ASKS EACH QUESTION N TIMES, INTERLEAVED. The expansion is a model call,
 and on 2026-08-24 the same question produced different rewrites on two
 consecutive runs -- 'processeur mémoire disque' once, 'processeur
 mémoire écran' the next -- putting the same entry at 0.9766 and then
@@ -170,45 +170,74 @@ def _expected_within(results: list[dict], expect: str | None, cutoff: float) -> 
     return False
 
 
-def _draws(
-    conn, question: str, mode: str, expect: str | None, top_k: int, repeat: int
-) -> tuple[list[str], list[dict]]:
+def _worse(candidate: float | None, current: float | None, expect: str | None) -> bool:
     """
-    The WORST of `repeat` attempts, and the rewrites that produced it.
+    Is this draw worse than the one already kept?
 
-    Worst means farthest when an entry is named -- the draw where the
-    rescue is least likely to reach it -- and nearest when nothing is
+    Worse means FARTHEST when an entry is named -- the draw where the
+    rescue is least likely to reach it -- and NEAREST when nothing is
     named, which is the miss side: the draw most likely to break a
-    refusal. Both are the same rule stated from the two ends. A
-    threshold read off the best draw is a threshold that holds until
-    the next sampling.
+    refusal. Two statements of one rule, from the two ends. A
+    threshold read off the best draw holds until the next sampling.
+    """
+    if current is None:
+        return True
+    if expect is not None:
+        return candidate > current
+    return candidate < current
 
-    A draw that produced no usable rewrites at all counts, and counts
-    as the worst of them: it is what the deployment would have done.
+
+def _collect(
+    conn, questions: list[tuple], modes: list[str], top_k: int, repeat: int
+) -> dict:
+    """
+    Every question expanded `repeat` times, ROUND ROBIN, keeping each
+    one's worst draw.
+
+    The round robin is the whole point and it was not there in the
+    first version. Asking the same question three times in a row on
+    llama.cpp measures nothing: the first call warms the prompt cache
+    and the next two are cache hits returning byte-identical output --
+    measured 2026-08-24, prompt_ms 4116 then 189 then 186, same 107
+    characters back each time.
+
+    The variance that exists is BETWEEN cache states, not within one.
+    Two separate runs of this harness, minutes apart, gave 'processeur
+    mémoire disque' and then 'processeur mémoire écran' for the same
+    question, moving the entry from 0.9766 to 0.9435. So a draw has to
+    follow a DIFFERENT predecessor to be a different draw, which is
+    what interleaving the questions gives: the cache in front of
+    question three is question two's, not its own from a second ago.
+
+    It still does not make the rescue deterministic. It makes the
+    sampling honest, which is the only part a harness can fix.
     """
     from forge import expansion, rag
 
-    worst_variants: list[str] = []
-    worst_results: list[dict] = []
-    worst_key: float | None = None
-
+    best: dict[tuple, tuple[list[str], list[dict], float | None]] = {}
     for _ in range(max(1, repeat)):
-        variants = expansion.variants(question, mode)
-        results = (
-            rag.search_many(conn, queries=variants, top_k=top_k) if variants else []
-        )
-        if expect is not None:
-            key = _distance_of(results, expect)
-            key = float("inf") if key is None else key
-            worse = worst_key is None or key > worst_key
-        else:
-            key = _closest(results)
-            key = float("inf") if key is None else key
-            worse = worst_key is None or key < worst_key
-        if worse:
-            worst_key, worst_variants, worst_results = key, variants, results
-
-    return worst_variants, worst_results
+        for key, question, expect in questions:
+            for mode in modes:
+                variants = expansion.variants(question, mode)
+                results = (
+                    rag.search_many(conn, queries=variants, top_k=top_k)
+                    if variants
+                    else []
+                )
+                measured = (
+                    _distance_of(results, expect)
+                    if expect is not None
+                    else _closest(results)
+                )
+                # A draw that produced nothing counts, and counts as
+                # the worst: it is what the deployment would have done
+                # that time. Preferring the draws that produced
+                # rewrites would measure a mechanism nobody runs.
+                measured = float("inf") if measured is None else measured
+                current = best.get((key, mode))
+                if current is None or _worse(measured, current[2], expect):
+                    best[(key, mode)] = (variants, results, measured)
+    return best
 
 
 def _print_candidates(results: list[dict]) -> None:
@@ -378,6 +407,20 @@ def main() -> int:
     ] * len(args.hit)
     conn = rag.get_connection()
 
+    # Hits and misses in one list so the round robin can interleave
+    # them: a draw only differs from the last one if a different
+    # question came before it.
+    questions = [("hit", i, question) for i, question in enumerate(args.hit)]
+    questions += [("miss", i, question) for i, question in enumerate(args.miss)]
+    plan = [
+        (
+            (kind, i),
+            question,
+            expects[i] if kind == "hit" else None,
+        )
+        for kind, i, question in questions
+    ]
+
     tallies = {
         mode: {k: 0 for k in ("rescued", "wrong", "missed", "false")} for mode in modes
     }
@@ -397,8 +440,12 @@ def main() -> int:
         print(f"cutoff    : {cutoff}  (regime {rag.query_fingerprint()})")
         print(f"modes     : {', '.join(modes)}")
         if args.repeat > 1:
-            print(f"draws     : {args.repeat} per question, worst one kept")
+            print(
+                f"draws     : {args.repeat} per question, interleaved, worst one kept"
+            )
         print()
+
+        expanded = _collect(conn, plan, modes, args.top_k, args.repeat)
 
         header = f"{'':<40} {'BASELINE':<22}"
         for mode in modes:
@@ -407,7 +454,7 @@ def main() -> int:
         print("=" * len(header))
 
         print("HITS  (distance to the --expect entry, rank, [closest row])")
-        for question, expect in zip(args.hit, expects):
+        for hit_index, (question, expect) in enumerate(zip(args.hit, expects)):
             base_results = rag.search(conn, query=question, top_k=args.top_k)
             base = read_row(base_results, expect)
             ranked_rows.append((question, expect, base[1]))
@@ -418,9 +465,7 @@ def main() -> int:
 
             per_mode = {}
             for mode in modes:
-                variants, results = _draws(
-                    conn, question, mode, expect, args.top_k, args.repeat
-                )
+                variants, results, _ = expanded[(("hit", hit_index), mode)]
                 per_mode[mode] = (variants, results)
                 line += f" {_cell(read_row(results, expect))}"
             print(line)
@@ -464,16 +509,14 @@ def main() -> int:
                         )
 
         print("\nMISSES  (nothing should come back within the cutoff)")
-        for question in args.miss:
+        for miss_index, question in enumerate(args.miss):
             base_results = rag.search(conn, query=question, top_k=args.top_k)
             base = read_row(base_results, None)
             line = f"  {question[:38]:<38} {_cell(base)}"
 
             fires = not _closest_within(base_results, cutoff)
             for mode in modes:
-                variants, results = _draws(
-                    conn, question, mode, None, args.top_k, args.repeat
-                )
+                _, results, _ = expanded[(("miss", miss_index), mode)]
                 line += f" {_cell(read_row(results, None))}"
                 if fires and _closest_within(results, cutoff):
                     tallies[mode]["false"] += 1
