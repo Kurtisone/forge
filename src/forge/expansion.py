@@ -335,7 +335,11 @@ Rules:
 - Under twelve words each, and each different from the other two.
 - Rephrase the question. Never answer it, and never invent a detail
   about the person asking -- a name, a brand, a number they did not
-  give you.
+  give you. A PRODUCT NAME THAT IS NOT IN THE QUESTION IS A GUESS,
+  and a wrong guess searches the opposite of the right place: asked
+  about containers, do not write "Docker" or "Kubernetes" -- write
+  "conteneurs services", "images conteneurs", and let the store say
+  which one it runs.
 
 Question: {query}
 

@@ -282,3 +282,20 @@ class TestWhatTheLogSays:
             expansion.variants("Tu peux me lister mon matériel ?", "llm")
 
         assert "nothing to search with" not in caplog.text
+
+
+def test_the_prompt_forbids_guessing_a_product_name():
+    """
+    Measured 2026-08-24. Asked "Qu'est-ce que j'utilise comme
+    conteneurs ?", the model rewrote it as ['conteneurs Docker',
+    'machines virtuelles', 'conteneurs Kubernetes'] -- two brands the
+    question never mentioned, on a store whose answer says podman. The
+    fact that answers came back at 1.0480, pushed away by the
+    expansion that was supposed to find it.
+
+    Nothing structural can stop a guess; the grammar cannot know which
+    words are brands. The prompt names the failure instead, with the
+    case that produced it.
+    """
+    assert "Docker" in expansion._PROMPT
+    assert "Kubernetes" in expansion._PROMPT
