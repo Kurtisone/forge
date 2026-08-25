@@ -819,6 +819,101 @@ def search_many(
     return sorted(merged.values(), key=_distance_key)[:top_k]
 
 
+def _hybrid_key(row: dict) -> tuple[int, float, float]:
+    """
+    Order a merged list: measured distances first, then bm25.
+
+    Two channels means two scales and no exchange rate between them.
+    Inventing one -- normalising both into a single number, weighting
+    them, reciprocal-rank fusion -- would put a tunable constant
+    between the store and the answer, and every tunable constant in
+    this file has cost a measurement campaign to place. There is a
+    free ordering available instead: a vector hit that survived the
+    cutoff was admitted by a threshold measured against real hits and
+    real misses, and a lexical hit was admitted by a rule that says
+    nothing about how relevant it is, only that it is not noise. So
+    the measured ones go first and the word matches follow, each
+    ordered within its own channel by its own number.
+    """
+    d = row.get("distance")
+    if isinstance(d, (int, float)):
+        return (0, float(d), 0.0)
+    score = row.get("score")
+    return (1, 0.0, float(score) if isinstance(score, (int, float)) else 0.0)
+
+
+def search_hybrid(
+    conn: sqlite3.Connection,
+    query: str,
+    top_k: int = 5,
+    lexical_top_k: int = 3,
+    kind: str | None = None,
+    project: str | None = None,
+    exclude_kind: str | None = None,
+) -> list[dict]:
+    """
+    Both channels, unioned on entry id, each with its own budget and
+    its own admission rule.
+
+    A UNION AND NOT AN INTERSECTION, and not a re-ranking of one by
+    the other either. The two channels fail on different things: the
+    vector channel cannot reach an entry that is not written in prose
+    (#307, #313), and the lexical channel cannot reach an entry that
+    answers the question in other words than the ones asked. An entry
+    either channel can find is an entry Forge can answer from; asking
+    for both would keep only the questions that were already working.
+
+    EACH CHANNEL KEEPS ITS OWN BUDGET rather than sharing top_k. A
+    shared budget sorted by distance would let five vector rows crowd
+    out the lexical ones entirely -- and the case this exists for is
+    precisely the one where the vector rows are all about to be cut by
+    the cutoff, so they would be spending slots on their way to being
+    dropped.
+
+    Every row carries `channel`, and the caller needs it. A row this
+    function returns has been admitted by a rule, but not by the same
+    rule, and only the tag says which: see _drop_distant in
+    graphs/recall.py, where the vector cutoff is applied to the rows
+    it was measured for and to nothing else.
+
+    A row found by both keeps its distance AND its score. It is the
+    strongest kind of hit this store can produce -- the words match
+    and the meaning matches -- and it is the row you want to see first
+    in a log when a hybrid answer is right.
+    """
+    merged: dict[int, dict] = {}
+
+    for row in search(
+        conn,
+        query=query,
+        top_k=top_k,
+        kind=kind,
+        project=project,
+        exclude_kind=exclude_kind,
+    ):
+        merged[row["id"]] = dict(row, channel="vector")
+
+    for row in search_lexical(
+        conn,
+        query=query,
+        top_k=lexical_top_k,
+        kind=kind,
+        project=project,
+        exclude_kind=exclude_kind,
+    ):
+        current = merged.get(row["id"])
+        if current is None:
+            merged[row["id"]] = dict(row, channel="lexical")
+        else:
+            current.update(
+                channel="both",
+                score=row["score"],
+                matched_terms=row["matched_terms"],
+            )
+
+    return sorted(merged.values(), key=_hybrid_key)
+
+
 def list_entries(
     conn: sqlite3.Connection,
     *,
