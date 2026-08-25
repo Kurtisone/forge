@@ -612,6 +612,45 @@ RECALL_CALIBRATED_FOR = _recall_tag.strip() or None
 # rather than leaving it to be discovered.
 RECALL_EXPANSION = os.getenv("RECALL_EXPANSION", "off").strip().lower() or "off"
 
+# --- Lexical channel admission (v3.17) -------------------------------------
+# The share of the store a word may appear in before it stops telling
+# a search anything.
+#
+# THIS IS THE LEXICAL CHANNEL'S ADMISSION RULE, and it is deliberately
+# not a score threshold. RECALL_MAX_DISTANCE is a number measured
+# against one embedding configuration and tagged with it, and that
+# machinery exists because a distance means nothing outside the regime
+# it was measured in. bm25 is worse on that axis, not better: it is a
+# score relative to a corpus, so a cutoff on it would need its own
+# calibration, its own tag, and its own re-measurement every time the
+# store grows.
+#
+# So this channel admits on the QUERY side instead. A word earns a
+# place in the search when it appears in few enough entries to
+# separate them -- "matériel", "Podman", "5500U" name a handful of
+# rows; "mon", "peux", "que" name half the store, and searching for
+# them returns the store. Nothing about that judgement depends on the
+# embedding model, so nothing here invalidates the tag on
+# RECALL_MAX_DISTANCE or asks anyone to re-measure it.
+#
+# THE DICTIONARY IS THE STORE ITSELF, the same choice already made for
+# the spelling check in tools/memory.py and for the same reason: a
+# stopword list is a maintained artefact that is wrong for whatever
+# gets written next, while a frequency count over the actual entries
+# is right by construction and sharpens as they accumulate. It also
+# needs no French, which matters for a store holding NiPoGi, busctl
+# and aardvark-dns.
+#
+# 0.2 is a starting value and not a measurement. On a ~300-entry store
+# it admits a word appearing in 60 entries or fewer, which lets
+# "processeur" through and stops "mon". Raise it if the channel
+# returns nothing on questions whose words are genuinely in the store;
+# lower it if it returns rows that share only a common word with the
+# question. rag.lexical logs the terms kept and the terms dropped with
+# their counts on every search, so both directions are visible rather
+# than guessed at.
+RECALL_LEXICAL_MAX_DF = float(os.getenv("RECALL_LEXICAL_MAX_DF", "0.2"))
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the
