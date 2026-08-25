@@ -33,6 +33,7 @@ from forge.config import (
     EMBEDDING_TIMEOUT,
     EMBEDDING_URL,
     RAG_DB_FILE,
+    RECALL_LEXICAL_EXCLUDE_ARCHIVED,
     RECALL_LEXICAL_MAX_DF,
 )
 from forge.logger import log
@@ -850,6 +851,7 @@ def search_hybrid(
     kind: str | None = None,
     project: str | None = None,
     exclude_kind: str | None = None,
+    lexical_exclude_archived: bool = RECALL_LEXICAL_EXCLUDE_ARCHIVED,
 ) -> list[dict]:
     """
     Both channels, unioned on entry id, each with its own budget and
@@ -893,13 +895,24 @@ def search_hybrid(
     ):
         merged[row["id"]] = dict(row, channel="vector")
 
+    # The word channel skips archived transcript by default, and only
+    # the word channel does. See RECALL_LEXICAL_EXCLUDE_ARCHIVED: an
+    # archived unit contains the question verbatim, so matching a
+    # question against it is matching a question against a copy of
+    # itself. A caller that already excludes something is left alone --
+    # one exclusion is all the query has room for, and the caller's is
+    # the deliberate one.
+    lexical_exclude = exclude_kind
+    if lexical_exclude is None and lexical_exclude_archived:
+        lexical_exclude = ARCHIVED_KIND
+
     for row in search_lexical(
         conn,
         query=query,
         top_k=lexical_top_k,
         kind=kind,
         project=project,
-        exclude_kind=exclude_kind,
+        exclude_kind=lexical_exclude,
     ):
         current = merged.get(row["id"])
         if current is None:

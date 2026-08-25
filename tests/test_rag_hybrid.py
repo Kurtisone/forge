@@ -145,3 +145,71 @@ def test_filters_reach_both_channels(conn, monkeypatch):
     hits = rag.search_hybrid(conn, "conteneurs Podman", exclude_kind=rag.ARCHIVED_KIND)
 
     assert rag.ARCHIVED_KIND not in {h["kind"] for h in hits}
+
+
+def test_the_word_channel_skips_archived_transcript(conn, monkeypatch):
+    """
+    Measured on the real store, 2026-08-25: every junk row the word
+    channel returned was archived transcript, and both entries it
+    rescued were facts.
+
+    An archived unit contains the question verbatim -- compaction
+    indexes one exchange per entry -- so for any question resembling
+    one asked before, the transcript of that asking is the best word
+    match in the store. #94 ("Tu peux analyser les logs de mon Steam
+    Deck ? / Je ne peux pas...") beat the hardware fact on the
+    hardware question that way.
+    """
+    _fillers(conn, monkeypatch, 12)
+    fact = _store(conn, monkeypatch, "Matériel : NiPoGi, Ryzen 5500U", FAR)
+    monkeypatch.setattr(rag, "_embed", lambda text: FAR)
+    rag.remember(
+        conn,
+        kind=rag.ARCHIVED_KIND,
+        content="user: Tu peux me lister mon matériel ?\nassistant: Je ne peux pas",
+        project=None,
+    )
+
+    monkeypatch.setattr(rag, "_embed", lambda text: NEAR)
+    hits = rag.search_hybrid(conn, "Tu peux me lister mon matériel ?")
+
+    word_rows = [h for h in hits if h["channel"] == "lexical"]
+    assert [h["id"] for h in word_rows] == [fact]
+
+
+def test_the_vector_channel_still_sees_archived_transcript(conn, monkeypatch):
+    """
+    The exclusion is the word channel's and nothing becomes
+    unreachable: 0.88@a5c47b was measured with archived conversation
+    in scope and that scope does not move.
+    """
+    _fillers(conn, monkeypatch, 12)
+    monkeypatch.setattr(rag, "_embed", lambda text: NEAR)
+    archived = rag.remember(
+        conn,
+        kind=rag.ARCHIVED_KIND,
+        content="user: Tu peux me lister mon matériel ?\nassistant: Je ne peux pas",
+        project=None,
+    )
+
+    hits = rag.search_hybrid(conn, "Tu peux me lister mon matériel ?")
+
+    assert archived in {h["id"] for h in hits}
+
+
+def test_the_exclusion_can_be_turned_off_to_measure_the_other_side(conn, monkeypatch):
+    _fillers(conn, monkeypatch, 12)
+    monkeypatch.setattr(rag, "_embed", lambda text: FAR)
+    archived = rag.remember(
+        conn,
+        kind=rag.ARCHIVED_KIND,
+        content="user: Tu peux me lister mon matériel ?\nassistant: Je ne peux pas",
+        project=None,
+    )
+
+    monkeypatch.setattr(rag, "_embed", lambda text: NEAR)
+    hits = rag.search_hybrid(
+        conn, "Tu peux me lister mon matériel ?", lexical_exclude_archived=False
+    )
+
+    assert archived in {h["id"] for h in hits if h["channel"] == "lexical"}

@@ -679,6 +679,38 @@ RECALL_LEXICAL = _bool("RECALL_LEXICAL", "false")
 # rivals, which is what makes a wrong one visible next to a right one.
 RECALL_LEXICAL_TOP_K = int(os.getenv("RECALL_LEXICAL_TOP_K", "3"))
 
+# Whether the WORD channel skips archived conversation.
+#
+# MEASURED ON THE REAL STORE, 2026-08-25, 193 entries, three questions
+# and three values of MAX_DF. Every junk row the word channel returned
+# was archived transcript -- #94, #61, #108, #273, #49, #70, #75 --
+# and both entries it rescued were facts: #307 and #313, neither of
+# which the vector channel could reach at all.
+#
+# That is not a coincidence, it is the shape of the data. An archived
+# unit CONTAINS THE QUESTION, verbatim, because compaction indexes one
+# exchange per entry. So for any question resembling one that has been
+# asked before, the transcript of that asking is the best word match
+# in the store -- and the emptier it is of answer, the better it
+# matches, since bm25 rewards the terms being a large share of a short
+# document. #94 is "Tu peux analyser les logs de mon Steam Deck ? / Je
+# ne peux pas...", a refusal that beat the hardware fact on the
+# hardware question.
+#
+# This is the same finding as #272 in feat/rag-non-answers and the
+# same one docs/memory.md records for the intake change, arriving a
+# third time by a third route. On the word channel it is not a bias,
+# it is circularity: matching a question against a copy of itself.
+#
+# WHAT IT COSTS, precisely and no more: the vector channel still
+# searches archived conversation, unchanged and uncalibrated-again.
+# Nothing becomes unreachable. What stops is reaching a transcript BY
+# THE WORDS OF THE QUESTION IT QUOTES.
+#
+# Set false to measure the other side; bench/rag_hybrid.py takes
+# --include-archived for exactly that.
+RECALL_LEXICAL_EXCLUDE_ARCHIVED = _bool("RECALL_LEXICAL_EXCLUDE_ARCHIVED", "true")
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the
