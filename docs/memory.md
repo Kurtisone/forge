@@ -471,6 +471,38 @@ it would delete precisely what the second channel was added to reach, since
 `#307` and `#313` are *far* in vector space. A `both` row keeps its distance for
 the log and for ordering, and stops being sentenced by it.
 
+### Measured on the real store, 2026-08-25
+
+193 entries, three questions, three values of `RECALL_LEXICAL_MAX_DF`:
+
+- **`#307` and `#313` are reached.** Neither is reachable by the vector channel at
+  all — the hardware question's nearest row was `#176` at `0.9083` and the
+  container question's four nearest were all past `1.00`. This is what the branch
+  was opened for, and it works.
+- **`MAX_DF` is not the lever.** `0.05`, `0.2` and `0.5` returned the *same three
+  rows* on the miss, byte for byte, and only changed bm25 magnitudes on the hit.
+  A knob that moves numbers without separating anything is the shape the
+  expansion campaign spent six rounds establishing about a different knob.
+- **Everything the word channel dragged in was archived transcript**: `#94`,
+  `#61`, `#108`, `#273`, `#49`, `#70`, `#75`. Everything it rescued was a `fact`.
+
+That last line is not a coincidence, it is the shape of the data. An archived
+unit **contains the question**, verbatim, because compaction indexes one exchange
+per entry. So for any question resembling one asked before, the transcript of
+that asking is the best word match in the store — and the emptier it is of
+answer, the better it matches, since bm25 rewards the query terms being a large
+share of a short document. `#94` is `Tu peux analyser les logs de mon Steam
+Deck ? / Je ne peux pas…`: a refusal that outscored the hardware fact on the
+hardware question.
+
+This is the **third arrival of one finding by a third route** — `#272` in
+`feat/rag-non-answers`, the intake measurement above, and now this. On the word
+channel it is not a bias but circularity: matching a question against a copy of
+itself. Hence `RECALL_LEXICAL_EXCLUDE_ARCHIVED`, on by default, which closes that
+route and nothing else — the vector channel keeps archived conversation in scope,
+so `0.88@a5c47b` keeps the scope it was measured in and no entry becomes
+unreachable. `--include-archived` measures the other side in one command.
+
 ### The cost, which is the same shape as last time
 
 A row that shares a rare word with a question without answering it. This store
