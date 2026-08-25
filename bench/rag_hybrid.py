@@ -3,7 +3,7 @@
 Which channel reaches which entry, and what the word channel drags in
 behind it.
 
-    bench/in_container.sh rag_hybrid \\
+    bench/in_container.sh rag_hybrid --db /tmp/real_copy.db \\
         --hit "Tu peux me lister mon matériel ?" --expect 307 \\
         --hit "Sur quoi tournent mes conteneurs ?" --expect 313 \\
         --miss "Comment s'appelle mon chat ?"
@@ -38,15 +38,26 @@ WHAT IT COUNTS, BOTH SIDES
               turned off for, and a run that only counts the wins is
               not a measurement.
 
-  WRONG ENTRY a --hit where the word channel puts something ahead of
-              the entry that answers -- reached, and answered out of
-              the wrong row.
+  WRONG ENTRY a --hit where something is ahead of the entry that
+              answers IN THE ORDER SYNTHESIS SEES. Not bm25 order:
+              the deployment sorts deliberate entries ahead of
+              archived transcript before building the prompt
+              (memory._rank), so a fact sitting second on bm25 is
+              still the first bullet. The first version of this
+              harness reported the raw order and printed WRONG ENTRY
+              3 on a run where the deployment had it right three
+              times out of three, 2026-08-25.
 
 Both sides come from the SAME rows, so read the candidate lists. A row
 that shares a rare word with a question without answering it is what
 this store is full of: the archived refusals (#35/#36/#37) quote the
 question they failed to answer, which makes them excellent lexical
 matches for it.
+
+--include-archived puts archived conversation back into the word
+channel, which is what RECALL_LEXICAL_EXCLUDE_ARCHIVED takes out. Run
+it both ways: the exclusion was measured, not assumed, and it is the
+one that decides this branch.
 
 --max-df MAY BE GIVEN SEVERAL TIMES and prints one column each. It is
 the one number this channel has, it is a starting value rather than a
@@ -75,6 +86,26 @@ def _row(results: list[dict], expect: str | None) -> tuple[int | None, dict | No
     """Where the named entry landed and the row itself, or (None, None)."""
     rank = find_rank(results, None, expect)
     return (rank, results[rank - 1]) if rank else (None, None)
+
+
+def _as_synthesis_sees(results: list[dict]) -> list[dict]:
+    """
+    The rows in the order the prompt gets them.
+
+    bm25 order is not that order. graphs/recall.py builds its prompt
+    through memory.format_results, which sorts deliberate entries
+    ahead of archived transcript first -- so a fact lying second on
+    bm25 is still the first bullet the model reads.
+
+    Reporting the raw order made this harness print WRONG ENTRY 3 on
+    2026-08-25 for a run in which the deployment put the right entry
+    first every time. A harness that measures something the
+    deployment does not do produces a verdict about nothing, which is
+    the fault its own docstring warns about two paragraphs up.
+    """
+    from forge.tools.memory import _rank
+
+    return _rank(results)
 
 
 def _vector_cell(results: list[dict], expect: str | None, cutoff: float | None) -> str:
@@ -169,6 +200,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--include-archived",
+        action="store_true",
+        help=(
+            "Let the word channel match archived conversation, which "
+            "RECALL_LEXICAL_EXCLUDE_ARCHIVED takes out of it. An archived "
+            "unit quotes the question, so this is the circular route."
+        ),
+    )
+    parser.add_argument(
         "--no-vector",
         action="store_true",
         help="Word channel only: no embedding call, works with the server down.",
@@ -223,7 +263,12 @@ def main() -> int:
     ] + [(q, None, False) for q in args.miss]
 
     total = rag.count_entries(conn)["total"]
-    print(f"--- {args.db}: {total} entries, cutoff {cutoff}")
+    scope = (
+        "words match everything"
+        if args.include_archived
+        else ("words skip archived transcript")
+    )
+    print(f"--- {args.db}: {total} entries, cutoff {cutoff}, {scope}")
     print("    vector: rank + distance, CUT when the cutoff would drop it.")
     print("    word:   rank + bm25 (lower is better). No cutoff applies here.\n")
 
@@ -242,7 +287,11 @@ def main() -> int:
         for fraction in fractions:
             terms, too_common = rag.informative_terms(conn, question, max_df=fraction)
             lexical = rag.search_lexical(
-                conn, query=question, top_k=args.lexical_top_k, max_df=fraction
+                conn,
+                query=question,
+                top_k=args.lexical_top_k,
+                max_df=fraction,
+                exclude_kind=(None if args.include_archived else rag.ARCHIVED_KIND),
             )
             print(
                 f"      word {fraction:<5}  {_lexical_cell(lexical, expect)}"
@@ -255,6 +304,7 @@ def main() -> int:
             if not lexical:
                 continue
 
+            ordered = _as_synthesis_sees(lexical)
             if is_hit and expect is not None:
                 # --no-vector means the other channel was never asked,
                 # so nothing here knows whether it would have
@@ -274,10 +324,10 @@ def main() -> int:
                     _print_candidates(lexical, "word channel returned, in order:")
             elif not is_hit:
                 intruders.append(f"{question}  (max_df {fraction})")
-                _print_candidates(lexical, "word channel answered a MISS with:")
+                _print_candidates(ordered, "word channel answered a MISS with:")
             else:
                 _print_candidates(
-                    lexical, "candidates -- name one with --expect next run:"
+                    ordered, "candidates -- name one with --expect next run:"
                 )
         print()
 

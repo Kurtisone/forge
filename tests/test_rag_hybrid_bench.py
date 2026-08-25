@@ -139,11 +139,25 @@ def test_a_refused_question_answered_by_words_is_counted_as_an_intruder(
     """
     db, _ = store
 
-    assert _run(monkeypatch, "--db", db, "--miss", "Comment s'appelle mon chat ?") == 0
+    argv = ("--db", db, "--include-archived", "--miss", "Comment s'appelle mon chat ?")
+    assert _run(monkeypatch, *argv) == 0
 
     out = capsys.readouterr().out
     assert "INTRUDERS    1" in out
     assert "answered a MISS with" in out
+
+
+def test_the_archived_route_is_out_by_default(monkeypatch, store, capsys):
+    """
+    The same question without --include-archived. The transcript that
+    answered it QUOTES the question, which is the circular route the
+    exclusion removes -- measured on the real store, 2026-08-25.
+    """
+    db, _ = store
+
+    assert _run(monkeypatch, "--db", db, "--miss", "Comment s'appelle mon chat ?") == 0
+
+    assert "INTRUDERS    0" in capsys.readouterr().out
 
 
 def test_no_vector_does_not_claim_a_rescue_it_never_measured(
