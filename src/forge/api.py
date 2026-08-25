@@ -126,6 +126,7 @@ def log_effective_settings() -> None:
         memory_enabled=MEMORY_ENABLED,
         recall_cutoff=recall.RECALL_MAX_DISTANCE,
         recall_expansion=recall.RECALL_EXPANSION,
+        recall_lexical=recall.RECALL_LEXICAL,
         compaction_enabled=compaction.COMPACTION_ENABLED,
         compaction_threshold=compaction.COMPACTION_THRESHOLD,
         compaction_token_threshold=compaction.COMPACTION_TOKEN_THRESHOLD,

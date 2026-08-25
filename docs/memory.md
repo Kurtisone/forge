@@ -398,6 +398,172 @@ dragged it in. The sub-trace says *après reformulation* for the same reason.
 `bench/in_container.sh recall_expansion` counts both sides on a copy of the real
 store; it is what earns the setting.
 
+## Two channels, two admission rules (v3.17)
+
+Six rounds of query expansion ended in a finding no threshold answers: **`#307`
+and `#313` are in the store and no natural-language question reaches either
+one.** `#313` is stored as `Steam Deck, SteamOS, conteneurs Podman` — a fact
+written as a keyword list, which is the shape an instruction-tuned embedding
+model retrieves worst. Rephrasing it, expanding it, moving the cutoff: none of
+them can work, because the entry never comes back to be filtered. The words are
+sitting in the entry and nothing was looking for them.
+
+So recall searches the words too. `memory_fts` is an FTS5 index over the same
+rows — external content, so the text exists once and the two tables cannot
+disagree about what an entry says — kept in sync by triggers rather than by
+calls in `_insert`/`forget`, because four paths write this store and three
+delete from it, including a human with `sqlite3` open. FTS5's own `rebuild` is
+the migration: the index is created and backfilled on the first connection
+after the upgrade, and only then. A SQLite built without FTS5 warns and keeps
+the vector channel.
+
+### The rule of the word channel is on the query side
+
+`RECALL_MAX_DISTANCE` is a number measured against one embedding configuration
+and tagged with it, because a distance means nothing outside its regime. bm25 is
+worse on that axis, not better: it is a score relative to a corpus, so a cutoff
+on it would need its own calibration, its own tag, and a re-measurement every
+time the store grows.
+
+This channel therefore admits on the **query** instead. A word earns a place in
+the search when it appears in few enough entries to separate them —
+`RECALL_LEXICAL_MAX_DF`, a share of the store, `0.2` to start.
+`matériel`, `Podman`, `5500U` name a handful of rows; `mon`, `peux`, `que` name
+half the store, and searching for those returns the store. The dictionary is the
+store itself, the same choice already made for the spelling check on writes: a
+stopword list is a maintained artefact that is wrong for whatever gets written
+next, while a frequency count over the actual entries is right by construction,
+sharpens as they accumulate, and needs no French — which matters for a corpus
+holding NiPoGi, busctl and aardvark-dns.
+
+A question made entirely of common words returns **nothing** from this channel.
+That is the point rather than a gap: matching on `mon` because it was the only
+word left hands synthesis a random slice of the store carrying the authority of
+a lexical hit.
+
+Nothing in that judgement touches the embedding model, so **`0.88@a5c47b` is
+untouched and was not re-measured**.
+
+### The union, and where the cutoff stops
+
+`rag.search_hybrid` runs both and merges on entry id. A union, not an
+intersection: the two channels fail on different things — the vector channel
+cannot reach an entry that is not written in prose, the lexical channel cannot
+reach an entry that answers in other words than the ones asked — so an entry
+either one finds is an entry Forge can answer from. Requiring both would keep
+only the questions that already worked.
+
+No fused score. Normalising a distance and a bm25 into one number, weighting
+them, reciprocal-rank fusion: every one of those puts a tunable constant between
+the store and the answer, and every tunable constant in this file has cost a
+measurement campaign to place. Measured distances come first, word matches
+follow, each ordered by its own number. Each channel keeps its own budget rather
+than sharing `top_k`, because a shared one lets five vector rows crowd the word
+matches out — and the case this exists for is exactly the one where those five
+are about to be cut.
+
+Every row carries `channel` (`vector`, `lexical` or `both`), and **the distance
+cutoff is applied to vector rows and to nothing else.** A row the word channel
+admitted was chosen because the question and the entry share words rare enough
+to mean something, which is a different question with a different answer;
+judging it by a distance would not be strict, it would be a category error — and
+it would delete precisely what the second channel was added to reach, since
+`#307` and `#313` are *far* in vector space. A `both` row keeps its distance for
+the log and for ordering, and stops being sentenced by it.
+
+### Measured on the real store, 2026-08-25
+
+193 entries, three questions, three values of `RECALL_LEXICAL_MAX_DF`:
+
+- **`#307` and `#313` are reached.** Neither is reachable by the vector channel at
+  all — the hardware question's nearest row was `#176` at `0.9083` and the
+  container question's four nearest were all past `1.00`. This is what the branch
+  was opened for, and it works.
+- **`MAX_DF` is not the lever.** `0.05`, `0.2` and `0.5` returned the *same three
+  rows* on the miss, byte for byte, and only changed bm25 magnitudes on the hit.
+  A knob that moves numbers without separating anything is the shape the
+  expansion campaign spent six rounds establishing about a different knob.
+- **Everything the word channel dragged in was archived transcript**: `#94`,
+  `#61`, `#108`, `#273`, `#49`, `#70`, `#75`. Everything it rescued was a `fact`.
+
+That last line is not a coincidence, it is the shape of the data. An archived
+unit **contains the question**, verbatim, because compaction indexes one exchange
+per entry. So for any question resembling one asked before, the transcript of
+that asking is the best word match in the store — and the emptier it is of
+answer, the better it matches, since bm25 rewards the query terms being a large
+share of a short document. `#94` is `Tu peux analyser les logs de mon Steam
+Deck ? / Je ne peux pas…`: a refusal that outscored the hardware fact on the
+hardware question.
+
+This is the **third arrival of one finding by a third route** — `#272` in
+`feat/rag-non-answers`, the intake measurement above, and now this. On the word
+channel it is not a bias but circularity: matching a question against a copy of
+itself. Hence `RECALL_LEXICAL_EXCLUDE_ARCHIVED`, on by default, which closes that
+route and nothing else — the vector channel keeps archived conversation in scope,
+so `0.88@a5c47b` keeps the scope it was measured in and no entry becomes
+unreachable. `--include-archived` measures the other side in one command.
+
+### What it still cannot do, from the same run
+
+`Tu peux me lister mon matériel s'il te plaît ?` came back with `#307` and
+nothing else — the whole answer, correctly, out of one entry. The Steam Deck was
+not in it, and the reason is the limit this page already states from the other
+side: **the word channel cannot reach an entry that answers in other words than
+the ones asked.** `#313` is `Steam Deck, SteamOS, conteneurs Podman`; it does not
+contain `matériel`, so the words miss it, and the vector channel cannot reach it
+either. Both channels fail on that entry for that question, for opposite reasons,
+and the union of two channels is not a third one.
+
+Two consequences worth keeping.
+
+**"A fact should name its category" is un-falsified for the word channel.** This
+page records that rule being proposed, measured and abandoned — a fact carrying
+the word `matériel` sat at rank 109 for `Tu peux me lister mon matériel ?`. That
+measurement was of the *embedding*, and it stands. bm25 has no such problem:
+`#307` came back at rank 1 on 2026-08-25 **because** it contains the word. The
+rule is not resurrected in general, it is resurrected for the channel that reads
+words — which is worth having in hand when the fact-extraction lot opens, and
+worth not confusing with the finding that killed it.
+
+**Retrieval answers proximity questions, not completeness questions.** "List my
+X" wants a *set*; both channels return the nearest rows, and `RECALL_LEXICAL_TOP_K`
+is a hard ceiling on how many a list-shaped question can gather. Spreading one
+subject across entries that share no vocabulary makes it unlistable by any
+mechanism here.
+
+There is also no floor under bm25: on `Sur quoi tournent mes conteneurs ?`,
+`#313` came back at `-6.43` followed by `#10` and `#309` at `-2.29`, admitted
+only because the budget allowed three rows. Harmless there — both are short facts
+— but the channel always spends its whole budget, and a relative floor would be
+the second calibrated number this design has so far done without.
+
+### The cost, which is the same shape as last time
+
+A row that shares a rare word with a question without answering it. This store
+is full of the family: the archived refusals `#35`/`#36`/`#37` **quote** the
+question they failed to answer, which makes them excellent lexical matches for
+it. That is why `RECALL_LEXICAL` ships `off` and why the harness counts both
+sides:
+
+```bash
+bench/in_container.sh rag_hybrid --db /tmp/real_copy.db \
+    --hit "Tu peux me lister mon matériel ?" --expect 307 \
+    --hit "Sur quoi tournent mes conteneurs ?" --expect 313 \
+    --miss "Comment s'appelle mon chat ?"
+```
+
+`REACHED` is what the word channel returns and the vector channel does not
+*deliver* — absent from its top-k, or inside it and beyond the cutoff. Coming
+back is not reaching synthesis. `INTRUDERS` is a `--miss` the word channel
+answers: a correct refusal turning into a fluent wrong sentence, the cost the
+expansion pass was measured on and turned off for. `WRONG ENTRY` is reached with
+something else ahead of it. `--max-df` is repeatable, one column per value;
+`--no-vector` runs the whole thing with the embedding server down and refuses to
+claim a rescue it never measured.
+
+There is deliberately **no suggested threshold** in that output. Producing one
+would invent the second calibrated number this channel was designed not to need.
+
 ### Reading and repairing the store
 
 `search` was the only reader this store ever had, and it is semantic by construction —
@@ -406,7 +572,7 @@ you cannot ask it what is *in* there without already having a question. `GET /me
 embedding call at all, and report the breakdown by `kind`. `!forget <id>` /
 `DELETE /memory/{id}` remove one entry from both tables.
 
-Four harnesses go with it, none of which ever writes to
+Five harnesses go with it, none of which ever writes to
 `data/forge_rag.db`. `bench/in_container.sh` copies the checkout and a fresh copy
 of the store into the container and runs one of them there — it is the six-command
 `podman cp` sequence that used to sit at the top of each file, where forgetting a
@@ -424,6 +590,11 @@ bench/in_container.sh instruct_prefix --db /tmp/real_copy.db \
 # what asking again in other words rescues, and what it lets in
 bench/in_container.sh recall_expansion --db /tmp/real_copy.db \
     --hit "Tu peux me lister mon matériel ?" --expect 308 \
+    --miss "Comment s'appelle mon chat ?"
+
+# which channel reaches which entry, and what the words drag in
+bench/in_container.sh rag_hybrid --db /tmp/real_copy.db \
+    --hit "Tu peux me lister mon matériel ?" --expect 307 \
     --miss "Comment s'appelle mon chat ?"
 
 # what burying a sentence in a compacted block costs

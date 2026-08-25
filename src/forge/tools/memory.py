@@ -49,7 +49,7 @@ import json
 import re
 
 from forge import rag
-from forge.config import MEMORY_RECALL_MAX_CHARS
+from forge.config import MEMORY_RECALL_MAX_CHARS, RECALL_LEXICAL_TOP_K
 from forge.kernel.capability import LOCAL_READONLY
 from forge.logger import log
 from forge.tool_payload import loads_payload
@@ -290,6 +290,8 @@ def search(
     top_k: int = 5,
     kind: str | None = None,
     project: str | None = None,
+    lexical: bool = False,
+    lexical_top_k: int = RECALL_LEXICAL_TOP_K,
 ) -> list[dict]:
     """
     Query the RAG store and return raw hits as a list of
@@ -299,9 +301,29 @@ def search(
     graphs/recall.py; _recall() below formats the same data as a
     display string for direct chat/router dispatch (same split as
     web_search.search() / run()).
+
+    `lexical` adds the word channel to the same call (rag.search_hybrid).
+    A PARAMETER AND NOT A READ OF THE CONFIG HERE: the caller decides,
+    because the two callers are not the same. graphs/recall.py runs a
+    question through synthesis and wants everything the store can
+    reach; the raw "recall" action below hands its bullet list
+    straight back to the router, where an extra row costs prompt
+    budget on every subsequent step of the run.
+
+    Default False, so nothing about this function changed for anyone
+    who does not ask.
     """
     conn = rag.get_connection()
     try:
+        if lexical:
+            return rag.search_hybrid(
+                conn,
+                query=query,
+                top_k=top_k,
+                lexical_top_k=lexical_top_k,
+                kind=kind,
+                project=project,
+            )
         return rag.search(conn, query=query, top_k=top_k, kind=kind, project=project)
     finally:
         conn.close()

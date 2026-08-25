@@ -17,6 +17,7 @@ data/forge_rag.db) with two tables --
 
 import hashlib
 import math
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,8 @@ from forge.config import (
     EMBEDDING_TIMEOUT,
     EMBEDDING_URL,
     RAG_DB_FILE,
+    RECALL_LEXICAL_EXCLUDE_ARCHIVED,
+    RECALL_LEXICAL_MAX_DF,
 )
 from forge.logger import log
 
@@ -52,6 +55,68 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
 );
 """
 
+# --- Lexical index (v3.17) -------------------------------------------------
+# An FTS5 index over the SAME rows, so a question can also be answered
+# through the words it shares with an entry instead of only through
+# the vectors.
+#
+# WHY A SECOND INDEX EXISTS AT ALL. Measured on the real store on
+# 2026-08-24: #307 (the hardware fact) and #313 ("Steam Deck, SteamOS,
+# conteneurs Podman") are both in there, and no natural-language
+# question reaches either one through the vector channel -- not with
+# the query instruction, not with any of the rephrasings the expansion
+# pass produced over six rounds of measurement. An entry that is not
+# written in natural language is not retrievable by a natural-language
+# query; that is a property of an instruction-tuned embedding model,
+# not a threshold someone set wrong. The words are sitting in the
+# entry. Nothing was ever looking for them.
+#
+# EXTERNAL CONTENT, NOT A COPY. content='memory_entries' means the
+# index stores terms and points back at the original rows, so there is
+# exactly one copy of every entry's text and no way for the two to
+# disagree about what an entry says.
+#
+# remove_diacritics 2 because "matériel" has to be findable by someone
+# who types "materiel", and version 2 folds the whole Unicode range
+# rather than the Latin-1 subset version 1 covers. Changing this line
+# later means rebuilding the index: the terms already stored were
+# folded by the old rule, and nothing will say so.
+_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+    content,
+    content='memory_entries',
+    content_rowid='id',
+    tokenize="unicode61 remove_diacritics 2"
+);
+"""
+
+# TRIGGERS AND NOT CALLS IN _insert()/forget(), deliberately. Four
+# paths write this store (the memory tool, the REPL, POST /remember,
+# compaction) and three delete from it (forget, deploy/rag_resplit.py,
+# and a human with sqlite3 open -- which is how this store gets
+# repaired today). A trigger covers all of them, and covers the next
+# one nobody has written yet. The vector table is kept in sync by hand
+# and that is exactly why memory_vectors has needed a comment since
+# v3.7 warning that deleting one and not the other leaves a memory
+# that is invisible and answering.
+_FTS_TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS memory_fts_insert
+AFTER INSERT ON memory_entries BEGIN
+    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_fts_delete
+AFTER DELETE ON memory_entries BEGIN
+    INSERT INTO memory_fts(memory_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_fts_update
+AFTER UPDATE ON memory_entries BEGIN
+    INSERT INTO memory_fts(memory_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
+"""
+
 
 def _path() -> Path:
     return Path(RAG_DB_FILE)
@@ -68,7 +133,73 @@ def get_connection() -> sqlite3.Connection:
     conn.execute(_SCHEMA)
     conn.execute(_VEC_SCHEMA)
     conn.commit()
+    _ensure_fts(conn)
     return conn
+
+
+def _ensure_fts(conn: sqlite3.Connection) -> bool:
+    """
+    Create the lexical index if it is missing, backfill it once, and
+    say whether this store has a usable lexical channel.
+
+    THE BACKFILL IS THE MIGRATION, which is why this ships without a
+    script. FTS5's 'rebuild' command reads memory_entries and indexes
+    every row, so a store written before this existed becomes
+    searchable on the first connection after the upgrade -- no
+    deploy/ step to forget, no window during which half the store is
+    findable and the other half is not.
+
+    It runs only when the table was ABSENT, checked against
+    sqlite_master before the CREATE. Afterwards there is no way to
+    tell a table created a second ago from one that has been indexed
+    for weeks, and rebuilding on every connection would re-index the
+    whole store to open it.
+
+    FTS5 IS AN OPTIONAL SQLITE MODULE and a Forge that cannot open its
+    memory is worse than a Forge with one retrieval channel. A build
+    without it gets a warning and the vector channel exactly as it
+    was, rather than an exception on the path every single write and
+    read goes through.
+
+    sqlite_vec is already loaded by the caller, and that ordering is
+    not incidental: any schema statement on a database carrying a vec0
+    table needs the extension present, whatever the statement itself
+    is about.
+    """
+    existed = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'"
+        ).fetchone()
+        is not None
+    )
+    try:
+        conn.execute(_FTS_SCHEMA)
+        conn.executescript(_FTS_TRIGGERS)
+        if not existed:
+            conn.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
+            indexed = conn.execute("SELECT count(*) FROM memory_entries").fetchone()[0]
+            if indexed:
+                log.event("rag.fts_backfilled", entries=indexed)
+        conn.commit()
+    except sqlite3.OperationalError as e:
+        log.warning(
+            "rag: no lexical index on this store (%s) -- this SQLite build has "
+            "no FTS5, so recall keeps the vector channel alone and any entry "
+            "that is only reachable by its words stays unreachable",
+            e,
+        )
+        return False
+    return True
+
+
+def has_lexical_index(conn: sqlite3.Connection) -> bool:
+    """Whether the lexical channel can run against this connection."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'"
+        ).fetchone()
+        is not None
+    )
 
 
 class EmbeddingError(Exception):
@@ -429,6 +560,190 @@ def search(
     ]
 
 
+# Word-ish tokens: letters and digits, no underscores, two characters
+# and up. Digits are IN, and on this store that is not a detail --
+# "5500U", "32", "AM06PRO" are the most discriminating words a
+# hardware question can carry. The two-character floor removes French
+# elision debris ("l'ordinateur" tokenises as "l" and "ordinateur");
+# everything else that deserves removing is removed by frequency
+# below, which is a measurement rather than a rule someone maintains.
+_TERM_RE = re.compile(r"[^\W_]{2,}", re.UNICODE)
+
+
+def _terms(query: str) -> list[str]:
+    """The distinct word-ish tokens of a query, lowercased, in order."""
+    return list(dict.fromkeys(t.lower() for t in _TERM_RE.findall(query)))
+
+
+def _document_frequency(conn: sqlite3.Connection, term: str) -> int:
+    """
+    How many entries contain *term*, counted through FTS5 itself.
+
+    Through MATCH and not through Python, deliberately. The index
+    folds case and diacritics with unicode61; any count computed on
+    this side would have to reproduce that folding exactly, and would
+    drift from it silently the first time the tokenizer line changes.
+    Asking the index means the question and the answer are tokenised
+    by the same code.
+
+    The term is quoted as a phrase so an FTS5 keyword ("or", "and",
+    "not", "near") is read as a word rather than as syntax.
+    """
+    row = conn.execute(
+        "SELECT count(*) FROM memory_fts WHERE memory_fts MATCH ?",
+        (f'"{term}"',),
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def informative_terms(
+    conn: sqlite3.Connection, query: str, max_df: float = RECALL_LEXICAL_MAX_DF
+) -> tuple[list[str], list[tuple[str, int]]]:
+    """
+    The words of *query* worth searching for, and the ones that were
+    dropped for being everywhere.
+
+    See RECALL_LEXICAL_MAX_DF in config.py for why the admission rule
+    of this channel lives on the query side rather than on the score.
+
+    The consequence worth stating out loud: a question made entirely
+    of common words returns NOTHING from this channel. That is the
+    correct outcome and it is what keeps the union honest. The
+    alternative -- matching on "mon" because it was the only word left
+    -- hands synthesis a random slice of the store carrying the
+    authority of a lexical hit, which is the failure mode this whole
+    line of work has been removing from the vector side since the
+    cutoff was introduced.
+
+    A word that appears in NO entry is dropped silently. It cannot
+    match anything, so it is not a finding; the words that were
+    refused for being too common are the ones worth logging, because
+    that is the number you turn the knob against.
+    """
+    total = conn.execute("SELECT count(*) FROM memory_entries").fetchone()[0]
+    if not total:
+        return [], []
+
+    # At least one entry, always. On a store of ten rows, 0.2 rounds
+    # down to two and a strict fraction would refuse every word of a
+    # question about the only entry that answers it.
+    ceiling = max(1, int(max_df * total))
+
+    kept: list[str] = []
+    too_common: list[tuple[str, int]] = []
+    for term in _terms(query):
+        df = _document_frequency(conn, term)
+        if df == 0:
+            continue
+        if df <= ceiling:
+            kept.append(term)
+        else:
+            too_common.append((term, df))
+    return kept, too_common
+
+
+def search_lexical(
+    conn: sqlite3.Connection,
+    query: str,
+    top_k: int = 5,
+    kind: str | None = None,
+    project: str | None = None,
+    exclude_kind: str | None = None,
+    max_df: float = RECALL_LEXICAL_MAX_DF,
+) -> list[dict]:
+    """
+    Find entries by the words they share with the question, ranked by
+    bm25.
+
+    No embedding call, so this costs nothing on the inference server
+    and answers in milliseconds -- the whole channel is a handful of
+    SQLite queries against an index that is already there.
+
+    Rows come back with a `score` (bm25, lower is better) and NO
+    `distance`, and that absence is load-bearing rather than an
+    omission: a row this channel admitted has not been measured
+    against RECALL_MAX_DISTANCE and must not be judged by it. See
+    search_hybrid, and _drop_distant in graphs/recall.py, which is
+    where the two admission rules are kept apart.
+
+    Returns nothing at all, quietly, on a SQLite build without FTS5.
+    The channel is an addition to retrieval; losing it is a
+    degradation, and turning that into an exception would take recall
+    down on a store the vector channel can still read perfectly well.
+    """
+    terms, too_common = informative_terms(conn, query, max_df=max_df)
+    if not terms:
+        log.event(
+            "rag.lexical_skipped",
+            query=query[:120],
+            too_common=[{"term": t, "entries": df} for t, df in too_common],
+        )
+        return []
+
+    filters = []
+    params: list = [" OR ".join(f'"{t}"' for t in terms)]
+    if kind is not None:
+        filters.append("e.kind = ?")
+        params.append(kind)
+    if exclude_kind is not None:
+        filters.append("e.kind != ?")
+        params.append(exclude_kind)
+    if project is not None:
+        filters.append("e.project = ?")
+        params.append(project)
+    filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
+    params.append(top_k)
+
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT e.id, e.kind, e.content, e.project, e.status, e.created_at,
+                   bm25(memory_fts) AS score
+            FROM memory_fts
+            JOIN memory_entries e ON e.id = memory_fts.rowid
+            WHERE memory_fts MATCH ?
+              {filter_sql}
+            ORDER BY score
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        log.warning("rag: lexical search unavailable (%s)", e)
+        return []
+
+    results = [
+        {
+            "id": r[0],
+            "kind": r[1],
+            "content": r[2],
+            "project": r[3],
+            "status": r[4],
+            "created_at": r[5],
+            "score": r[6],
+            # Which words found it -- the lexical equivalent of
+            # search_many's matched_query, and needed for the same
+            # reason: when a lexical hit turns out to be junk, the
+            # question is which word dragged it in, and that has to be
+            # readable in the log rather than reconstructed.
+            "matched_terms": terms,
+        }
+        for r in rows
+    ]
+
+    log.event(
+        "rag.lexical",
+        query=query[:120],
+        terms=terms,
+        too_common=[{"term": t, "entries": df} for t, df in too_common],
+        results=[
+            {"id": r["id"], "score": round(r["score"], 4), "kind": r["kind"]}
+            for r in results
+        ],
+    )
+    return results
+
+
 def _distance_key(row: dict) -> tuple[int, float]:
     """
     Sort key putting rows with no distance LAST rather than first.
@@ -503,6 +818,113 @@ def search_many(
                 merged[row["id"]] = row
 
     return sorted(merged.values(), key=_distance_key)[:top_k]
+
+
+def _hybrid_key(row: dict) -> tuple[int, float, float]:
+    """
+    Order a merged list: measured distances first, then bm25.
+
+    Two channels means two scales and no exchange rate between them.
+    Inventing one -- normalising both into a single number, weighting
+    them, reciprocal-rank fusion -- would put a tunable constant
+    between the store and the answer, and every tunable constant in
+    this file has cost a measurement campaign to place. There is a
+    free ordering available instead: a vector hit that survived the
+    cutoff was admitted by a threshold measured against real hits and
+    real misses, and a lexical hit was admitted by a rule that says
+    nothing about how relevant it is, only that it is not noise. So
+    the measured ones go first and the word matches follow, each
+    ordered within its own channel by its own number.
+    """
+    d = row.get("distance")
+    if isinstance(d, (int, float)):
+        return (0, float(d), 0.0)
+    score = row.get("score")
+    return (1, 0.0, float(score) if isinstance(score, (int, float)) else 0.0)
+
+
+def search_hybrid(
+    conn: sqlite3.Connection,
+    query: str,
+    top_k: int = 5,
+    lexical_top_k: int = 3,
+    kind: str | None = None,
+    project: str | None = None,
+    exclude_kind: str | None = None,
+    lexical_exclude_archived: bool = RECALL_LEXICAL_EXCLUDE_ARCHIVED,
+) -> list[dict]:
+    """
+    Both channels, unioned on entry id, each with its own budget and
+    its own admission rule.
+
+    A UNION AND NOT AN INTERSECTION, and not a re-ranking of one by
+    the other either. The two channels fail on different things: the
+    vector channel cannot reach an entry that is not written in prose
+    (#307, #313), and the lexical channel cannot reach an entry that
+    answers the question in other words than the ones asked. An entry
+    either channel can find is an entry Forge can answer from; asking
+    for both would keep only the questions that were already working.
+
+    EACH CHANNEL KEEPS ITS OWN BUDGET rather than sharing top_k. A
+    shared budget sorted by distance would let five vector rows crowd
+    out the lexical ones entirely -- and the case this exists for is
+    precisely the one where the vector rows are all about to be cut by
+    the cutoff, so they would be spending slots on their way to being
+    dropped.
+
+    Every row carries `channel`, and the caller needs it. A row this
+    function returns has been admitted by a rule, but not by the same
+    rule, and only the tag says which: see _drop_distant in
+    graphs/recall.py, where the vector cutoff is applied to the rows
+    it was measured for and to nothing else.
+
+    A row found by both keeps its distance AND its score. It is the
+    strongest kind of hit this store can produce -- the words match
+    and the meaning matches -- and it is the row you want to see first
+    in a log when a hybrid answer is right.
+    """
+    merged: dict[int, dict] = {}
+
+    for row in search(
+        conn,
+        query=query,
+        top_k=top_k,
+        kind=kind,
+        project=project,
+        exclude_kind=exclude_kind,
+    ):
+        merged[row["id"]] = dict(row, channel="vector")
+
+    # The word channel skips archived transcript by default, and only
+    # the word channel does. See RECALL_LEXICAL_EXCLUDE_ARCHIVED: an
+    # archived unit contains the question verbatim, so matching a
+    # question against it is matching a question against a copy of
+    # itself. A caller that already excludes something is left alone --
+    # one exclusion is all the query has room for, and the caller's is
+    # the deliberate one.
+    lexical_exclude = exclude_kind
+    if lexical_exclude is None and lexical_exclude_archived:
+        lexical_exclude = ARCHIVED_KIND
+
+    for row in search_lexical(
+        conn,
+        query=query,
+        top_k=lexical_top_k,
+        kind=kind,
+        project=project,
+        exclude_kind=lexical_exclude,
+    ):
+        current = merged.get(row["id"])
+        if current is None:
+            merged[row["id"]] = dict(row, channel="lexical")
+        else:
+            current.update(
+                channel="both",
+                score=row["score"],
+                matched_terms=row["matched_terms"],
+            )
+
+    return sorted(merged.values(), key=_hybrid_key)
 
 
 def list_entries(

@@ -47,6 +47,8 @@ from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RECALL_CALIBRATED_FOR,
     RECALL_EXPANSION,
+    RECALL_LEXICAL,
+    RECALL_LEXICAL_TOP_K,
     RECALL_MAX_ANSWER_CHARS,
 )
 from forge.config import RECALL_MAX_DISTANCE as _CONFIGURED_CUTOFF
@@ -229,10 +231,69 @@ elif RECALL_EXPANSION != "off" and RECALL_MAX_DISTANCE is None:
     )
 
 
+# Same class as the two notes above: a fact about the configuration,
+# said once at startup rather than rediscovered from a log.
+if RECALL_LEXICAL and RECALL_EXPANSION != "off":
+    log.warning(
+        "RECALL_LEXICAL and RECALL_EXPANSION=%s are both on. The rescue pass "
+        "only fires when the cutoff drops EVERYTHING, and a word match is "
+        "never dropped by the cutoff -- so on any question the lexical "
+        "channel answers, the expansion pass no longer runs. That is the "
+        "cheaper order (no model call), but if you are measuring the "
+        "expansion, you are no longer measuring it.",
+        RECALL_EXPANSION,
+    )
+
+
+def _demote_unmeasured(results: list[dict]) -> list[dict]:
+    """
+    A row that survived on words alone stops leading the prompt just
+    because it also carries a distance.
+
+    rag.search_hybrid orders measured distances ahead of word matches,
+    which is right, and it decides "measured" by whether a distance is
+    present -- which is not the same thing. A `both` row whose
+    distance is ABOVE the cutoff was not admitted by the vector
+    channel; it was admitted by the word channel and happens to have
+    been seen by the other one on its way to being dropped. Ordering
+    it as a measured hit gives the front of the prompt to the row the
+    cutoff exists to refuse.
+
+    Seen on the real store, 2026-08-25: on "Tu peux me lister mon
+    matériel ?" the cutoff dropped four rows between 0.9083 and
+    0.9833, and #61 -- an unrelated transcript at 0.9796, FARTHER than
+    the row dropped at 0.9083 -- led the survivors because the word
+    channel had also found it. memory._rank happened to demote it for
+    being archived, so nothing showed in that answer; a `fact` in the
+    same position would have led the prompt with nothing to catch it.
+
+    So the tier is recomputed on ADMISSION rather than on presence: a
+    distance within the cutoff still sorts first, everything else
+    sorts with the word matches, by bm25. Stable, so nothing else
+    moves.
+    """
+    if RECALL_MAX_DISTANCE is None:
+        return results
+
+    def measured(row: dict) -> bool:
+        d = row.get("distance")
+        return isinstance(d, (int, float)) and d <= RECALL_MAX_DISTANCE
+
+    return sorted(
+        results,
+        key=lambda r: (
+            0 if measured(r) else 1,
+            r.get("distance") if measured(r) else (r.get("score") or 0.0),
+        ),
+    )
+
+
 def _recall_node(state: AgentState) -> AgentState:
     query = state.context.get("query", state.user_input.strip())
     try:
-        results = memory_tool.search(query)
+        results = memory_tool.search(
+            query, lexical=RECALL_LEXICAL, lexical_top_k=RECALL_LEXICAL_TOP_K
+        )
     except rag.EmbeddingError as e:
         state.ok = False
         state.error = str(e)
@@ -245,7 +306,7 @@ def _recall_node(state: AgentState) -> AgentState:
         state.final_output = f"{non_answer.NO_MEMORY_PREFIX}for query: {query!r}"
         return state
 
-    kept = _drop_distant(results, query)
+    kept = _demote_unmeasured(_drop_distant(results, query))
     if not kept:
         kept = _rescue(query)
         state.context["expanded"] = bool(kept)
@@ -289,6 +350,12 @@ def _recall_node(state: AgentState) -> AgentState:
             {
                 "id": r.get("id"),
                 "kind": r.get("kind"),
+                # Which channel admitted this row. Without it the line
+                # below cannot be read at all once there are two: a row
+                # with no distance is either a word match or a bug, and
+                # a row above the cutoff that survived is either a
+                # lexical hit or a filter that stopped working.
+                "channel": r.get("channel", "vector"),
                 "distance": round(d, 4)
                 if isinstance(d := r.get("distance"), float)
                 else d,
@@ -379,7 +446,7 @@ def _rescue(query: str) -> list[dict]:
         log.warning("recall: the rescue search failed (%s)", e)
         return []
 
-    kept = _drop_distant(results, query)
+    kept = _demote_unmeasured(_drop_distant(results, query))
     if kept:
         log.event(
             "recall.rescued",
@@ -418,6 +485,23 @@ def _drop_distant(results: list[dict], query: str) -> list[dict]:
     "too far" would empty the list on any caller that builds hits
     another way -- failing closed on retrieval means answering "I have
     nothing" while holding the answer.
+
+    THIS IS THE VECTOR CHANNEL'S RULE AND ONLY ITS ROWS, since v3.17.
+    RECALL_MAX_DISTANCE is a number measured against one embedding
+    configuration, on distances produced by rag.search, and tagged
+    with the fingerprint of that configuration. It says nothing
+    whatsoever about a row the lexical channel admitted -- that row
+    was chosen because the question and the entry share words rare
+    enough to mean something, which is a different question with a
+    different answer. Applying the cutoff to it would not be strict,
+    it would be a category error, and it would delete exactly the
+    entries the second channel exists to reach: #307 and #313 are far
+    in vector space, which is why no rephrasing ever found them.
+
+    So a row tagged `lexical` or `both` passes through untouched. A
+    `both` row keeps its distance for the log and for ordering, and
+    that distance being above the cutoff no longer removes it -- one
+    channel admitting it is enough, which is what a union means.
     """
     if RECALL_MAX_DISTANCE is None:
         return results
@@ -425,9 +509,9 @@ def _drop_distant(results: list[dict], query: str) -> list[dict]:
     kept, dropped = [], []
     for r in results:
         d = r.get("distance")
-        (
-            dropped if isinstance(d, (int, float)) and d > RECALL_MAX_DISTANCE else kept
-        ).append(r)
+        too_far = isinstance(d, (int, float)) and d > RECALL_MAX_DISTANCE
+        judged_here = r.get("channel") in (None, "vector")
+        (dropped if too_far and judged_here else kept).append(r)
 
     if dropped:
         log.event(

@@ -612,6 +612,105 @@ RECALL_CALIBRATED_FOR = _recall_tag.strip() or None
 # rather than leaving it to be discovered.
 RECALL_EXPANSION = os.getenv("RECALL_EXPANSION", "off").strip().lower() or "off"
 
+# --- Lexical channel admission (v3.17) -------------------------------------
+# The share of the store a word may appear in before it stops telling
+# a search anything.
+#
+# THIS IS THE LEXICAL CHANNEL'S ADMISSION RULE, and it is deliberately
+# not a score threshold. RECALL_MAX_DISTANCE is a number measured
+# against one embedding configuration and tagged with it, and that
+# machinery exists because a distance means nothing outside the regime
+# it was measured in. bm25 is worse on that axis, not better: it is a
+# score relative to a corpus, so a cutoff on it would need its own
+# calibration, its own tag, and its own re-measurement every time the
+# store grows.
+#
+# So this channel admits on the QUERY side instead. A word earns a
+# place in the search when it appears in few enough entries to
+# separate them -- "matériel", "Podman", "5500U" name a handful of
+# rows; "mon", "peux", "que" name half the store, and searching for
+# them returns the store. Nothing about that judgement depends on the
+# embedding model, so nothing here invalidates the tag on
+# RECALL_MAX_DISTANCE or asks anyone to re-measure it.
+#
+# THE DICTIONARY IS THE STORE ITSELF, the same choice already made for
+# the spelling check in tools/memory.py and for the same reason: a
+# stopword list is a maintained artefact that is wrong for whatever
+# gets written next, while a frequency count over the actual entries
+# is right by construction and sharpens as they accumulate. It also
+# needs no French, which matters for a store holding NiPoGi, busctl
+# and aardvark-dns.
+#
+# 0.2 is a starting value and not a measurement. On a ~300-entry store
+# it admits a word appearing in 60 entries or fewer, which lets
+# "processeur" through and stops "mon". Raise it if the channel
+# returns nothing on questions whose words are genuinely in the store;
+# lower it if it returns rows that share only a common word with the
+# question. rag.lexical logs the terms kept and the terms dropped with
+# their counts on every search, so both directions are visible rather
+# than guessed at.
+RECALL_LEXICAL_MAX_DF = float(os.getenv("RECALL_LEXICAL_MAX_DF", "0.2"))
+
+# Whether recall searches the words as well as the vectors.
+#
+# OFF BY DEFAULT, on the same argument RECALL_MAX_DISTANCE and
+# RECALL_EXPANSION both make: a retrieval mechanism nobody has
+# measured on their own store should not turn itself on in a
+# deployment nobody measured it in. bench/rag_hybrid.py is what earns
+# the setting.
+#
+# The risk it carries, stated plainly, is the one the cutoff was
+# introduced to remove: a row that shares a rare word with the
+# question without answering it reaches synthesis, and a fluent wrong
+# answer replaces a correct refusal. The store already contains the
+# family -- the archived refusals of #35/#36/#37 are full of the words
+# of the questions they failed to answer, because they quote them.
+#
+# What it CANNOT do is displace a good vector answer. Word matches are
+# ordered after measured distances and get their own budget, so a
+# question that already works returns exactly what it returned before,
+# with rows appended.
+RECALL_LEXICAL = _bool("RECALL_LEXICAL", "false")
+
+# How many word matches reach synthesis. Small on purpose: a recall
+# prompt is paid for twice, in context window and in prefill time, and
+# on the Deck prefill is 99% of a run. Three is enough to carry the
+# entry the vector channel could not reach plus its two nearest
+# rivals, which is what makes a wrong one visible next to a right one.
+RECALL_LEXICAL_TOP_K = int(os.getenv("RECALL_LEXICAL_TOP_K", "3"))
+
+# Whether the WORD channel skips archived conversation.
+#
+# MEASURED ON THE REAL STORE, 2026-08-25, 193 entries, three questions
+# and three values of MAX_DF. Every junk row the word channel returned
+# was archived transcript -- #94, #61, #108, #273, #49, #70, #75 --
+# and both entries it rescued were facts: #307 and #313, neither of
+# which the vector channel could reach at all.
+#
+# That is not a coincidence, it is the shape of the data. An archived
+# unit CONTAINS THE QUESTION, verbatim, because compaction indexes one
+# exchange per entry. So for any question resembling one that has been
+# asked before, the transcript of that asking is the best word match
+# in the store -- and the emptier it is of answer, the better it
+# matches, since bm25 rewards the terms being a large share of a short
+# document. #94 is "Tu peux analyser les logs de mon Steam Deck ? / Je
+# ne peux pas...", a refusal that beat the hardware fact on the
+# hardware question.
+#
+# This is the same finding as #272 in feat/rag-non-answers and the
+# same one docs/memory.md records for the intake change, arriving a
+# third time by a third route. On the word channel it is not a bias,
+# it is circularity: matching a question against a copy of itself.
+#
+# WHAT IT COSTS, precisely and no more: the vector channel still
+# searches archived conversation, unchanged and uncalibrated-again.
+# Nothing becomes unreachable. What stops is reaching a transcript BY
+# THE WORDS OF THE QUESTION IT QUOTES.
+#
+# Set false to measure the other side; bench/rag_hybrid.py takes
+# --include-archived for exactly that.
+RECALL_LEXICAL_EXCLUDE_ARCHIVED = _bool("RECALL_LEXICAL_EXCLUDE_ARCHIVED", "true")
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the

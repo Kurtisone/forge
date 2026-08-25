@@ -110,7 +110,7 @@ class TestRecallReportsItself:
         monkeypatch.setattr(
             recall.memory_tool,
             "search",
-            lambda q: [
+            lambda q, **kw: [
                 {
                     "id": 308,
                     "kind": "fact",
@@ -134,7 +134,7 @@ class TestRecallReportsItself:
         from forge.graphs import recall
 
         monkeypatch.setattr(
-            recall.memory_tool, "search", lambda q: [{"id": 1, "distance": 9.0}]
+            recall.memory_tool, "search", lambda q, **kw: [{"id": 1, "distance": 9.0}]
         )
         monkeypatch.setattr(recall, "RECALL_MAX_DISTANCE", 0.95)
 
