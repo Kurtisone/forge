@@ -503,6 +503,40 @@ route and nothing else — the vector channel keeps archived conversation in sco
 so `0.88@a5c47b` keeps the scope it was measured in and no entry becomes
 unreachable. `--include-archived` measures the other side in one command.
 
+### What it still cannot do, from the same run
+
+`Tu peux me lister mon matériel s'il te plaît ?` came back with `#307` and
+nothing else — the whole answer, correctly, out of one entry. The Steam Deck was
+not in it, and the reason is the limit this page already states from the other
+side: **the word channel cannot reach an entry that answers in other words than
+the ones asked.** `#313` is `Steam Deck, SteamOS, conteneurs Podman`; it does not
+contain `matériel`, so the words miss it, and the vector channel cannot reach it
+either. Both channels fail on that entry for that question, for opposite reasons,
+and the union of two channels is not a third one.
+
+Two consequences worth keeping.
+
+**"A fact should name its category" is un-falsified for the word channel.** This
+page records that rule being proposed, measured and abandoned — a fact carrying
+the word `matériel` sat at rank 109 for `Tu peux me lister mon matériel ?`. That
+measurement was of the *embedding*, and it stands. bm25 has no such problem:
+`#307` came back at rank 1 on 2026-08-25 **because** it contains the word. The
+rule is not resurrected in general, it is resurrected for the channel that reads
+words — which is worth having in hand when the fact-extraction lot opens, and
+worth not confusing with the finding that killed it.
+
+**Retrieval answers proximity questions, not completeness questions.** "List my
+X" wants a *set*; both channels return the nearest rows, and `RECALL_LEXICAL_TOP_K`
+is a hard ceiling on how many a list-shaped question can gather. Spreading one
+subject across entries that share no vocabulary makes it unlistable by any
+mechanism here.
+
+There is also no floor under bm25: on `Sur quoi tournent mes conteneurs ?`,
+`#313` came back at `-6.43` followed by `#10` and `#309` at `-2.29`, admitted
+only because the budget allowed three rows. Harmless there — both are short facts
+— but the channel always spends its whole budget, and a relative floor would be
+the second calibrated number this design has so far done without.
+
 ### The cost, which is the same shape as last time
 
 A row that shares a rare word with a question without answering it. This store
