@@ -143,3 +143,32 @@ def test_the_default_stays_off():
     from forge import config
 
     assert config.RECALL_LEXICAL is False
+
+
+def test_a_row_kept_on_words_alone_does_not_lead_on_its_distance(cutoff):
+    """
+    Seen on the real store, 2026-08-25: the cutoff dropped four rows
+    between 0.9083 and 0.9833, and an unrelated transcript at 0.9796 --
+    farther than the row dropped at 0.9083 -- led the survivors,
+    because the word channel had also found it. It was archived, so
+    memory._rank demoted it before the prompt; a fact in the same
+    position would have led with nothing to catch it.
+    """
+    good = {**_lexical(entry_id=9, score=-8.0), "channel": "lexical"}
+    survivor = _both(0.9796, entry_id=61)
+
+    ordered = recall._demote_unmeasured([survivor, good])
+
+    assert [r["id"] for r in ordered] == [9, 61]
+
+
+def test_a_measured_row_still_leads(cutoff):
+    ordered = recall._demote_unmeasured([_lexical(entry_id=9), _both(0.5, 61)])
+
+    assert [r["id"] for r in ordered] == [61, 9]
+
+
+def test_no_cutoff_leaves_the_order_alone():
+    rows = [_both(1.2, 61), _lexical(entry_id=9)]
+
+    assert recall._demote_unmeasured(rows) == rows

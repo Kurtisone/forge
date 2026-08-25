@@ -245,6 +245,49 @@ if RECALL_LEXICAL and RECALL_EXPANSION != "off":
     )
 
 
+def _demote_unmeasured(results: list[dict]) -> list[dict]:
+    """
+    A row that survived on words alone stops leading the prompt just
+    because it also carries a distance.
+
+    rag.search_hybrid orders measured distances ahead of word matches,
+    which is right, and it decides "measured" by whether a distance is
+    present -- which is not the same thing. A `both` row whose
+    distance is ABOVE the cutoff was not admitted by the vector
+    channel; it was admitted by the word channel and happens to have
+    been seen by the other one on its way to being dropped. Ordering
+    it as a measured hit gives the front of the prompt to the row the
+    cutoff exists to refuse.
+
+    Seen on the real store, 2026-08-25: on "Tu peux me lister mon
+    matériel ?" the cutoff dropped four rows between 0.9083 and
+    0.9833, and #61 -- an unrelated transcript at 0.9796, FARTHER than
+    the row dropped at 0.9083 -- led the survivors because the word
+    channel had also found it. memory._rank happened to demote it for
+    being archived, so nothing showed in that answer; a `fact` in the
+    same position would have led the prompt with nothing to catch it.
+
+    So the tier is recomputed on ADMISSION rather than on presence: a
+    distance within the cutoff still sorts first, everything else
+    sorts with the word matches, by bm25. Stable, so nothing else
+    moves.
+    """
+    if RECALL_MAX_DISTANCE is None:
+        return results
+
+    def measured(row: dict) -> bool:
+        d = row.get("distance")
+        return isinstance(d, (int, float)) and d <= RECALL_MAX_DISTANCE
+
+    return sorted(
+        results,
+        key=lambda r: (
+            0 if measured(r) else 1,
+            r.get("distance") if measured(r) else (r.get("score") or 0.0),
+        ),
+    )
+
+
 def _recall_node(state: AgentState) -> AgentState:
     query = state.context.get("query", state.user_input.strip())
     try:
@@ -263,7 +306,7 @@ def _recall_node(state: AgentState) -> AgentState:
         state.final_output = f"{non_answer.NO_MEMORY_PREFIX}for query: {query!r}"
         return state
 
-    kept = _drop_distant(results, query)
+    kept = _demote_unmeasured(_drop_distant(results, query))
     if not kept:
         kept = _rescue(query)
         state.context["expanded"] = bool(kept)
@@ -403,7 +446,7 @@ def _rescue(query: str) -> list[dict]:
         log.warning("recall: the rescue search failed (%s)", e)
         return []
 
-    kept = _drop_distant(results, query)
+    kept = _demote_unmeasured(_drop_distant(results, query))
     if kept:
         log.event(
             "recall.rescued",
