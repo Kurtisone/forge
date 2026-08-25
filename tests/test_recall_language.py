@@ -37,7 +37,7 @@ def _run(monkeypatch, replies, question=FR_QUESTION):
         calls.append(prompt)
         return replies[min(len(calls) - 1, len(replies) - 1)]
 
-    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q: _ENTRIES)
+    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q, **kw: _ENTRIES)
     monkeypatch.setattr(recall_mod, "call_llm", fake_llm)
     state = build_recall().run(question, initial_context={"query": question})
     return state, calls
@@ -121,7 +121,7 @@ def test_a_provider_failure_during_the_retry_is_still_a_provider_failure(monkeyp
             return EN_ANSWER
         raise ProviderError("llama-server is down")
 
-    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q: _ENTRIES)
+    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q, **kw: _ENTRIES)
     monkeypatch.setattr(recall_mod, "call_llm", fake_llm)
 
     state = build_recall().run(FR_QUESTION, initial_context={"query": FR_QUESTION})

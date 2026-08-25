@@ -19,7 +19,7 @@ def _run(monkeypatch, results):
     monkeypatch.setattr(
         recall_mod.log, "event", lambda name, **f: events.append((name, f))
     )
-    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q: results)
+    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q, **kw: results)
 
     state = AgentState(user_input="cache KV", max_steps=4)
     state.context = {"query": "cache KV"}

@@ -651,6 +651,34 @@ RECALL_EXPANSION = os.getenv("RECALL_EXPANSION", "off").strip().lower() or "off"
 # than guessed at.
 RECALL_LEXICAL_MAX_DF = float(os.getenv("RECALL_LEXICAL_MAX_DF", "0.2"))
 
+# Whether recall searches the words as well as the vectors.
+#
+# OFF BY DEFAULT, on the same argument RECALL_MAX_DISTANCE and
+# RECALL_EXPANSION both make: a retrieval mechanism nobody has
+# measured on their own store should not turn itself on in a
+# deployment nobody measured it in. bench/rag_hybrid.py is what earns
+# the setting.
+#
+# The risk it carries, stated plainly, is the one the cutoff was
+# introduced to remove: a row that shares a rare word with the
+# question without answering it reaches synthesis, and a fluent wrong
+# answer replaces a correct refusal. The store already contains the
+# family -- the archived refusals of #35/#36/#37 are full of the words
+# of the questions they failed to answer, because they quote them.
+#
+# What it CANNOT do is displace a good vector answer. Word matches are
+# ordered after measured distances and get their own budget, so a
+# question that already works returns exactly what it returned before,
+# with rows appended.
+RECALL_LEXICAL = _bool("RECALL_LEXICAL", "false")
+
+# How many word matches reach synthesis. Small on purpose: a recall
+# prompt is paid for twice, in context window and in prefill time, and
+# on the Deck prefill is 99% of a run. Three is enough to carry the
+# entry the vector channel could not reach plus its two nearest
+# rivals, which is what makes a wrong one visible next to a right one.
+RECALL_LEXICAL_TOP_K = int(os.getenv("RECALL_LEXICAL_TOP_K", "3"))
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the

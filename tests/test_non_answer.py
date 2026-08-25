@@ -44,7 +44,7 @@ class TestRecallProducers:
         from forge.graphs import recall
 
         monkeypatch.setattr(
-            recall.memory_tool, "search", lambda q: [{"id": 1, "distance": 9.0}]
+            recall.memory_tool, "search", lambda q, **kw: [{"id": 1, "distance": 9.0}]
         )
         monkeypatch.setattr(recall, "RECALL_MAX_DISTANCE", 0.95)
 
@@ -55,7 +55,7 @@ class TestRecallProducers:
     def test_empty_store_is_recognised(self, monkeypatch):
         from forge.graphs import recall
 
-        monkeypatch.setattr(recall.memory_tool, "search", lambda q: [])
+        monkeypatch.setattr(recall.memory_tool, "search", lambda q, **kw: [])
 
         state = recall.build().run("Quel est le modèle de ma voiture ?")
 

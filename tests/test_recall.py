@@ -20,7 +20,7 @@ def test_recall_happy_path(monkeypatch):
         {"kind": "fact", "content": "Possède un Steam Deck", "project": None},
         {"kind": "fact", "content": "Possède un Dell R710", "project": None},
     ]
-    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q: fake_results)
+    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q, **kw: fake_results)
     monkeypatch.setattr(
         recall_mod,
         "call_llm",
@@ -38,7 +38,7 @@ def test_recall_happy_path(monkeypatch):
 
 
 def test_recall_no_results_goes_to_error_node(monkeypatch):
-    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q: [])
+    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q, **kw: [])
 
     state = build_recall().run(
         "obscure query", initial_context={"query": "obscure query"}
@@ -49,7 +49,7 @@ def test_recall_no_results_goes_to_error_node(monkeypatch):
 
 
 def test_recall_embedding_failure_goes_to_error_node(monkeypatch):
-    def raise_error(q):
+    def raise_error(q, **kw):
         raise rag.EmbeddingError("400 Bad Request")
 
     monkeypatch.setattr(recall_mod.memory_tool, "search", raise_error)
@@ -73,7 +73,7 @@ def test_recall_prompt_includes_ranked_clipped_entries(monkeypatch):
         {"kind": "history_summary", "content": "bavardage " * 200, "project": None},
         {"kind": "fact", "content": "Possède un Steam Deck", "project": None},
     ]
-    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q: fake_results)
+    monkeypatch.setattr(recall_mod.memory_tool, "search", lambda q, **kw: fake_results)
     monkeypatch.setattr(recall_mod.memory_tool, "MEMORY_RECALL_MAX_CHARS", 50)
 
     captured = {}
@@ -97,7 +97,9 @@ def test_recall_llm_unavailable(monkeypatch):
     monkeypatch.setattr(
         recall_mod.memory_tool,
         "search",
-        lambda q: [{"kind": "fact", "content": "entrée de test", "project": None}],
+        lambda q, **kw: [
+            {"kind": "fact", "content": "entrée de test", "project": None}
+        ],
     )
     monkeypatch.setattr(
         recall_mod,
@@ -122,7 +124,7 @@ def test_recall_unwraps_substantive_json_wrapped_answer(monkeypatch):
     monkeypatch.setattr(
         recall_mod.memory_tool,
         "search",
-        lambda q: [
+        lambda q, **kw: [
             {"kind": "fact", "content": "Possède un Steam Deck", "project": None}
         ],
     )
@@ -147,7 +149,9 @@ def test_recall_cleans_degenerate_json_echo(monkeypatch):
     monkeypatch.setattr(
         recall_mod.memory_tool,
         "search",
-        lambda q: [{"kind": "fact", "content": "entrée de test", "project": None}],
+        lambda q, **kw: [
+            {"kind": "fact", "content": "entrée de test", "project": None}
+        ],
     )
     monkeypatch.setattr(
         recall_mod,
@@ -164,7 +168,9 @@ def test_recall_strips_think_blocks(monkeypatch):
     monkeypatch.setattr(
         recall_mod.memory_tool,
         "search",
-        lambda q: [{"kind": "fact", "content": "entrée de test", "project": None}],
+        lambda q, **kw: [
+            {"kind": "fact", "content": "entrée de test", "project": None}
+        ],
     )
     monkeypatch.setattr(
         recall_mod,
