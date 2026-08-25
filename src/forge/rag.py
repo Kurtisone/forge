@@ -52,6 +52,68 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
 );
 """
 
+# --- Lexical index (v3.17) -------------------------------------------------
+# An FTS5 index over the SAME rows, so a question can also be answered
+# through the words it shares with an entry instead of only through
+# the vectors.
+#
+# WHY A SECOND INDEX EXISTS AT ALL. Measured on the real store on
+# 2026-08-24: #307 (the hardware fact) and #313 ("Steam Deck, SteamOS,
+# conteneurs Podman") are both in there, and no natural-language
+# question reaches either one through the vector channel -- not with
+# the query instruction, not with any of the rephrasings the expansion
+# pass produced over six rounds of measurement. An entry that is not
+# written in natural language is not retrievable by a natural-language
+# query; that is a property of an instruction-tuned embedding model,
+# not a threshold someone set wrong. The words are sitting in the
+# entry. Nothing was ever looking for them.
+#
+# EXTERNAL CONTENT, NOT A COPY. content='memory_entries' means the
+# index stores terms and points back at the original rows, so there is
+# exactly one copy of every entry's text and no way for the two to
+# disagree about what an entry says.
+#
+# remove_diacritics 2 because "matériel" has to be findable by someone
+# who types "materiel", and version 2 folds the whole Unicode range
+# rather than the Latin-1 subset version 1 covers. Changing this line
+# later means rebuilding the index: the terms already stored were
+# folded by the old rule, and nothing will say so.
+_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+    content,
+    content='memory_entries',
+    content_rowid='id',
+    tokenize="unicode61 remove_diacritics 2"
+);
+"""
+
+# TRIGGERS AND NOT CALLS IN _insert()/forget(), deliberately. Four
+# paths write this store (the memory tool, the REPL, POST /remember,
+# compaction) and three delete from it (forget, deploy/rag_resplit.py,
+# and a human with sqlite3 open -- which is how this store gets
+# repaired today). A trigger covers all of them, and covers the next
+# one nobody has written yet. The vector table is kept in sync by hand
+# and that is exactly why memory_vectors has needed a comment since
+# v3.7 warning that deleting one and not the other leaves a memory
+# that is invisible and answering.
+_FTS_TRIGGERS = """
+CREATE TRIGGER IF NOT EXISTS memory_fts_insert
+AFTER INSERT ON memory_entries BEGIN
+    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_fts_delete
+AFTER DELETE ON memory_entries BEGIN
+    INSERT INTO memory_fts(memory_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_fts_update
+AFTER UPDATE ON memory_entries BEGIN
+    INSERT INTO memory_fts(memory_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+    INSERT INTO memory_fts(rowid, content) VALUES (new.id, new.content);
+END;
+"""
+
 
 def _path() -> Path:
     return Path(RAG_DB_FILE)
@@ -68,7 +130,73 @@ def get_connection() -> sqlite3.Connection:
     conn.execute(_SCHEMA)
     conn.execute(_VEC_SCHEMA)
     conn.commit()
+    _ensure_fts(conn)
     return conn
+
+
+def _ensure_fts(conn: sqlite3.Connection) -> bool:
+    """
+    Create the lexical index if it is missing, backfill it once, and
+    say whether this store has a usable lexical channel.
+
+    THE BACKFILL IS THE MIGRATION, which is why this ships without a
+    script. FTS5's 'rebuild' command reads memory_entries and indexes
+    every row, so a store written before this existed becomes
+    searchable on the first connection after the upgrade -- no
+    deploy/ step to forget, no window during which half the store is
+    findable and the other half is not.
+
+    It runs only when the table was ABSENT, checked against
+    sqlite_master before the CREATE. Afterwards there is no way to
+    tell a table created a second ago from one that has been indexed
+    for weeks, and rebuilding on every connection would re-index the
+    whole store to open it.
+
+    FTS5 IS AN OPTIONAL SQLITE MODULE and a Forge that cannot open its
+    memory is worse than a Forge with one retrieval channel. A build
+    without it gets a warning and the vector channel exactly as it
+    was, rather than an exception on the path every single write and
+    read goes through.
+
+    sqlite_vec is already loaded by the caller, and that ordering is
+    not incidental: any schema statement on a database carrying a vec0
+    table needs the extension present, whatever the statement itself
+    is about.
+    """
+    existed = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'"
+        ).fetchone()
+        is not None
+    )
+    try:
+        conn.execute(_FTS_SCHEMA)
+        conn.executescript(_FTS_TRIGGERS)
+        if not existed:
+            conn.execute("INSERT INTO memory_fts(memory_fts) VALUES ('rebuild')")
+            indexed = conn.execute("SELECT count(*) FROM memory_entries").fetchone()[0]
+            if indexed:
+                log.event("rag.fts_backfilled", entries=indexed)
+        conn.commit()
+    except sqlite3.OperationalError as e:
+        log.warning(
+            "rag: no lexical index on this store (%s) -- this SQLite build has "
+            "no FTS5, so recall keeps the vector channel alone and any entry "
+            "that is only reachable by its words stays unreachable",
+            e,
+        )
+        return False
+    return True
+
+
+def has_lexical_index(conn: sqlite3.Connection) -> bool:
+    """Whether the lexical channel can run against this connection."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_fts'"
+        ).fetchone()
+        is not None
+    )
 
 
 class EmbeddingError(Exception):
