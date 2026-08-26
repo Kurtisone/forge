@@ -984,6 +984,68 @@ def list_entries(
     ]
 
 
+def hot_entries(conn: sqlite3.Connection) -> list[dict]:
+    """
+    Everything anyone deliberately wrote down, oldest first, all of it.
+
+    This is not a search and it takes no query. `search` answers a
+    question of PROXIMITY -- what is nearest to this -- and six
+    measurement campaigns on this store established that it cannot
+    answer a question of COMPLETENESS. "List my hardware" wants a set,
+    and every mechanism in this file returns the nearest rows of one.
+    So for the entries small enough to fit, the answer is to stop
+    searching and look.
+
+    Three deliberate differences from list_entries, which is the
+    reader that already exists:
+
+      ascending id      list_entries is newest-first because a human
+                        reading a store wants the recent end. This
+                        output goes into a prompt, and appending at
+                        the end is the only order in which adding an
+                        entry leaves the earlier ones byte-identical.
+
+      no LIMIT          list_entries defaults to 50, which is a page
+                        size. A page size silently deciding what a
+                        completeness answer contains is the failure
+                        this exists to remove; the cap that does
+                        decide is a token budget, applied by the
+                        caller, out loud.
+
+      kind IS NOT       not `!=`. A row whose kind is NULL is not
+                        archived transcript, and `kind != 'x'` is
+                        false for NULL in SQL, so `!=` would drop it
+                        without a word.
+
+    ARCHIVED_KIND is excluded and nothing else is. Not `kind =
+    'fact'`: docs/memory.md records that the memory tool defaults a
+    missing kind to "fact" rather than failing, so the kind on any row
+    the router wrote is a 9B's on-the-fly guess. What is reliable is
+    the binary distinction tools/memory._rank already sorts on --
+    someone chose to write this down, or compaction dumped it here.
+    """
+    rows = conn.execute(
+        """
+        SELECT id, kind, content, project, created_at
+        FROM memory_entries
+        WHERE kind IS NOT ?
+        ORDER BY id ASC
+        """,
+        (ARCHIVED_KIND,),
+    ).fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "kind": r[1],
+            "content": r[2],
+            "project": r[3],
+            "created_at": r[4],
+        }
+        for r in rows
+    ]
+
+
 def count_entries(conn: sqlite3.Connection, *, kind: str | None = None) -> dict:
     """
     How many entries there are, broken down by kind.

@@ -711,6 +711,67 @@ RECALL_LEXICAL_TOP_K = int(os.getenv("RECALL_LEXICAL_TOP_K", "3"))
 # --include-archived for exactly that.
 RECALL_LEXICAL_EXCLUDE_ARCHIVED = _bool("RECALL_LEXICAL_EXCLUDE_ARCHIVED", "true")
 
+# --- The hot tier (v3.18) -------------------------------------------------
+# Whether every deliberately-written entry goes into the synthesis
+# prompt whole, without being searched for.
+#
+# OFF BY DEFAULT, on the same argument the three knobs above make: a
+# mechanism nobody has measured on their own store should not turn
+# itself on in a deployment nobody measured it in.
+# bench/rag_hot_tier.py is what earns the setting, and it counts the
+# same two sides -- what the block answers that search could not, and
+# what it costs on every question that already worked.
+#
+# It is not a fourth retrieval mechanism. The other three answer a
+# question of proximity; this one answers a question of completeness
+# by not asking a question at all. "Liste mon matériel" wants a SET,
+# and a nearest-neighbour search returns the nearest rows of one
+# however well it is calibrated -- which is why six campaigns of
+# thresholds, rephrasings and a second channel each improved the
+# ranking and none of them made the answer complete.
+#
+# WHAT IT COSTS, measured on the Deck on 2026-08-26 and not estimated:
+# the whole deliberate store is 11 entries, 700 characters, ~195
+# tokens, against a synthesis prompt of ~1134 -- so ~2.2 s of prefill
+# at the 11.0 ms/token floor, ONCE, and then it rides in the cache.
+#
+# That "once" was doubted on the way in and the doubt was wrong, which
+# is worth recording because it nearly changed the design. The
+# argument was that both prompts share one slot (LLAMA_CPP_ID_SLOT)
+# and share no prefix, so the synthesis prompt would be recomputed
+# whole on every recall. Three consecutive real runs say otherwise:
+# synthesis prompt_n 702 at 11.0 ms/token cold, then 661 and 718 at
+# 8.01 and 8.06 -- ~180 and ~192 tokens never re-evaluated, against a
+# block of 195. And a router call landing BETWEEN two synthesis calls
+# came back at prompt_n=5755, 0.15 ms/token: the intervening call had
+# not evicted it. This build keeps more than one sequence.
+#
+# The placement is what earns that (see graphs/recall.py,
+# _build_prompt): above the question, the block is a stable prefix.
+# Below it, it would have been recomputed every turn no matter what
+# the slot did.
+RECALL_HOT_FACTS = _bool("RECALL_HOT_FACTS", "false")
+
+# The token budget for that block, and the reason it is a tripwire
+# rather than a policy.
+#
+# A cap forces a choice as soon as there are more entries than budget,
+# and a choice is a ranking -- which is precisely what this tier was
+# built to remove. Three ways out were on the table: drop by age, let
+# the user pin, or keep the number of entries small enough that the
+# question does not arise. The measurement settles it: 195 tokens
+# against 1000 is five times the headroom, roughly 55 entries, and the
+# aggregation pass that comes next lowers the count rather than
+# raising it.
+#
+# So overflow is an anomaly, not a regime. It truncates at the TAIL --
+# the one cut that leaves every surviving line where it was -- and
+# says so in the block, because the failure mode of a silently short
+# inventory is an answer that reads complete and is wrong. That is
+# strictly worse than today's visibly incomplete one, and it is the
+# only way this mechanism can make things worse than not having it.
+RECALL_HOT_MAX_TOKENS = int(os.getenv("RECALL_HOT_MAX_TOKENS", "1000"))
+
 # Recall answering a French question in English is the failure this
 # guards. The prompt names the detected language (forge/lang.py); this
 # knob controls the half that doesn't trust the prompt -- checking the

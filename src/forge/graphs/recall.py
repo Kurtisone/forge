@@ -42,7 +42,7 @@ Usage (Python):
   print(run("Tu peux me lister mon matériel ?"))
 """
 
-from forge import expansion, lang, non_answer, outcome, rag, subtrace
+from forge import expansion, hot_memory, lang, non_answer, outcome, rag, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RECALL_CALIBRATED_FOR,
@@ -113,7 +113,7 @@ answers the question -- do not just copy the bullet list verbatim,
 and don't pad it with anything the entries don't say. If none of the
 entries actually answer the question, say plainly that you don't have
 that information yet.
-
+{hot_section}
 Question: {query}
 
 --- memory entries ---
@@ -290,17 +290,34 @@ def _demote_unmeasured(results: list[dict]) -> list[dict]:
 
 def _recall_node(state: AgentState) -> AgentState:
     query = state.context.get("query", state.user_input.strip())
+
+    # Built here rather than in the synthesis node, and before the
+    # search rather than after it, because it does not depend on the
+    # query -- that is the whole point of it. Reading it once per run
+    # also means the exit condition below and the prompt above are
+    # looking at the same list.
+    state.context["hot_section"] = hot_memory.block()
+
     try:
         results = memory_tool.search(
             query, lexical=RECALL_LEXICAL, lexical_top_k=RECALL_LEXICAL_TOP_K
         )
     except rag.EmbeddingError as e:
+        # DELIBERATELY NOT RESCUED BY THE HOT BLOCK, though it could
+        # be: reading it is a plain sqlite SELECT and needs no
+        # embedding server, so Forge could answer completeness
+        # questions right through an outage. It should not. An
+        # embedding server that is down is a fact about the
+        # deployment, and the three entry points of this store already
+        # fail the same predictable way on purpose (docs/memory.md).
+        # Answering fluently from a partial capability is how an
+        # outage lasts a week.
         state.ok = False
         state.error = str(e)
         state.final_output = f"[error] recall failed: {e}"
         return state
 
-    if not results:
+    if not results and not state.context["hot_section"]:
         state.ok = False
         state.error = "no results"
         state.final_output = f"{non_answer.NO_MEMORY_PREFIX}for query: {query!r}"
@@ -310,11 +327,21 @@ def _recall_node(state: AgentState) -> AgentState:
     if not kept:
         kept = _rescue(query)
         state.context["expanded"] = bool(kept)
-    if not kept:
+    if not kept and not state.context["hot_section"]:
         # Not an error: the store was reachable, it simply holds
         # nothing close enough to the question. Saying that is the
         # entire value of the cutoff -- the failure it replaces is a
         # fluent sentence built out of the five least-bad rows.
+        #
+        # THE HOT BLOCK IS THE OTHER HALF OF THIS CONDITION, and
+        # without it the tier would be invisible in exactly the case
+        # it was built for. "Tu peux me lister mon matériel ?" is the
+        # question this graph fails on, and the way it fails is here:
+        # the cutoff drops every row, the run short-circuits, and no
+        # LLM call happens at all. A prompt carrying the whole
+        # deliberate store would never have been seen. Nothing close
+        # enough to the question is not the same as nothing to answer
+        # from.
         state.ok = False
         state.error = "no results above the distance cutoff"
         state.final_output = non_answer.NOTHING_CLOSE_ENOUGH
@@ -563,9 +590,35 @@ def _clean_synthesis_response(raw: str) -> str:
     return cleaned
 
 
-def _build_prompt(query: str, entries_block: str, language_line: str = "") -> str:
+def _build_prompt(
+    query: str,
+    entries_block: str,
+    language_line: str = "",
+    hot_section: str = "",
+) -> str:
+    """
+    The hot block goes ABOVE the question, and that placement is the
+    whole of the design decision.
+
+    This prompt is ordered preamble -> question -> retrieved entries.
+    Anything spliced into entries_block therefore sits behind a string
+    that changes every turn, so a block that is byte-identical from
+    one recall to the next would still never be a shared prefix. Above
+    the question it is, which is the only form in which llama-server's
+    KV cache can ever be asked to keep it.
+
+    "Can ever be asked" and not "does": both LLM prompts share one
+    slot (LLAMA_CPP_ID_SLOT) and the router's prompt shares no prefix
+    with this one, so today the whole thing is prefilled every time.
+    Putting the block here costs nothing and is the precondition for
+    that ever changing; putting it below the question would foreclose
+    it for a saving of zero.
+    """
     return _SYNTHESIS_PROMPT.format(
-        query=query, entries_block=entries_block, language_line=language_line
+        query=query,
+        entries_block=entries_block,
+        language_line=language_line,
+        hot_section=hot_section,
     )
 
 
@@ -574,13 +627,14 @@ def _synthesize_node(state: AgentState) -> AgentState:
     results = state.context.get("results", [])
 
     entries_block = memory_tool.format_results(results)
+    hot_section = state.context.get("hot_section", "")
 
     # Wording half and deterministic half both live in forge.lang now:
     # review, research and sysadmin need the identical instruction, and
     # four copies of a string that has to stay identical is how a fix
     # drifts.
     language_line = lang.line_for(query)
-    prompt = _build_prompt(query, entries_block, language_line)
+    prompt = _build_prompt(query, entries_block, language_line, hot_section)
 
     log.event(
         "recall.llm_call",
@@ -601,7 +655,7 @@ def _synthesize_node(state: AgentState) -> AgentState:
             query,
             answer,
             retry=lambda line: _clean_synthesis_response(
-                call_llm(_build_prompt(query, entries_block, line))
+                call_llm(_build_prompt(query, entries_block, line, hot_section))
             ),
             enabled=ENFORCE_ANSWER_LANGUAGE,
         )
@@ -668,7 +722,11 @@ def run(query: str) -> str:
                     f"{len(results)} entrée(s) retenue(s)"
                     + (" après reformulation" if state.context.get("expanded") else "")
                     if results
-                    else "aucune entrée assez proche"
+                    else (
+                        "aucune entrée assez proche, mémoire complète en contexte"
+                        if state.context.get("hot_section")
+                        else "aucune entrée assez proche"
+                    )
                 ),
                 "synthesize": lambda: (
                     f"réponse générée ({len(state.final_output or '')} caractères)"
