@@ -732,11 +732,24 @@ RECALL_LEXICAL_EXCLUDE_ARCHIVED = _bool("RECALL_LEXICAL_EXCLUDE_ARCHIVED", "true
 #
 # WHAT IT COSTS, measured on the Deck on 2026-08-26 and not estimated:
 # the whole deliberate store is 11 entries, 700 characters, ~195
-# tokens, against a synthesis prompt of ~1134. Both LLM prompts share
-# one llama-server slot (LLAMA_CPP_ID_SLOT above) and do not share a
-# prefix, so those tokens are prefilled at the full-recompute floor of
-# 11.5-13.2 ms/token -- about 2.2-2.6 s on every recall, every time,
-# not once. Whoever turns this on is buying that.
+# tokens, against a synthesis prompt of ~1134 -- so ~2.2 s of prefill
+# at the 11.0 ms/token floor, ONCE, and then it rides in the cache.
+#
+# That "once" was doubted on the way in and the doubt was wrong, which
+# is worth recording because it nearly changed the design. The
+# argument was that both prompts share one slot (LLAMA_CPP_ID_SLOT)
+# and share no prefix, so the synthesis prompt would be recomputed
+# whole on every recall. Three consecutive real runs say otherwise:
+# synthesis prompt_n 702 at 11.0 ms/token cold, then 661 and 718 at
+# 8.01 and 8.06 -- ~180 and ~192 tokens never re-evaluated, against a
+# block of 195. And a router call landing BETWEEN two synthesis calls
+# came back at prompt_n=5755, 0.15 ms/token: the intervening call had
+# not evicted it. This build keeps more than one sequence.
+#
+# The placement is what earns that (see graphs/recall.py,
+# _build_prompt): above the question, the block is a stable prefix.
+# Below it, it would have been recomputed every turn no matter what
+# the slot did.
 RECALL_HOT_FACTS = _bool("RECALL_HOT_FACTS", "false")
 
 # The token budget for that block, and the reason it is a tripwire

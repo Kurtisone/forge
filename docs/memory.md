@@ -619,13 +619,28 @@ entries. Anything spliced into the entries block therefore sits behind
 a string that changes every turn, so a block byte-identical from one
 recall to the next would still never be a shared prefix down there.
 
-It is not one today either: both LLM prompts share one llama-server
-slot (`LLAMA_CPP_ID_SLOT`) and the router's prompt shares no prefix
-with this one, so the whole thing is prefilled every time at the
-11.5–13.2 ms/token floor — **~2.2–2.6 s on every recall, not once.**
-Placing the block above the question costs nothing now and is the
-precondition for that ever changing; placing it below would foreclose
-it in exchange for a saving of zero.
+**And it is one, measured.** The branch shipped believing otherwise —
+the argument was that both prompts share one slot
+(`LLAMA_CPP_ID_SLOT`) and share no prefix, so the synthesis prompt
+would be recomputed whole every time. Three consecutive real runs on
+2026-08-26 say no:
+
+| run | prompt_n | prompt_ms | ms/token |
+|---|---|---|---|
+| 1 (cold) | 702 | 7720 | **11.0** |
+| 2 | 661 | 5295 | **8.01** |
+| 3 | 718 | 5789 | **8.06** |
+
+At the cold floor of 11.0, runs 2 and 3 re-evaluate ~481 and ~526
+tokens — leaving ~180 and ~192 never recomputed, against a block of
+195. And a router call landing *between* two synthesis calls came back
+at `prompt_n=5755, 0.15 ms/token`: the intervening call had not
+evicted it. This build keeps more than one sequence.
+
+So the block costs **~2.2 s once**, not per recall, and the cap has far
+more room than it was given. The placement above the question is what
+earns that; below it, the block would sit behind a string that changes
+every turn and would be recomputed every time whatever the slot did.
 
 The framing has to establish two things, and the second is not
 obvious. That the list is **complete**, or the model hedges a complete
@@ -650,6 +665,58 @@ three entry points of this store fail the same predictable way on
 purpose, and answering fluently from a partial capability is how an
 outage lasts a week.
 
+### What five real runs established
+
+The mechanism works and the branch does not solve the question it was
+opened for. Both halves matter.
+
+**Validated, in the sharpest possible form.** On `Quels sont tous les
+ordinateurs que je possède ?` the store returned nothing at all —
+`#1` at 0.959, `#2` at 0.967, `#307` at 1.023, `results=0` after both
+the vector channel and the expansion pass — and the answer was
+complete and correct: the Dell R710, the NiPoGi AM06PRO and the Steam
+Deck, three for three, picked out of eleven lines of which eight are
+not computers. Retrieval contributed *nothing* and the answer was
+right. That is the thesis of this tier demonstrated from the inside.
+
+**The ranking did not disappear, it moved.** On `Tu peux me lister mon
+matériel ?` the same block produced one entry, then two, then one
+again across three runs. A model that sees eleven lines and returns
+one is not failing to enumerate — the computers question proves it
+enumerates and filters by sense without dropping anything. It is
+judging **scope**: "mon matériel" read as one machine rather than
+four, which is a defensible reading given three overlapping NiPoGi
+entries.
+
+So the correct next move is **not** a grammar and **not** more words
+in the prompt. GBNF was the candidate structural fix and the computers
+run closes it. Overlapping entries are the aggregation tier's work,
+and this is now the second independent reason to build it.
+
+### The store poisons itself, and the moment is compaction
+
+Four archived transcripts of `Tu peux me lister mon matériel ?` sat at
+0.5757–0.7312 — closer than any fact has ever come to that question —
+and three of them were refusals. One of them, `#329`, was a previous
+trial's own answer, which had become the best match for the next
+trial. A diagnostic run reading them answered by copying `#329`'s
+opening words.
+
+Asking the question is not what does this. Compaction is:
+`compaction.indexed messages=59 … entries=17 first_id=318 last_id=334`
+wrote seventeen entries in one pass, four of them transcripts of the
+test question. Between the trial and the threshold there is a window
+in which nothing has been indexed yet, and `!clear` inside it costs
+nothing where cleaning up afterwards costs a probe, four `DELETE`s and
+a store that served false results in between.
+
+Two consequences. Real trials need the same discipline `bench/`
+already has, and the "measure on a copy" rule never covered them.
+And `!clear` currently wipes **pinned** messages too, so the cheap
+window is only cheap for someone with nothing pinned — a drawer that
+does not distinguish what was deliberately kept is the same design
+fault this tier was built to fix in the store.
+
 ### What this does to the word channel
 
 `RECALL_LEXICAL_EXCLUDE_ARCHIVED` ships `true`, so the word channel
@@ -670,10 +737,21 @@ bench/in_container.sh rag_hot_tier --db /tmp/real_copy.db \
     --miss "Comment s'appelle mon chat ?"
 ```
 
-If `ADDS` comes back at zero, the hot tier subsumes what
-`RECALL_LEXICAL` was measured to rescue on this store, and running
-both pays twice for one mechanism. `--include-archived` measures the
-other side, as it does for `rag_hybrid`.
+Measured on the real store, 2026-08-26: **`SUBSUMED 4 / ADDS 0`** —
+every row the word channel returned was already in the prompt. With
+`--include-archived` it becomes `SUBSUMED 1 / ADDS 2`, and the two it
+adds are `#94` and `#61`, archived transcripts, which is exactly what
+`RECALL_LEXICAL_EXCLUDE_ARCHIVED` exists to keep out.
+
+**Measured, not concluded.** The redundancy is real and the decision
+is not taken: v3.17 was measured and won on its own terms, and turning
+it off on the strength of numbers collected during a diagnostic of
+something else is the mistake this page records about few-shot
+reasoning. The same holds for the expansion pass, which spent 9.3-9.5 s
+returning nothing on two questions whose answer was already in the
+prompt. Both are the same open question — two rescue mechanisms whose
+useful share the hot block absorbs — and they get measured together,
+for themselves, or not at all.
 
 There is deliberately **no suggested budget** in that output. The cap
 is a budget and not a measurement; the only thing that moves it is the

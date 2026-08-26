@@ -18,13 +18,15 @@ REACHED 11/11 would be reporting the definition.
 
 The three questions worth measuring are different ones.
 
-  COST        The tokens the block adds to every synthesis prompt,
-              including the ones that already worked. On the Deck both
-              LLM prompts share one llama-server slot and share no
-              prefix, so this is prefilled at the full-recompute floor
-              of 11.5-13.2 ms/token on EVERY recall -- the harness
-              turns the token count into that range in seconds,
-              because a token count is not a cost anyone feels.
+  COST        The tokens the block adds to the synthesis prompt. The
+              harness turns them into seconds at the measured prefill
+              floor, because a token count is not a cost anyone feels.
+              MEASURED AS PAID ONCE, not per recall: three consecutive
+              real runs on 2026-08-26 show ~180-192 tokens of a
+              195-token block surviving in the KV cache between calls,
+              and a router call landing in between did not evict it.
+              The figure below is therefore an upper bound -- what the
+              first cold recall pays.
 
   SUBSUMED    Rows the lexical channel returns that are ALREADY in the
               hot block. This is the number the branch turns on.
@@ -61,15 +63,20 @@ import os
 
 from _harness import placeholders
 
-#: The prefill floor measured on the Deck, ms per token, in the regime
-#: where nothing is cached -- which is the regime this block lives in
-#: today (see config.py, RECALL_HOT_FACTS).
-_PREFILL_MS_PER_TOKEN = (11.5, 13.2)
+#: The prefill floor measured on the Deck, ms per token, on a COLD
+#: synthesis prompt -- 11.0 and 11.28 across two real runs on
+#: 2026-08-26. Warm runs came back at ~8.0, which is the block riding
+#: in the cache rather than being re-evaluated, so this is the upper
+#: bound and not the running cost.
+_PREFILL_MS_PER_TOKEN = (11.0, 11.3)
 
 
 def _cost_line(token_count: int) -> str:
     low, high = (token_count * ms / 1000 for ms in _PREFILL_MS_PER_TOKEN)
-    return f"{token_count} tokens  ~{low:.1f}-{high:.1f} s of prefill per recall"
+    return (
+        f"{token_count} tokens  ~{low:.1f}-{high:.1f} s of prefill on the first "
+        "cold recall, then cached"
+    )
 
 
 def main() -> int:

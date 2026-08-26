@@ -56,8 +56,10 @@ def test_it_runs_and_prints_the_block_with_no_questions(db, capsys):
     assert "NiPoGi" in out
     assert "HEADROOM" in out
     # A token count is not a cost anyone feels. The harness turns it
-    # into the prefill seconds it actually buys.
-    assert "s of prefill per recall" in out
+    # into the prefill seconds it actually buys -- and says that those
+    # seconds are paid once, which three real runs established after
+    # the branch had already shipped the opposite claim.
+    assert "s of prefill on the first cold recall, then cached" in out
 
 
 def test_an_empty_deliberate_store_is_the_finding(tmp_path, monkeypatch, capsys):
