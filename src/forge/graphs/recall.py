@@ -303,12 +303,21 @@ def _recall_node(state: AgentState) -> AgentState:
             query, lexical=RECALL_LEXICAL, lexical_top_k=RECALL_LEXICAL_TOP_K
         )
     except rag.EmbeddingError as e:
+        # DELIBERATELY NOT RESCUED BY THE HOT BLOCK, though it could
+        # be: reading it is a plain sqlite SELECT and needs no
+        # embedding server, so Forge could answer completeness
+        # questions right through an outage. It should not. An
+        # embedding server that is down is a fact about the
+        # deployment, and the three entry points of this store already
+        # fail the same predictable way on purpose (docs/memory.md).
+        # Answering fluently from a partial capability is how an
+        # outage lasts a week.
         state.ok = False
         state.error = str(e)
         state.final_output = f"[error] recall failed: {e}"
         return state
 
-    if not results:
+    if not results and not state.context["hot_section"]:
         state.ok = False
         state.error = "no results"
         state.final_output = f"{non_answer.NO_MEMORY_PREFIX}for query: {query!r}"
@@ -318,11 +327,21 @@ def _recall_node(state: AgentState) -> AgentState:
     if not kept:
         kept = _rescue(query)
         state.context["expanded"] = bool(kept)
-    if not kept:
+    if not kept and not state.context["hot_section"]:
         # Not an error: the store was reachable, it simply holds
         # nothing close enough to the question. Saying that is the
         # entire value of the cutoff -- the failure it replaces is a
         # fluent sentence built out of the five least-bad rows.
+        #
+        # THE HOT BLOCK IS THE OTHER HALF OF THIS CONDITION, and
+        # without it the tier would be invisible in exactly the case
+        # it was built for. "Tu peux me lister mon matériel ?" is the
+        # question this graph fails on, and the way it fails is here:
+        # the cutoff drops every row, the run short-circuits, and no
+        # LLM call happens at all. A prompt carrying the whole
+        # deliberate store would never have been seen. Nothing close
+        # enough to the question is not the same as nothing to answer
+        # from.
         state.ok = False
         state.error = "no results above the distance cutoff"
         state.final_output = non_answer.NOTHING_CLOSE_ENOUGH
@@ -703,7 +722,11 @@ def run(query: str) -> str:
                     f"{len(results)} entrée(s) retenue(s)"
                     + (" après reformulation" if state.context.get("expanded") else "")
                     if results
-                    else "aucune entrée assez proche"
+                    else (
+                        "aucune entrée assez proche, mémoire complète en contexte"
+                        if state.context.get("hot_section")
+                        else "aucune entrée assez proche"
+                    )
                 ),
                 "synthesize": lambda: (
                     f"réponse générée ({len(state.final_output or '')} caractères)"
