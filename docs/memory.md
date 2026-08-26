@@ -564,6 +564,140 @@ claim a rescue it never measured.
 There is deliberately **no suggested threshold** in that output. Producing one
 would invent the second calibrated number this channel was designed not to need.
 
+## The hot tier (v3.18)
+
+Six campaigns end on one sentence, and this page states it twice from
+opposite sides: **retrieval answers proximity questions, not
+completeness questions.** `Tu peux me lister mon matériel ?` wants a
+set. A threshold, a rephrasing and a second channel each improved the
+ranking, and v3.17 proved the point from the good side — it reached
+`#307` and `#313`, which nothing had reached before, and still
+answered out of a single entry.
+
+So for the entries small enough to fit, recall stops searching and
+looks. `rag.hot_entries` reads everything that is not
+`ARCHIVED_KIND`, oldest first, and `forge/hot_memory.py` renders it
+into the synthesis prompt whole.
+
+Measured on the real store, 2026-08-26:
+
+| | |
+|---|---|
+| deliberate entries | 11 |
+| the block | 700 characters, ~195 tokens |
+| exact duplicates | 0 |
+| synthesis prompt it joins | ~1134 tokens |
+
+**Not `kind = 'fact'`.** This page records the memory tool defaulting
+a missing kind to `fact` rather than failing, so the kind on any row
+the router wrote is a 9B's guess made on the fly. What is reliable is
+the binary distinction `memory._rank` already sorts on: someone chose
+to write this down, or compaction dumped it here. The `decision`
+about emoji pinning is in the block for that reason.
+
+### The cap is a tripwire, not a policy
+
+A token budget forces a choice as soon as there are more entries than
+budget, and a choice is a ranking — precisely what this tier removes.
+Three ways out were on the table: drop by age, let the user pin, or
+keep the count small enough that the question does not arise. The
+measurement settles it. 195 against `RECALL_HOT_MAX_TOKENS=1000` is
+five times the headroom, and the aggregation tier that comes next
+lowers the count rather than raising it.
+
+When it does trip, it cuts the **tail** — the one cut that leaves
+every surviving line where it was — and says so inside the block. A
+silently short inventory reads complete and is wrong, which is
+strictly worse than the visibly incomplete answer this replaces, and
+it is the only way this mechanism can make Forge worse than not
+having it.
+
+### Above the question, and why that is the whole placement argument
+
+The synthesis prompt is ordered preamble → question → retrieved
+entries. Anything spliced into the entries block therefore sits behind
+a string that changes every turn, so a block byte-identical from one
+recall to the next would still never be a shared prefix down there.
+
+It is not one today either: both LLM prompts share one llama-server
+slot (`LLAMA_CPP_ID_SLOT`) and the router's prompt shares no prefix
+with this one, so the whole thing is prefilled every time at the
+11.5–13.2 ms/token floor — **~2.2–2.6 s on every recall, not once.**
+Placing the block above the question costs nothing now and is the
+precondition for that ever changing; placing it below would foreclose
+it in exchange for a saving of zero.
+
+The framing has to establish two things, and the second is not
+obvious. That the list is **complete**, or the model hedges a complete
+answer. And that it is **description, not instruction**: the store
+holds `[decision/chat preferences] Ne pas épingler les messages avec
+des emojis`, an imperative sentence about Forge's own behaviour, now
+sitting at the top of every synthesis prompt.
+
+### Nothing close enough is not nothing to answer from
+
+`_recall_node` short-circuits to the error node when the cutoff drops
+every row, with no LLM call — 4 s instead of 17, and that is right.
+It is also the path `Tu peux me lister mon matériel ?` takes, which is
+the question this tier exists for. Left alone, the block would have
+been invisible in exactly the case it was built for.
+
+Both refusals therefore gain the same second half: the run continues
+if there is a block, whatever the search returned. The **embedding
+outage** path deliberately does not, though it could — reading the
+block is a plain sqlite `SELECT` and needs no embedding server. All
+three entry points of this store fail the same predictable way on
+purpose, and answering fluently from a partial capability is how an
+outage lasts a week.
+
+### What this does to the word channel
+
+`RECALL_LEXICAL_EXCLUDE_ARCHIVED` ships `true`, so the word channel
+only ever returns non-archived rows — which is exactly the set the hot
+block now carries whole. `#307` and `#313`, the two entries v3.17 was
+opened for, are both in it.
+
+That is a claim about a branch merged the day before, so it gets
+measured rather than asserted. `bench/rag_hot_tier.py` reports
+**SUBSUMED** (rows the word channel returns that are already in the
+block) against **ADDS** (rows it returns that are not), plus the cost
+in prefill seconds and the headroom under the cap:
+
+```bash
+bench/in_container.sh rag_hot_tier --db /tmp/real_copy.db \
+    --hit "Tu peux me lister mon matériel ?" --expect 307 \
+    --hit "Sur quoi tournent mes conteneurs ?" --expect 313 \
+    --miss "Comment s'appelle mon chat ?"
+```
+
+If `ADDS` comes back at zero, the hot tier subsumes what
+`RECALL_LEXICAL` was measured to rescue on this store, and running
+both pays twice for one mechanism. `--include-archived` measures the
+other side, as it does for `rag_hybrid`.
+
+There is deliberately **no suggested budget** in that output. The cap
+is a budget and not a measurement; the only thing that moves it is the
+store growing, and `HEADROOM` reports that directly.
+
+### What it does not do
+
+It does not aggregate. Three entries in the real block overlap without
+any pair being identical:
+
+```
+- [fact] Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go
+- [fact] NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, Ansible, services Podman
+- [fact] Le NiPoGi a 32 Go de RAM
+```
+
+No deterministic test merges those, and exact-duplicate detection
+finds nothing — there are zero exact duplicates in this store. That is
+the next tier's work, and the block is now the place it is legible.
+
+It does not scale past the cap either. When the deliberate store
+outgrows the budget the answer is an index and sub-documents loaded on
+demand, as a graph, and not a bigger block.
+
 ### Reading and repairing the store
 
 `search` was the only reader this store ever had, and it is semantic by construction —
