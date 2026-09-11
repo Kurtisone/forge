@@ -24,6 +24,7 @@ NIPOGI = [
     "Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go",
     "NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, Ansible, services Podman",
     "Le NiPoGi a 32 Go de RAM",
+    "Le NiPoGi AM06PRO a un processeur Ryzen 5500U et 32 Go de RAM",
 ]
 
 #: Every word here is either a source word or a connective of the
@@ -93,13 +94,13 @@ def _run(conn, min_sources=2):
     return aggregate.run_pass(conn, max_df=0.2, min_sources=min_sources)
 
 
-def test_the_block_goes_from_three_lines_to_one(store, monkeypatch):
+def test_the_block_goes_from_four_lines_to_one(store, monkeypatch):
     _answers(monkeypatch, GOOD)
 
     report = _run(store)
 
     assert len(report) == 1
-    assert len(report[0]["folded"]) == 3
+    assert len(report[0]["folded"]) == 4
     assert [e["content"] for e in rag.hot_entries(store)] == [GOOD]
 
 
@@ -132,7 +133,7 @@ def test_a_word_from_nowhere_is_not_stored(store, monkeypatch):
 
     assert report[0]["refused"] == "closure"
     assert "nvidia" in report[0]["invented"]
-    assert len(rag.hot_entries(store)) == 3
+    assert len(rag.hot_entries(store)) == 4
 
 
 def test_a_source_whose_detail_went_missing_stays_active(store, monkeypatch):
@@ -166,7 +167,7 @@ def test_an_aggregate_that_would_replace_one_entry_is_not_written(store, monkeyp
     report = _run(store)
 
     assert report[0]["refused"] == "quorum"
-    assert len(rag.hot_entries(store)) == 3
+    assert len(rag.hot_entries(store)) == 4
 
 
 def test_an_aggregate_no_shorter_than_its_sources_is_not_written(store, monkeypatch):
@@ -180,7 +181,7 @@ def test_an_aggregate_no_shorter_than_its_sources_is_not_written(store, monkeypa
     report = _run(store)
 
     assert report[0]["refused"] == "budget"
-    assert len(rag.hot_entries(store)) == 3
+    assert len(rag.hot_entries(store)) == 4
 
 
 def test_a_provider_failure_changes_nothing(store, monkeypatch):
@@ -194,7 +195,7 @@ def test_a_provider_failure_changes_nothing(store, monkeypatch):
     report = _run(store)
 
     assert report[0]["refused"] == "provider"
-    assert len(rag.hot_entries(store)) == 3
+    assert len(rag.hot_entries(store)) == 4
 
 
 def test_a_routing_decision_is_unwrapped_before_it_becomes_a_fact(store, monkeypatch):
@@ -221,3 +222,46 @@ def test_the_pass_does_not_run_when_the_knob_is_off(store, monkeypatch):
 
     assert aggregate.maybe_aggregate() == []
     assert calls == []
+
+
+def test_coverage_gets_one_retry_naming_what_went_missing(store, monkeypatch):
+    """
+    The model does not fail coverage by inventing, it fails it by being
+    brief. On 2026-09-11 the real store's NiPoGi pair was refused
+    because the sentence dropped `matériel` -- the one word that makes
+    #307 come back at rank 1 on the word channel.
+    """
+    short = "Le NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go"
+    answers = [short, GOOD]
+
+    def fake(prompt, grammar=None):
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    monkeypatch.setattr(aggregate, "call_llm", fake)
+
+    report = _run(store)
+
+    assert "matériel" in report[0]["retried"]
+    assert len(report[0]["folded"]) == 4
+
+
+def test_the_retry_happens_once(store, monkeypatch):
+    """A gate that retries until it passes is not a gate."""
+    calls = _answers(
+        monkeypatch,
+        "Le NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go",
+    )
+
+    _run(store)
+
+    assert len(calls) == 2
+
+
+def test_a_fold_inside_the_estimator_margin_is_refused(store, monkeypatch):
+    """
+    Not a `>=`. The real store folded two entries of 27 estimated
+    tokens into 24 while the same run logged estimate_drift at 21.4%:
+    the gate was comparing two estimates whose error was seven times
+    the gap it measured.
+    """
+    assert aggregate._BUDGET_MARGIN > 0.2

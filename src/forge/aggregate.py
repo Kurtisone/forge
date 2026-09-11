@@ -199,30 +199,60 @@ class Subject:
         return [e["content"] for e in self.entries]
 
 
+def shared(entries: tuple[dict, ...], freq: Counter, limit: int) -> set[str]:
+    """The informative words every entry of a group has."""
+    sets = [informative(e["content"], freq, limit) for e in entries]
+    return set.intersection(*sets) if sets else set()
+
+
 def subjects(
-    entries: list[dict], freq: Counter, limit: int, min_sources: int = 2
+    entries: list[dict],
+    freq: Counter,
+    limit: int,
+    min_sources: int = 2,
+    min_shared: int = 2,
 ) -> list[Subject]:
     """
     Group entries by subject, deterministically, with no model call.
 
-    THE RULE: the largest set of entries sharing one informative word
-    is a subject. Take it, remove those entries from the pool, repeat
-    until no word names *min_sources* of what is left.
+    THE RULE, in two halves. A candidate group is the set of entries
+    sharing one informative word. It is a SUBJECT only if its entries
+    share at least *min_shared* informative words -- the naming word,
+    and something else. Take the best one, remove its entries from the
+    pool, repeat.
 
-    Largest first, and not rarest first. Rarest-first was the obvious
-    reading of "the most specific word names the subject" and it
-    splits the group it is aimed at: on the real NiPoGi entries the
-    rarest shared token is `06`, out of `AM06PRO`, which names two of
-    the three and leaves the third alone forever. The word that names
-    the WHOLE group is the one worth grouping on, and `informative`
-    is already what stops a word that names the whole store from
-    qualifying.
+    The second half is not a refinement, it is what makes the first
+    one usable, and the real store said so. Measured 2026-09-11
+    against a copy of the 11 deliberate entries, the naming word alone
+    produced two groups that are not subjects:
 
-    Ties are broken by the longer word, then alphabetically. Both
-    halves matter: three of the real entries are named equally well by
-    `nipogi`, `ram`, `go` and `32`, they all produce the SAME group,
-    and `Subject.term` only ever reaches a log line -- where `32` is
-    unreadable and `nipogi` is the answer to "what was folded?".
+        podman   #309 the podman proxy listens on a unix socket
+                 #314 services running under podman
+                 #315 NiPoGi AM06PRO, Arch, ... services Podman
+                 #317 Steam Deck under SteamOS, runs Podman containers
+
+        possède  #1 Possède un Steam Deck
+                 #2 Possède un Dell R710
+
+    `podman` is a topic and `possède` is a verb. Neither names a
+    thing, and the aggregate written for the second one merged two
+    different machines into one entry before the budget gate could
+    notice it had saved three tokens. What separates them from a real
+    subject is exactly this: #1 and #2 share ONE informative word,
+    while #17 and #307 share `nipogi`, `32`, `go` and `ram`.
+
+    NO SECOND CEILING. The first draft of this fix also capped how
+    much of the POOL a naming word may cover, on the grounds that
+    `podman` names four deliberate entries out of eleven. It would
+    have worked, and it is not here: the only value that separates
+    `podman` (4) from `nipogi` (3) on this store is a third, which is
+    a number fitted to one measurement. The shared-vocabulary rule
+    refuses both groups on its own and needs nothing calibrated.
+
+    Largest group first, then the tightest shared vocabulary, then the
+    longer name. Rarest-first was the reading before this one and it
+    splits the group it aims at: the rarest token shared by two NiPoGi
+    entries is `06`, out of AM06PRO.
 
     *freq* and *limit* are computed over the WHOLE store, not over the
     pool. What makes a word common is how much of the store uses it;
@@ -231,8 +261,7 @@ def subjects(
 
     An entry belongs to ONE group. Overlapping groups would produce
     two aggregates each speaking for the same source, which
-    supersession refuses to represent (no chains) -- better to refuse
-    it here, where the reason is legible.
+    supersession refuses to represent (no chains).
 
     Entries already superseded never reach this function: it is fed
     from rag.hot_entries, which skips them.
@@ -246,20 +275,23 @@ def subjects(
             for token in informative(entry["content"], freq, limit):
                 postings.setdefault(token, []).append(entry["id"])
 
-        candidates = sorted(
-            (
-                (-len(ids), -len(term), term, sorted(ids))
-                for term, ids in postings.items()
-                if len(ids) >= min_sources
-            )
-        )
+        candidates = []
+        for term, ids in postings.items():
+            if len(ids) < min_sources:
+                continue
+            group = tuple(pool[i] for i in sorted(ids))
+            vocabulary = shared(group, freq, limit)
+            if len(vocabulary) < min_shared:
+                continue
+            candidates.append((-len(ids), -len(vocabulary), -len(term), term, group))
+
         if not candidates:
             return out
 
-        _, _, term, ids = candidates[0]
-        out.append(Subject(term=term, entries=tuple(pool[i] for i in ids)))
-        for entry_id in ids:
-            pool.pop(entry_id)
+        *_, term, group = min(candidates)
+        out.append(Subject(term=term, entries=group))
+        for entry in group:
+            pool.pop(entry["id"])
 
 
 def uncovered(aggregate: str, source: str, freq: Counter, limit: int) -> list[str]:
@@ -365,6 +397,17 @@ def grammar(sources: list[str], freq: Counter, limit: int) -> str:
     )
 
 
+#: How much shorter an aggregate has to be before folding is worth it.
+#:
+#: NOT a ``>=``, which is what shipped first and what the real store
+#: caught on 2026-09-11: an aggregate of two entries came back at 24
+#: estimated tokens against 27, and the same run logged
+#: ``tokens.estimate_drift ... error_pct=21.4``. The gate was comparing
+#: two estimates whose error was seven times the gap it was measuring.
+#: A margin wider than the estimator's observed drift is the smallest
+#: honest version of "shorter".
+_BUDGET_MARGIN = 0.25
+
 #: The instruction. Short on purpose: everything the model could get
 #: wrong about WHICH words to use is already impossible, so the prompt
 #: only has to say what the sentence is for. /no_think matches every
@@ -459,27 +502,31 @@ def run_pass(conn, *, max_df: float, min_sources: int) -> list[dict]:
     return report
 
 
-def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) -> dict:
-    sources = subject.sources()
-    outcome: dict = {"subject": subject.term, "sources": subject.ids}
+def _ask(
+    subject: Subject,
+    sources: list[str],
+    freq: Counter,
+    limit: int,
+    missing: list[str] | None = None,
+) -> dict:
+    """One constrained call. Returns {"written": ...} or {"refused": ...}."""
+    prompt = PROMPT.format(subject=subject.term, sources="\n".join(sources))
+    if missing:
+        prompt += RETRY.format(missing=", ".join(missing))
 
     try:
-        raw = call_llm(
-            PROMPT.format(subject=subject.term, sources="\n".join(sources)),
-            grammar=grammar(sources, freq, limit),
-        )
+        raw = call_llm(prompt, grammar=grammar(sources, freq, limit))
     except ProviderError as e:
         log.warning(
             "aggregate: %r not written, the provider failed (%s)", subject.term, e
         )
-        return {**outcome, "written": None, "refused": "provider"}
+        return {"written": None, "refused": "provider"}
 
     written = _clean(raw)
     if not written:
-        return {**outcome, "written": None, "refused": "empty"}
+        return {"written": None, "refused": "empty"}
 
-    allowed = lexicon(sources, freq, limit)
-    strangers = invented(written, allowed)
+    strangers = invented(written, lexicon(sources, freq, limit))
     if strangers:
         log.warning(
             "aggregate: %r not written -- it says %s, and no entry does. An "
@@ -487,13 +534,15 @@ def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) ->
             subject.term,
             ", ".join(repr(s) for s in strangers),
         )
-        return {
-            **outcome,
-            "written": written,
-            "refused": "closure",
-            "invented": strangers,
-        }
+        return {"written": written, "refused": "closure", "invented": strangers}
 
+    return {"written": written}
+
+
+def _coverage(
+    subject: Subject, written: str, freq: Counter, limit: int
+) -> tuple[list[dict], dict]:
+    """Which sources the sentence can speak for, and what the rest lost."""
     foldable, held_back = [], {}
     for entry in subject.entries:
         missing = uncovered(written, entry["content"], freq, limit)
@@ -501,6 +550,40 @@ def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) ->
             held_back[entry["id"]] = missing
         else:
             foldable.append(entry)
+    return foldable, held_back
+
+
+def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) -> dict:
+    sources = subject.sources()
+    outcome: dict = {"subject": subject.term, "sources": subject.ids}
+
+    attempt = _ask(subject, sources, freq, limit)
+    if attempt.get("refused"):
+        return {**outcome, **attempt}
+    written = attempt["written"]
+
+    foldable, held_back = _coverage(subject, written, freq, limit)
+
+    # ONE RETRY, and only when coverage is what stopped it.
+    #
+    # The model does not fail this gate by inventing, it fails it by
+    # being brief: on 2026-09-11 the real store's NiPoGi pair was
+    # refused because the sentence dropped the single word `matériel`
+    # -- the word docs/memory.md records as the reason #307 comes back
+    # at rank 1 on the word channel. Naming the missing words and
+    # asking again is cheaper than losing the fold, and it cannot
+    # loosen anything: the second answer goes through the same
+    # grammar, the same closure check and the same coverage test.
+    #
+    # Once. A gate that retries until it passes is not a gate.
+    if held_back and len(foldable) < len(subject.entries):
+        missing = sorted({word for words in held_back.values() for word in words})
+        retry = _ask(subject, sources, freq, limit, missing=missing)
+        if not retry.get("refused"):
+            second, second_held = _coverage(subject, retry["written"], freq, limit)
+            if len(second) > len(foldable):
+                written, foldable, held_back = retry["written"], second, second_held
+                outcome["retried"] = missing
 
     if len(foldable) < min_sources:
         return {
@@ -512,7 +595,7 @@ def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) ->
 
     cost = estimate_tokens(render_lines([written]))
     saved = estimate_tokens(render_lines([e["content"] for e in foldable]))
-    if cost >= saved:
+    if cost > saved * (1 - _BUDGET_MARGIN):
         return {
             **outcome,
             "written": written,
@@ -595,3 +678,13 @@ def maybe_aggregate() -> list[dict]:
             folded=folded,
         )
     return report
+
+
+#: Appended to PROMPT for the single retry. It names the words rather
+#: than repeating the instruction, because the instruction was already
+#: followed -- what the model produced was a correct sentence that
+#: happened to be shorter than the notes needed it to be.
+RETRY = """
+
+The sentence you write must also contain these words, which are in the
+notes above and must not be lost: {missing}"""

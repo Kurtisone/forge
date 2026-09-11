@@ -219,3 +219,92 @@ def test_grouping_is_stable_across_runs():
     first = aggregate.subjects(NIPOGI + OTHERS, freq, limit)
     second = aggregate.subjects(list(reversed(NIPOGI + OTHERS)), freq, limit)
     assert [(s.term, s.ids) for s in first] == [(s.term, s.ids) for s in second]
+
+
+# --- The real store, 2026-09-11 -------------------------------------------
+#
+# The eleven deliberate entries as they stood when the first version of
+# the grouping rule was measured against a copy. Two of the three
+# subjects it found were not subjects, and this is the fixture that
+# keeps them out.
+
+REAL = [
+    {"id": 1, "content": "Possède un Steam Deck"},
+    {"id": 2, "content": "Possède un Dell R710, configuration à préciser plus tard"},
+    {"id": 17, "content": "Le NiPoGi a 32 Go de RAM"},
+    {
+        "id": 307,
+        "content": "Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, "
+        "32 Go de RAM, SSD 256 Go",
+    },
+    {"id": 308, "content": "NiPoGi AM06PRO processeur Ryzen 5500U"},
+    {"id": 309, "content": "Le proxy podman écoute sur un socket unix"},
+    {"id": 310, "content": "J'utilise aardvark-dns pour la résolution"},
+    {
+        "id": 314,
+        "content": "Services tournant sous podman : forge, forge-llm, "
+        "forge-embedding, searxng",
+    },
+    {
+        "id": 315,
+        "content": "NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, "
+        "Ansible, services Podman",
+    },
+    {
+        "id": 317,
+        "content": "Possède un Steam Deck sous SteamOS, fait tourner des "
+        "conteneurs Podman dessus",
+    },
+    {"id": 999, "content": "Ne pas épingler les messages avec des emojis"},
+]
+
+#: 195 archived rows, which is what the real store carries alongside.
+BIG_ARCHIVE = [
+    {
+        "id": 2000 + i,
+        "content": f"user: question {i} ? assistant: Oui, et c'est une réponse "
+        "avec un détail : le reste est de ce côté, il y a tout",
+    }
+    for i in range(195)
+]
+
+
+def _real():
+    corpus = REAL + BIG_ARCHIVE
+    return aggregate.frequencies(corpus), aggregate.ceiling(len(corpus), MAX_DF)
+
+
+def test_podman_is_a_topic_and_never_a_subject():
+    """
+    Measured: the naming word alone grouped a unix socket, a service
+    list, a hardware spec and a Steam Deck, because all four say
+    `podman`. They share that word and nothing else.
+    """
+    freq, limit = _real()
+    for subject in aggregate.subjects(REAL, freq, limit):
+        assert set(subject.ids) != {309, 314, 315, 317}
+        assert 309 not in subject.ids
+
+
+def test_possede_is_a_verb_and_never_a_subject():
+    """
+    Measured: #1 and #2 were folded into one entry that merged a Steam
+    Deck and a Dell R710, saving three estimated tokens. They share
+    `possède` and nothing else.
+    """
+    freq, limit = _real()
+    for subject in aggregate.subjects(REAL, freq, limit):
+        assert set(subject.ids) != {1, 2}
+
+
+def test_the_groups_the_real_store_should_produce():
+    freq, limit = _real()
+    found = {tuple(s.ids) for s in aggregate.subjects(REAL, freq, limit)}
+    assert (307, 308, 315) in found
+    assert (1, 317) in found
+
+
+def test_a_group_shares_more_than_its_name():
+    freq, limit = _real()
+    for subject in aggregate.subjects(REAL, freq, limit):
+        assert len(aggregate.shared(subject.entries, freq, limit)) >= 2
