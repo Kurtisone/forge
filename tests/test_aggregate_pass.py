@@ -179,7 +179,7 @@ def test_an_aggregate_no_shorter_than_its_sources_is_not_written(store, monkeypa
     # Padded with connectives, not with a second copy of the notes: a
     # repeated note trips the repetition gate first, and what is under
     # test here is length.
-    _answers(monkeypatch, GOOD + ", " + " ".join(["de le un avec et a"] * 10))
+    _answers(monkeypatch, GOOD + ", " + " ".join(["de le un avec et a"] * 6))
 
     report = _run(store)
 
@@ -268,3 +268,19 @@ def test_a_fold_inside_the_estimator_margin_is_refused(store, monkeypatch):
     the gap it measured.
     """
     assert aggregate._BUDGET_MARGIN > 0.2
+
+
+def test_a_runaway_answer_is_named_as_one(store, monkeypatch):
+    """
+    A decoding failure is not a repetition finding, and reporting it as
+    seventeen repeated pairs buries what happened. Measured 2026-09-11:
+    with no terminator in the grammar, three calls out of four ran to
+    n_predict and one returned `Steam Deck` some four hundred times.
+    """
+    _answers(monkeypatch, "NiPoGi AM06PRO : " + ", ".join(["32 Go de RAM"] * 100))
+
+    report = _run(store)
+
+    assert report[0]["refused"] == "runaway"
+    assert len(report[0]["written"]) <= 200
+    assert len(rag.hot_entries(store)) == 4

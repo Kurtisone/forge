@@ -402,6 +402,28 @@ def _escape(literal: str) -> str:
     return literal.replace("\\", "\\\\").replace('"', '\\"')
 
 
+#: The most items a list may have, and the reason the list can END.
+#:
+#: The first version wrote the tail as ``(", " item)*`` and had NO
+#: TERMINATOR. Measured 2026-09-11: three calls out of four ran to
+#: n_predict -- 1536 completion tokens, ~55 seconds each on the Deck --
+#: and one of them came back as `Steam Deck` repeated some four hundred
+#: times. Nothing in the grammar ever required the model to stop, and a
+#: 9B given an open tail does not choose to.
+#:
+#: This is the lesson tests/test_graph_grammar.py already carries,
+#: arriving from the other direction: the router grammar was never only
+#: stopping JSON, it was the only hard TERMINATOR in the loop, and free
+#: decoding runs to n_predict. A closed shape needs an end the sampler
+#: is FORCED to reach, not merely allowed to.
+#:
+#: So: at most twelve items, written as explicit optional groups, then a
+#: mandatory ".". Twelve is generous for the real store -- its longest
+#: deliberate entry carries eight details -- and the point of the number
+#: is not the ceiling, it is that one exists.
+_MAX_ITEMS = 12
+
+
 def grammar(sources: list[str], freq: Counter, limit: int) -> str:
     """
     A GBNF grammar for a LABELLED LIST whose entire vocabulary is this
@@ -450,12 +472,13 @@ def grammar(sources: list[str], freq: Counter, limit: int) -> str:
     forge/gbnf.py for the debugging cycle that cost.
     """
     words = " | ".join(f'"{_escape(w)}"' for w in _alternatives(sources, freq, limit))
-    optional = ' (" " aggregate-word)?'
+    optional_word = ' (" " aggregate-word)?'
+    optional_item = ' (", " aggregate-item)?'
     return (
-        'root ::= aggregate-head " : " aggregate-item '
-        '(", " aggregate-item) (", " aggregate-item)*\n'
-        f"aggregate-head ::= aggregate-word{optional * 2}\n"
-        f"aggregate-item ::= aggregate-word{optional * 4}\n"
+        'root ::= aggregate-head " : " aggregate-item (", " aggregate-item)'
+        f'{optional_item * (_MAX_ITEMS - 2)} "."\n'
+        f"aggregate-head ::= aggregate-word{optional_word * 2}\n"
+        f"aggregate-item ::= aggregate-word{optional_word * 4}\n"
         f"aggregate-word ::= {words}\n"
     )
 
@@ -612,6 +635,23 @@ def _ask(
     written = _clean(raw)
     if not written:
         return {"written": None, "refused": "empty"}
+
+    # FIRST, before closure and before the bigram scan. A runaway is
+    # not a vocabulary finding and not a repetition finding, it is a
+    # decoding failure, and reporting it as seventeen repeated pairs
+    # buries what happened. Kept even though the grammar now
+    # terminates: a provider without GBNF has no terminator at all,
+    # which is the same reason `invented` stays.
+    budget = sum(len(source) for source in sources)
+    if len(written) > budget:
+        log.warning(
+            "aggregate: %r ran away -- %d characters for %d of notes, which is "
+            "a decoding failure and not an aggregate",
+            subject.term,
+            len(written),
+            budget,
+        )
+        return {"written": written[:200], "refused": "runaway"}
 
     strangers = invented(written, lexicon(sources, freq, limit))
     if strangers:

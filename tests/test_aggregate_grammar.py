@@ -80,7 +80,28 @@ def test_the_shape_is_a_labelled_list_and_has_no_verb_slot(built):
 
 def test_it_takes_at_least_two_items(built):
     root = built.splitlines()[0]
-    assert root.count('(", " aggregate-item)') == 2
+    assert root.startswith(
+        'root ::= aggregate-head " : " aggregate-item (", " aggregate-item)'
+    )
+
+
+def test_the_list_has_an_end_the_sampler_is_forced_to_reach():
+    """
+    The defect this pins is the most expensive one this branch found.
+    The first version wrote the tail as `(", " item)*` and had no
+    terminator: three calls out of four ran to n_predict on the Deck,
+    ~55 seconds each, one of them returning `Steam Deck` some four
+    hundred times.
+
+    tests/test_graph_grammar.py already carries this lesson from the
+    other direction -- the router grammar was never only stopping
+    JSON, it was the only hard terminator in the loop.
+    """
+    built = aggregate.grammar(SOURCES, COMMON, LIMIT)
+    root = built.splitlines()[0]
+    assert root.endswith('"."')
+    assert "*" not in root
+    assert root.count('(", " aggregate-item)?') == aggregate._MAX_ITEMS - 2
 
 
 def test_an_item_cannot_grow_back_into_a_clause(built):

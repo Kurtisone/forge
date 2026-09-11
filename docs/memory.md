@@ -911,9 +911,27 @@ repetition gate refuses a pair of informative words used twice — both words, s
 `32 Go de RAM, SSD 256 Go` is left alone, because `32 go` and `256 go` are
 different pairs.
 
-The token estimator drifted 21.4% and 21.5% on the two runs, which is why the
-budget gate takes a margin rather than a `>=`: the first version refused nothing
-and folded a two-entry group for a saving of three estimated tokens.
+The token estimator drifted 21.4%, 21.5% and 16.2% across the runs, which is why
+the budget gate takes a margin rather than a `>=`: the first version refused
+nothing and folded a two-entry group for a saving of three estimated tokens.
+
+### The list needed an end, not just a shape
+
+The first list grammar wrote its tail as `(", " item)*`. Measured 2026-09-11:
+three calls out of four ran to `n_predict` — 1536 completion tokens, ~55 seconds
+each on the Deck — and one came back as `Steam Deck` repeated some four hundred
+times. Nothing in the grammar ever *required* the model to stop.
+
+`tests/test_graph_grammar.py` already carries this from the other direction: the
+router grammar was never only stopping JSON, it was the only hard terminator in
+the loop, and free decoding runs to `n_predict`. A closed shape needs an end the
+sampler is forced to reach, not merely allowed to. The list is now at most twelve
+items, written as explicit optional groups, then a mandatory `.`.
+
+A runaway is checked before closure and before the repetition scan, because it is
+a decoding failure rather than a finding about words — reporting it as seventeen
+repeated pairs buries what happened. The check stays even with a terminating
+grammar: a provider without GBNF has no terminator at all.
 
 Nothing is written unless it is going to replace something. Every gate is a
 comparison between texts, so all of them run before `rag.remember`.
