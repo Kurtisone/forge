@@ -92,6 +92,19 @@ from dataclasses import dataclass
 #: grammar built from this lexicon has to be able to form a sentence.
 _TOKEN_RE = re.compile(r"[0-9]+|[^\W\d_]+", re.UNICODE)
 
+#: The same text as the model will be allowed to write it. NOT split at
+#: the digit/letter boundary, because `AM06PRO`, `5500U` and `32Go` are
+#: single words on the page and a grammar that could only emit their
+#: pieces would have to glue them back with an empty separator -- which
+#: also glues `32` to `RAM`.
+#:
+#: The two tokenizers stand in a deliberate order: everything this one
+#: produces, _TOKEN_RE splits into pieces the lexicon already holds. So
+#: anything the grammar can emit passes the closure gate by
+#: construction, and a test pins that rather than leaving it to be
+#: noticed when llama.cpp and ollama start disagreeing.
+_SURFACE_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
 
 def tokens(text: str) -> list[str]:
     """The lowercased tokens of a text, in order, duplicates kept."""
@@ -258,3 +271,102 @@ def invented(aggregate: str, allowed: set[str]) -> list[str]:
     stored it is indistinguishable from something they wrote.
     """
     return sorted(set(tokens(aggregate)) - allowed)
+
+
+# --- The sentence, and the only half a model is allowed to write -----------
+
+
+def surfaces(sources: list[str]) -> set[str]:
+    """Every word of the sources, as written on the page."""
+    return {w for source in sources for w in _SURFACE_RE.findall(source)}
+
+
+def _alternatives(sources: list[str], freq: Counter, limit: int) -> list[str]:
+    """
+    Every literal the grammar will let the model emit.
+
+    Source words keep the case they were WRITTEN in -- `NiPoGi`,
+    `AM06PRO`, `SSD` -- because an aggregate spelling them `nipogi`
+    would be a worse entry than the ones it replaces, and the entry
+    that made this tier necessary is the one written as a telegram in
+    the first place.
+
+    Common words get a lowercase and a capitalised form, which is the
+    whole of what a sentence needs: one of them starts it.
+    """
+    alternatives: set[str] = set()
+    for written in surfaces(sources):
+        alternatives.add(written)
+        # Case variants only for words that are only letters. Folding
+        # AM06PRO would offer `Am06pro`, which is not a spelling of
+        # anything and is one more way for the sentence to be worse
+        # than the notes it replaces.
+        if written.isalpha():
+            alternatives.add(written.lower())
+            alternatives.add(written.capitalize())
+    for word in common(freq, limit):
+        alternatives.add(word)
+        alternatives.add(word.capitalize())
+    return sorted(alternatives)
+
+
+def _escape(literal: str) -> str:
+    return literal.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def grammar(sources: list[str], freq: Counter, limit: int) -> str:
+    """
+    A GBNF grammar whose entire vocabulary is this subject's lexicon.
+
+    THE CLOSURE GATE, MOVED INTO THE SAMPLER. `invented` can only
+    report that a word came from nowhere once the model has written
+    it; an alternation the word is not in means it cannot be written.
+    This repository has now reached for that move eleven times, and
+    the reason has not changed: a rule the model is ASKED to follow is
+    one it follows most of the time, and the times it does not are the
+    ones nobody sees. `invented` stays, because the grammar only
+    exists on llama.cpp -- on ollama or OpenRouter the same call runs
+    unconstrained and the check is all there is.
+
+    It also fixes the LANGUAGE for free. Every literal here came out
+    of entries the user wrote, so the sentence is in their language
+    without a single word of the prompt saying so.
+
+    At least four words, expressed as three explicit repetitions
+    rather than `{3,}`: llama.cpp's support for bounded repetition
+    arrived later than the rest of GBNF, and a grammar the server
+    refuses is a 400 on the call rather than a degraded one. There is
+    no upper bound here -- a budget check is arithmetic and belongs
+    where the block is measured, not in a sampler.
+
+    Rule names are hyphenated. llama.cpp's lexer builds names out of
+    is_word_char(), which accepts [a-zA-Z0-9-] and NOT underscore; see
+    forge/gbnf.py for the debugging cycle that cost.
+    """
+    words = " | ".join(f'"{_escape(w)}"' for w in _alternatives(sources, freq, limit))
+    return (
+        "root ::= aggregate-word (aggregate-sep aggregate-word) "
+        "(aggregate-sep aggregate-word) (aggregate-sep aggregate-word)* "
+        '"."?\n'
+        f"aggregate-word ::= {words}\n"
+        'aggregate-sep ::= " " | ", " | " : "\n'
+    )
+
+
+#: The instruction. Short on purpose: everything the model could get
+#: wrong about WHICH words to use is already impossible, so the prompt
+#: only has to say what the sentence is for. /no_think matches every
+#: other non-router call in this codebase.
+PROMPT = """/no_think
+These notes were written at different times and all say something about
+the same thing. Write ONE sentence that says everything they say,
+keeping every detail: every model number, every quantity, every name.
+
+Do not add anything. Do not leave anything out. Do not comment on the
+notes -- the sentence replaces them and will be read on its own, by
+someone who will never see this list.
+
+Notes about {subject}:
+{sources}
+
+The sentence:"""
