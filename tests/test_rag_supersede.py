@@ -37,7 +37,9 @@ def _write(conn, content, kind="fact"):
 def nipogi(store):
     """The real store's three overlapping NiPoGi entries, plus a fold."""
     sources = [
-        _write(store, "Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM"),
+        _write(
+            store, "Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM"
+        ),
         _write(store, "NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, Ansible"),
         _write(store, "Le NiPoGi a 32 Go de RAM"),
     ]
@@ -69,9 +71,7 @@ def test_nothing_becomes_unreachable(nipogi):
     conn, sources, aggregate = nipogi
     rag.supersede(conn, sources, aggregate)
 
-    still_there = {
-        row[0] for row in conn.execute("SELECT id FROM memory_entries")
-    }
+    still_there = {row[0] for row in conn.execute("SELECT id FROM memory_entries")}
     assert set(sources) <= still_there
 
     # max_df=1.0 so the word channel's own admission rule (which needs

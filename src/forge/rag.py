@@ -195,7 +195,9 @@ def _ensure_supersession(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_entries)")}
     if _SUPERSESSION_COLUMN in columns:
         return
-    conn.execute(f"ALTER TABLE memory_entries ADD COLUMN {_SUPERSESSION_COLUMN} INTEGER")
+    conn.execute(
+        f"ALTER TABLE memory_entries ADD COLUMN {_SUPERSESSION_COLUMN} INTEGER"
+    )
     conn.commit()
     log.event("rag.supersession_column_added")
 
