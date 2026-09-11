@@ -361,6 +361,190 @@ def invented(aggregate: str, allowed: set[str]) -> list[str]:
     return sorted(set(tokens(aggregate)) - allowed)
 
 
+# --- The details, which are what the notes are made of ---------------------
+
+#: What separates one detail from the next inside a note. Comma and
+#: semicolon, because that is what the store actually holds:
+#: `NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, Ansible`.
+#:
+#: A note with no separator at all is ONE detail, and that is the
+#: honest reading of it rather than a degenerate case -- a sentence
+#: nobody punctuated is a sentence whose pieces nobody separated, and
+#: guessing where they would have is how an aggregate starts asserting
+#: things.
+_DETAIL_RE = re.compile(r"\s*[;,]\s*")
+
+#: How many words may precede the colon before it stops being a label.
+#:
+#: `Matériel : NiPoGi AM06PRO, ...` is a label and a list. `Le proxy
+#: podman écoute sur un socket unix : il est en lecture seule` is a
+#: sentence that happens to contain a colon, and taking its first nine
+#: words as the head of a list would produce a line nobody wrote in a
+#: shape nobody uses.
+_MAX_LABEL_WORDS = 3
+
+
+def labelled(content: str) -> tuple[str | None, list[str]]:
+    """
+    A note as it is actually written: an optional label, then details.
+
+    This is the tokenizer of this tier, one level up from words. The
+    branch's first version worked on words -- the grammar's unit was
+    the word, the repetition gate compared pairs of words -- and the
+    real store said what that costs: nothing in a lexicon of words
+    makes reusing a word expensive, so "do not leave anything out"
+    concatenated the notes and every gate downstream was left arguing
+    about the debris.
+
+    The detail is the unit the notes are already written in. Two notes
+    that overlap overlap by detail, and a merge that keeps details
+    whole is a recombination of what is stored rather than a rewrite
+    of it.
+    """
+    label, body = None, content
+    head, colon, rest = content.partition(":")
+    if colon and rest.strip() and len(head.split()) <= _MAX_LABEL_WORDS:
+        label, body = head.strip(), rest
+    return label, [d.strip() for d in _DETAIL_RE.split(body) if d.strip()]
+
+
+@dataclass(frozen=True)
+class Detail:
+    """One detail, and the entry it was written in."""
+
+    text: str
+    source: int
+
+    @property
+    def words(self) -> frozenset[str]:
+        return frozenset(tokens(self.text))
+
+
+#: Among details that say the same words, which surface is kept: the
+#: one written out in full.
+#:
+#: `SSD 256 Go` and `SSD 256Go` tokenize identically -- the tokenizer
+#: of this module splits at the digit/letter boundary on purpose -- so
+#: something has to choose, and it has to choose the same way every
+#: time or two runs of this pass produce two different stores. The
+#: spelled-out form wins on the one axis docs/memory.md has measured:
+#: an instruction-tuned embedding model retrieves a telegram worst,
+#: and `#313` spent six campaigns unreachable for being one.
+def _spelled_out(detail: Detail) -> tuple[int, int]:
+    return (-len(detail.text.split()), -len(detail.text))
+
+
+def distinct(details: list[Detail]) -> list[Detail]:
+    """
+    The details that survive deduplication, in the order written.
+
+    ONE RULE, AND IT IS THE SAFETY PROPERTY OF THIS WHOLE TIER: a
+    detail is dropped only in favour of a detail that contains EVERY
+    ONE of its words -- connectives included, not just the informative
+    ones.
+
+    Informative-word containment was the obvious reading and it is
+    wrong in a way no arithmetic recovers from. `pas`, `ne`, `jamais`,
+    `sans` are connectives by frequency, so they are exactly the words
+    an informative-word rule ignores, and under it `Le NiPoGi n'a pas
+    32 Go de RAM` is contained in `Le NiPoGi a 32 Go de RAM` and gets
+    folded into its own opposite. Requiring every word inverts that:
+    a negation carries a word its positive does not, so the negation
+    can never be the one dropped.
+
+    Stated as the invariant it is: **nothing that says more is ever
+    deleted by something that says less.** No stopword list, no
+    negation list, no language -- which matters for the same corpus of
+    NiPoGi, busctl and aardvark-dns that the frequency count exists
+    for.
+
+    Equal word sets are the one case containment cannot order, and
+    `_spelled_out` breaks the tie. The position is the first one the
+    word set appeared at, so which surface wins never moves the line.
+    """
+    best: dict[frozenset[str], tuple[int, Detail]] = {}
+    for position, detail in enumerate(details):
+        words = detail.words
+        if not words:
+            continue
+        seen = best.get(words)
+        if seen is None:
+            best[words] = (position, detail)
+        elif _spelled_out(detail) < _spelled_out(seen[1]):
+            best[words] = (seen[0], detail)
+
+    survivors = [
+        (position, detail)
+        for words, (position, detail) in best.items()
+        if not any(words < other for other in best if other != words)
+    ]
+    return [detail for _, detail in sorted(survivors, key=lambda pair: pair[0])]
+
+
+def surface(term: str, entries: tuple[dict, ...]) -> str:
+    """
+    The subject's name as somebody wrote it -- `NiPoGi`, not `nipogi`
+    and not `Nipogi`.
+
+    The first occurrence in the entries, in their own order, so this
+    answers the same way on every run. `capitalize()` is the fallback
+    for a term that is a piece of a longer word (`am`, out of
+    AM06PRO) and therefore has no surface of its own.
+    """
+    for entry in entries:
+        for written in _SURFACE_RE.findall(entry["content"]):
+            if written.lower() == term:
+                return written
+    return term.capitalize()
+
+
+@dataclass(frozen=True)
+class Merged:
+    """The line a subject folds into, and what it is made of."""
+
+    head: str
+    details: tuple[Detail, ...]
+
+    @property
+    def text(self) -> str:
+        return f"{self.head} : " + ", ".join(d.text for d in self.details) + "."
+
+
+def merge(entries: tuple[dict, ...], term: str) -> Merged:
+    """
+    One labelled list out of several overlapping notes, deterministically.
+
+    THE HEAD IS THE FIRST LABEL THE SOURCES CARRY, and the subject's
+    own name when none of them carries one. A label is the user's word
+    for what the list is about -- `Matériel` is the word docs/memory.md
+    records as the reason `#307` comes back at rank 1 on the word
+    channel -- so inventing a better one is both unnecessary and the
+    move this module exists to refuse. A second, different label is
+    not thrown away either: it becomes a detail, where the coverage
+    gate can see it.
+
+    THE ITEMS ARE THE SOURCES' OWN DETAILS, VERBATIM, deduplicated by
+    `distinct` and left in the order they were written. Every word of
+    the result was typed by the person it describes, which is the
+    strongest form of the closure gate this tier ever had -- stronger
+    than the grammar that used to enforce it, because a grammar
+    constrains which words may be emitted and this constrains which
+    SENTENCES may be.
+    """
+    head: str | None = None
+    collected: list[Detail] = []
+    for entry in entries:
+        label, details = labelled(entry["content"])
+        if label is not None:
+            if head is None:
+                head = label
+            else:
+                collected.append(Detail(label, entry["id"]))
+        collected.extend(Detail(text, entry["id"]) for text in details)
+
+    return Merged(head or surface(term, entries), tuple(distinct(collected)))
+
+
 # --- The sentence, and the only half a model is allowed to write -----------
 
 
