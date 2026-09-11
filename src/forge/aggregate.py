@@ -85,6 +85,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
+from itertools import pairwise
 
 from forge import rag
 from forge.config import (
@@ -306,6 +307,49 @@ def uncovered(aggregate: str, source: str, freq: Counter, limit: int) -> list[st
     return sorted(informative(source, freq, limit) - carried)
 
 
+def repeated(text: str, freq: Counter, limit: int) -> list[str]:
+    """
+    Pairs of informative words this text uses twice.
+
+    THE FAILURE THIS CATCHES IS CONCATENATION, measured 2026-09-11 on
+    the real store, in both sentences the model produced:
+
+        Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un
+        processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go, [...]
+
+        Possède un Steam Deck et un Steam Deck sous SteamOS, fait
+        tourner des conteneurs Podman dessus.
+
+    Both passed closure, coverage, quorum -- and one passed budget and
+    folded three entries. Nothing in the lexicon makes reusing a word
+    cost anything, and "do not leave anything out" pushes straight
+    here.
+
+    BOTH words of the pair have to be informative, which is what keeps
+    this from refusing a correct list. `32 Go de RAM, SSD 256 Go` uses
+    `go` twice and is right to; the pairs are `32 go` and `256 go`,
+    which are different. A rule at the word level would have refused
+    it, and a rule that lets one common word into the pair would refuse
+    `32 Go de RAM, 256 Go de SSD` over `go de`.
+
+    NOT A TRUTH CHECK, and neither is anything else in this module.
+    The first sentence above says a mini PC IS a processor, and no
+    arithmetic on words will ever see that -- which is why the grammar
+    stopped asking for a sentence. See `grammar`.
+    """
+    words = tokens(text)
+    strong = informative(text, freq, limit)
+    seen: set[tuple[str, str]] = set()
+    twice: set[str] = set()
+    for pair in pairwise(words):
+        if pair[0] not in strong or pair[1] not in strong:
+            continue
+        if pair in seen:
+            twice.add(" ".join(pair))
+        seen.add(pair)
+    return sorted(twice)
+
+
 def invented(aggregate: str, allowed: set[str]) -> list[str]:
     """
     The words of *aggregate* that are not in its lexicon.
@@ -360,40 +404,59 @@ def _escape(literal: str) -> str:
 
 def grammar(sources: list[str], freq: Counter, limit: int) -> str:
     """
-    A GBNF grammar whose entire vocabulary is this subject's lexicon.
+    A GBNF grammar for a LABELLED LIST whose entire vocabulary is this
+    subject's lexicon.
+
+    A LIST AND NOT A SENTENCE, and that is the correction this module
+    needed most. Asking for a sentence asked for a verb, a verb made a
+    copula reachable, and a copula made a FALSE copula reachable.
+    Measured 2026-09-11 on the real store, through all four gates and
+    into a fold:
+
+        Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un
+        processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go, [...]
+
+    A mini PC is not a processor, and no amount of arithmetic on words
+    was ever going to see that. `head : item, item, item` has no verb
+    at all, so the class of error stops being caught and starts being
+    unreachable -- the move this repository has now made twelve times.
+
+    It also matches what the store already holds. The entries worth
+    aggregating are not prose, they are labelled telegrams:
+    `Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM`.
+    Asking for a sentence was asking the model to write something the
+    user never writes.
+
+    Items are capped at five words and the head at three, as explicit
+    optional groups rather than `{1,5}`: bounded repetition arrived in
+    llama.cpp after the rest of GBNF, and a grammar the server refuses
+    is a 400 on the call rather than a degraded call. The cap is what
+    keeps an item from growing back into the clause this form exists
+    to remove.
 
     THE CLOSURE GATE, MOVED INTO THE SAMPLER. `invented` can only
     report that a word came from nowhere once the model has written
     it; an alternation the word is not in means it cannot be written.
-    This repository has now reached for that move eleven times, and
-    the reason has not changed: a rule the model is ASKED to follow is
-    one it follows most of the time, and the times it does not are the
-    ones nobody sees. `invented` stays, because the grammar only
-    exists on llama.cpp -- on ollama or OpenRouter the same call runs
-    unconstrained and the check is all there is.
+    `invented` stays, because the grammar only exists on llama.cpp --
+    on ollama or OpenRouter the same call runs unconstrained and the
+    check is all there is.
 
     It also fixes the LANGUAGE for free. Every literal here came out
-    of entries the user wrote, so the sentence is in their language
+    of entries the user wrote, so the list is in their language
     without a single word of the prompt saying so.
-
-    At least four words, expressed as three explicit repetitions
-    rather than `{3,}`: llama.cpp's support for bounded repetition
-    arrived later than the rest of GBNF, and a grammar the server
-    refuses is a 400 on the call rather than a degraded one. There is
-    no upper bound here -- a budget check is arithmetic and belongs
-    where the block is measured, not in a sampler.
 
     Rule names are hyphenated. llama.cpp's lexer builds names out of
     is_word_char(), which accepts [a-zA-Z0-9-] and NOT underscore; see
     forge/gbnf.py for the debugging cycle that cost.
     """
     words = " | ".join(f'"{_escape(w)}"' for w in _alternatives(sources, freq, limit))
+    optional = ' (" " aggregate-word)?'
     return (
-        "root ::= aggregate-word (aggregate-sep aggregate-word) "
-        "(aggregate-sep aggregate-word) (aggregate-sep aggregate-word)* "
-        '"."?\n'
+        'root ::= aggregate-head " : " aggregate-item '
+        '(", " aggregate-item) (", " aggregate-item)*\n'
+        f"aggregate-head ::= aggregate-word{optional * 2}\n"
+        f"aggregate-item ::= aggregate-word{optional * 4}\n"
         f"aggregate-word ::= {words}\n"
-        'aggregate-sep ::= " " | ", " | " : "\n'
     )
 
 
@@ -409,22 +472,43 @@ def grammar(sources: list[str], freq: Counter, limit: int) -> str:
 _BUDGET_MARGIN = 0.25
 
 #: The instruction. Short on purpose: everything the model could get
-#: wrong about WHICH words to use is already impossible, so the prompt
-#: only has to say what the sentence is for. /no_think matches every
-#: other non-router call in this codebase.
+#: wrong about WHICH words to use, and about writing a clause instead
+#: of a list, is already impossible under the grammar. What is left is
+#: to say what the list is for.
 PROMPT = """/no_think
-These notes were written at different times and all say something about
-the same thing. Write ONE sentence that says everything they say,
-keeping every detail: every model number, every quantity, every name.
+These notes were written at different times and all describe the same
+thing. Rewrite them as ONE labelled list, keeping every detail: every
+model number, every quantity, every name.
 
-Do not add anything. Do not leave anything out. Do not comment on the
-notes -- the sentence replaces them and will be read on its own, by
-someone who will never see this list.
+Format: a short label, then a colon, then the details separated by
+commas. Like the notes themselves.
+
+Say each thing ONCE. Do not add anything. Do not leave anything out.
+Do not comment on the notes -- the list replaces them and will be read
+on its own, by someone who will never see this one.
 
 Notes about {subject}:
 {sources}
 
-The sentence:"""
+The list:"""
+
+#: Appended for the single retry, when coverage found a detail
+#: missing. It names the words rather than repeating the instruction:
+#: the instruction was followed, the answer was just shorter than the
+#: notes needed it to be.
+RETRY_MISSING = """
+
+The list must also contain these words, which are in the notes above
+and must not be lost: {missing}"""
+
+#: Appended for the single retry, when the answer said the same thing
+#: twice. Measured 2026-09-11: both sentences the model produced on the
+#: real store repeated their subject (`NiPoGi AM06PRO`, `Steam Deck`),
+#: because nothing in the lexicon makes reusing a word cost anything.
+RETRY_REPEATED = """
+
+Your last answer said this twice: {repeated}. Each thing appears once
+in the list, however many notes mention it."""
 
 
 # --- The pass, which runs in compaction and nowhere else -------------------
@@ -508,11 +592,14 @@ def _ask(
     freq: Counter,
     limit: int,
     missing: list[str] | None = None,
+    said_twice: list[str] | None = None,
 ) -> dict:
     """One constrained call. Returns {"written": ...} or {"refused": ...}."""
     prompt = PROMPT.format(subject=subject.term, sources="\n".join(sources))
     if missing:
-        prompt += RETRY.format(missing=", ".join(missing))
+        prompt += RETRY_MISSING.format(missing=", ".join(missing))
+    if said_twice:
+        prompt += RETRY_REPEATED.format(repeated=", ".join(said_twice))
 
     try:
         raw = call_llm(prompt, grammar=grammar(sources, freq, limit))
@@ -536,6 +623,15 @@ def _ask(
         )
         return {"written": written, "refused": "closure", "invented": strangers}
 
+    twice = repeated(written, freq, limit)
+    if twice:
+        log.warning(
+            "aggregate: %r says %s twice -- the notes were concatenated, not merged",
+            subject.term,
+            ", ".join(repr(t) for t in twice),
+        )
+        return {"written": written, "refused": "repetition", "repeated": twice}
+
     return {"written": written}
 
 
@@ -558,25 +654,40 @@ def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) ->
     outcome: dict = {"subject": subject.term, "sources": subject.ids}
 
     attempt = _ask(subject, sources, freq, limit)
+
+    # ONE RETRY, for the two failures a second ask can actually fix.
+    #
+    # Repetition and coverage are both the model being imprecise about
+    # length -- saying a thing twice, or saying it once too briefly --
+    # and naming what went wrong costs one call against losing the
+    # fold. Closure is NOT retried: a word from nowhere is the model
+    # asserting something about the user, and asking again is asking
+    # it to guess again.
+    #
+    # Once. A gate that retries until it passes is not a gate.
+    if attempt.get("refused") == "repetition":
+        second = _ask(subject, sources, freq, limit, said_twice=attempt["repeated"])
+        if not second.get("refused"):
+            outcome["retried"] = attempt["repeated"]
+            attempt = second
+
     if attempt.get("refused"):
         return {**outcome, **attempt}
     written = attempt["written"]
 
     foldable, held_back = _coverage(subject, written, freq, limit)
 
-    # ONE RETRY, and only when coverage is what stopped it.
-    #
-    # The model does not fail this gate by inventing, it fails it by
-    # being brief: on 2026-09-11 the real store's NiPoGi pair was
+    # The coverage half of that one retry. The model fails this gate
+    # by being brief: on 2026-09-11 the real store's NiPoGi group was
     # refused because the sentence dropped the single word `matériel`
     # -- the word docs/memory.md records as the reason #307 comes back
-    # at rank 1 on the word channel. Naming the missing words and
-    # asking again is cheaper than losing the fold, and it cannot
-    # loosen anything: the second answer goes through the same
-    # grammar, the same closure check and the same coverage test.
-    #
-    # Once. A gate that retries until it passes is not a gate.
-    if held_back and len(foldable) < len(subject.entries):
+    # at rank 1 on the word channel. The second answer goes through
+    # the same grammar and the same checks, so nothing is loosened.
+    if (
+        held_back
+        and not outcome.get("retried")
+        and len(foldable) < len(subject.entries)
+    ):
         missing = sorted({word for words in held_back.values() for word in words})
         retry = _ask(subject, sources, freq, limit, missing=missing)
         if not retry.get("refused"):

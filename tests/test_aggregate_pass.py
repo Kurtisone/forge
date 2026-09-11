@@ -176,7 +176,10 @@ def test_an_aggregate_no_shorter_than_its_sources_is_not_written(store, monkeypa
     the hot tier's cap is a tripwire this pass is supposed to move
     away from, not toward.
     """
-    _answers(monkeypatch, " ".join(NIPOGI) + " " + " ".join(NIPOGI))
+    # Padded with connectives, not with a second copy of the notes: a
+    # repeated note trips the repetition gate first, and what is under
+    # test here is length.
+    _answers(monkeypatch, GOOD + ", " + " ".join(["de le un avec et a"] * 10))
 
     report = _run(store)
 

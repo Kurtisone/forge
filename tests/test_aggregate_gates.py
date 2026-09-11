@@ -263,7 +263,7 @@ BIG_ARCHIVE = [
     {
         "id": 2000 + i,
         "content": f"user: question {i} ? assistant: Oui, et c'est une réponse "
-        "avec un détail : le reste est de ce côté, il y a tout",
+        "avec un détail : le reste est de ce côté, il y a tout dans la liste",
     }
     for i in range(195)
 ]
@@ -308,3 +308,66 @@ def test_a_group_shares_more_than_its_name():
     freq, limit = _real()
     for subject in aggregate.subjects(REAL, freq, limit):
         assert len(aggregate.shared(subject.entries, freq, limit)) >= 2
+
+
+# --- The two sentences the real store produced, 2026-09-11 ----------------
+
+
+def test_the_false_copula_is_what_no_gate_can_see():
+    """
+    The floor of this design, pinned so nobody mistakes the gates for
+    a truth check. This passed closure, coverage, quorum AND budget,
+    and folded three entries a human had typed:
+
+        Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un
+        processeur Ryzen 5500U, [...]
+
+    A mini PC is not a processor. Arithmetic on words will never see
+    that, which is why `grammar` stopped asking for a sentence -- the
+    shape that made a copula reachable at all.
+    """
+    freq, limit = _real()
+    sources = [e["content"] for e in REAL if e["id"] in (17, 307, 315)]
+    written = (
+        "Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un "
+        "processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go, Arch, Ansible, "
+        "services Podman"
+    )
+    assert aggregate.invented(written, aggregate.lexicon(sources, freq, limit)) == []
+    for source in sources:
+        assert aggregate.uncovered(written, source, freq, limit) == []
+
+
+def test_the_repetition_gate_catches_both_of_them():
+    freq, limit = _real()
+    nipogi = (
+        "Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un "
+        "processeur Ryzen 5500U, 32 Go de RAM"
+    )
+    steam = (
+        "Possède un Steam Deck et un Steam Deck sous SteamOS, fait tourner "
+        "des conteneurs Podman dessus"
+    )
+    assert "nipogi am" in aggregate.repeated(nipogi, freq, limit)
+    assert "steam deck" in aggregate.repeated(steam, freq, limit)
+
+
+def test_a_correct_list_reusing_a_unit_word_is_not_a_repetition():
+    """
+    `32 Go de RAM, SSD 256 Go` uses `go` twice and is right to. The
+    pairs are `32 go` and `256 go`, which are different -- a rule at
+    the word level would have refused the one aggregate this tier
+    exists to produce.
+    """
+    freq, limit = _real()
+    written = (
+        "Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go"
+    )
+    assert aggregate.repeated(written, freq, limit) == []
+
+
+def test_a_pair_with_a_connective_in_it_is_not_a_repetition():
+    """`32 Go de RAM, 256 Go de SSD` repeats `go de`, which names nothing."""
+    freq, limit = _real()
+    written = "Matériel : 32 Go de RAM, 256 Go de SSD"
+    assert aggregate.repeated(written, freq, limit) == []

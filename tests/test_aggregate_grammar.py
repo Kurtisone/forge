@@ -66,14 +66,39 @@ def test_a_common_word_can_start_the_sentence(built):
     assert '"Avec"' in built or '"Le"' in built
 
 
-def test_the_sentence_cannot_be_two_words(built):
+def test_the_shape_is_a_labelled_list_and_has_no_verb_slot(built):
     """
-    Three explicit repetitions, not {3,}: bounded repetition arrived
-    in llama.cpp later than the rest of GBNF, and a grammar the server
-    refuses is a 400 rather than a degraded call.
+    Asking for a sentence asked for a verb, a verb made a copula
+    reachable, and a copula made a FALSE copula reachable -- measured
+    on the real store, through all four gates and into a fold. `head :
+    item, item` has no verb at all.
+    """
+    root = built.splitlines()[0]
+    assert '" : "' in root
+    assert '", " aggregate-item' in root
+
+
+def test_it_takes_at_least_two_items(built):
+    root = built.splitlines()[0]
+    assert root.count('(", " aggregate-item)') == 2
+
+
+def test_an_item_cannot_grow_back_into_a_clause(built):
+    """
+    Five words for an item, three for the head, as explicit optional
+    groups rather than {1,5}: bounded repetition arrived in llama.cpp
+    later than the rest of GBNF, and a grammar the server refuses is a
+    400 rather than a degraded call.
     """
     assert "{" not in built
-    assert built.count("aggregate-sep aggregate-word") == 3
+    item = next(
+        line for line in built.splitlines() if line.startswith("aggregate-item")
+    )
+    head = next(
+        line for line in built.splitlines() if line.startswith("aggregate-head")
+    )
+    assert item.count('(" " aggregate-word)?') == 4
+    assert head.count('(" " aggregate-word)?') == 2
 
 
 def test_the_lexicon_and_the_gate_agree(built):

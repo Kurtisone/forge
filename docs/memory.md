@@ -881,9 +881,39 @@ the language for free: every literal came out of an entry the user wrote.
 | gate | what it checks | what happens |
 | --- | --- | --- |
 | closure | every word of the aggregate is in its lexicon | the subject is abandoned, nothing written |
-| coverage | every informative word of a source is in the aggregate | that source stays active, the rest still fold |
+| repetition | no pair of informative words is used twice | one retry naming the repeat, then abandoned |
+| coverage | every informative word of a source is in the aggregate | one retry naming the loss; then that source stays active and the rest still fold |
 | quorum | at least `COMPACTION_AGGREGATE_MIN_SOURCES` sources fold | nothing written |
-| budget | the aggregate is shorter than what it folds | nothing written |
+| budget | the aggregate is shorter than what it folds, by more than the token estimator's error | nothing written |
+
+### What the gates cannot do, measured
+
+On 2026-09-11 this sentence passed closure, coverage, quorum **and** budget, and
+folded three entries a human had typed:
+
+    Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un processeur
+    Ryzen 5500U, 32 Go de RAM, SSD 256 Go, Arch, Ansible, services Podman.
+
+A mini PC is not a processor. **No arithmetic on words will ever see that**, and
+none of these gates is a truth check. What the run changed is the shape the
+model is asked for: a sentence needs a verb, a verb makes a copula reachable,
+and a copula makes a false copula reachable. The grammar now produces a
+labelled list — `head : item, item` — which has no verb slot at all, and which
+is what the store already holds. The entries worth aggregating were never prose.
+
+The second sentence of that run failed differently and the same way:
+
+    Possède un Steam Deck et un Steam Deck sous SteamOS, [...]
+
+`Steam Deck` twice, `NiPoGi AM06PRO` twice. Nothing in the lexicon makes reusing
+a word cost anything, and "do not leave anything out" pushes straight there. The
+repetition gate refuses a pair of informative words used twice — both words, so
+`32 Go de RAM, SSD 256 Go` is left alone, because `32 go` and `256 go` are
+different pairs.
+
+The token estimator drifted 21.4% and 21.5% on the two runs, which is why the
+budget gate takes a margin rather than a `>=`: the first version refused nothing
+and folded a two-entry group for a saving of three estimated tokens.
 
 Nothing is written unless it is going to replace something. Every gate is a
 comparison between texts, so all of them run before `rag.remember`.
