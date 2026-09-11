@@ -86,6 +86,18 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from forge import rag
+from forge.config import (
+    COMPACTION_AGGREGATE,
+    COMPACTION_AGGREGATE_MAX_DF,
+    COMPACTION_AGGREGATE_MIN_SOURCES,
+)
+from forge.errors import ProviderError
+from forge.llm import call_llm
+from forge.logger import log
+from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
+from forge.tokens import estimate_tokens
+
 #: Word-ish tokens, with a digit/letter boundary treated as a word
 #: boundary. `32Go` -> `32`, `go`; `AM06PRO` -> `am`, `06`, `pro`.
 #: Length 1 is kept: French connectives include `a`, `à`, `y`, and the
@@ -370,3 +382,216 @@ Notes about {subject}:
 {sources}
 
 The sentence:"""
+
+
+# --- The pass, which runs in compaction and nowhere else -------------------
+
+#: How much of the store the frequency count reads. The corpus is only
+#: used to decide which words identify nothing, so a cap degrades
+#: gracefully -- list_entries is newest-first, and the words that
+#: matter are recent by construction. Same bound and same reasoning as
+#: tools/memory._VOCABULARY_ENTRIES.
+_CORPUS_ENTRIES = 2000
+
+
+def _project(entries: tuple[dict, ...]) -> str | None:
+    """
+    The project an aggregate belongs to: the one its sources share, or
+    none at all.
+
+    A project is a namespace -- rag._already_stored says so from the
+    other side, where the same sentence filed under two projects is
+    two statements about two things. An aggregate of sources from two
+    namespaces belongs to neither.
+    """
+    projects = {e.get("project") for e in entries}
+    return projects.pop() if len(projects) == 1 else None
+
+
+def _clean(raw: str) -> str:
+    """
+    Same treatment the four graphs give their syntheses, and the same
+    one compaction's llm_summary strategy has a paragraph about. No
+    grammar means the router's, so the model can answer with a routing
+    decision -- and here that decision would not be shown to anyone
+    who could see it was wrong, it would be WRITTEN INTO THE STORE as
+    a fact about the user.
+    """
+    text = strip_think_blocks(raw)
+    unwrapped = try_unwrap_router_json(text, "aggregate")
+    return (unwrapped if unwrapped is not None else text).strip()
+
+
+def run_pass(conn, *, max_df: float, min_sources: int) -> list[dict]:
+    """
+    Aggregate what can be aggregated, and report what happened.
+
+    NOTHING IS WRITTEN UNLESS IT IS GOING TO REPLACE SOMETHING. Every
+    gate is a comparison between texts, so all of them run BEFORE the
+    entry is stored:
+
+      closure   a word from nowhere -- the subject is abandoned.
+      coverage  a source whose detail went missing stays active.
+      quorum    fewer than *min_sources* foldable sources left, and
+                the aggregate would be one more overlapping line in
+                the block rather than one fewer.
+      budget    an aggregate no shorter than what it folds makes the
+                block bigger, which is the opposite of the job.
+
+    Returns one dict per subject, whether it was written or not. The
+    caller logs it; bench/rag_aggregate.py prints it.
+
+    NEVER RAISES on a model failure. The pass runs after a compaction
+    that has already happened and already committed; a provider that
+    is down must not turn that into an error the user reads.
+    """
+    entries = rag.hot_entries(conn)
+    if len(entries) < min_sources:
+        return []
+
+    corpus = rag.list_entries(conn, limit=_CORPUS_ENTRIES)
+    freq = frequencies(corpus)
+    limit = ceiling(len(corpus), max_df)
+
+    report: list[dict] = []
+    for subject in subjects(entries, freq, limit, min_sources):
+        report.append(_one(conn, subject, freq, limit, min_sources))
+    return report
+
+
+def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) -> dict:
+    sources = subject.sources()
+    outcome: dict = {"subject": subject.term, "sources": subject.ids}
+
+    try:
+        raw = call_llm(
+            PROMPT.format(subject=subject.term, sources="\n".join(sources)),
+            grammar=grammar(sources, freq, limit),
+        )
+    except ProviderError as e:
+        log.warning(
+            "aggregate: %r not written, the provider failed (%s)", subject.term, e
+        )
+        return {**outcome, "written": None, "refused": "provider"}
+
+    written = _clean(raw)
+    if not written:
+        return {**outcome, "written": None, "refused": "empty"}
+
+    allowed = lexicon(sources, freq, limit)
+    strangers = invented(written, allowed)
+    if strangers:
+        log.warning(
+            "aggregate: %r not written -- it says %s, and no entry does. An "
+            "aggregate is a recombination of what is already stored.",
+            subject.term,
+            ", ".join(repr(s) for s in strangers),
+        )
+        return {
+            **outcome,
+            "written": written,
+            "refused": "closure",
+            "invented": strangers,
+        }
+
+    foldable, held_back = [], {}
+    for entry in subject.entries:
+        missing = uncovered(written, entry["content"], freq, limit)
+        if missing:
+            held_back[entry["id"]] = missing
+        else:
+            foldable.append(entry)
+
+    if len(foldable) < min_sources:
+        return {
+            **outcome,
+            "written": written,
+            "refused": "quorum",
+            "held_back": held_back,
+        }
+
+    cost = estimate_tokens(render_lines([written]))
+    saved = estimate_tokens(render_lines([e["content"] for e in foldable]))
+    if cost >= saved:
+        return {
+            **outcome,
+            "written": written,
+            "refused": "budget",
+            "tokens": (cost, saved),
+        }
+
+    try:
+        entry_id = rag.remember(
+            conn, kind="fact", content=written, project=_project(subject.entries)
+        )
+    except (rag.DegenerateEntry, rag.EmbeddingError) as e:
+        log.warning("aggregate: %r could not be stored (%s)", subject.term, e)
+        return {**outcome, "written": written, "refused": "store"}
+
+    folded = rag.supersede(conn, [e["id"] for e in foldable], entry_id)
+    return {
+        **outcome,
+        "written": written,
+        "id": entry_id,
+        "folded": folded,
+        "held_back": held_back,
+        "tokens": (cost, saved),
+    }
+
+
+def render_lines(contents: list[str]) -> str:
+    """
+    The contents as the hot block will carry them, which is the only
+    shape in which their cost is the cost that matters. A bare
+    len(content) would count the text and not the line.
+    """
+    return "\n".join(f"- [fact] {c}" for c in contents)
+
+
+def maybe_aggregate() -> list[dict]:
+    """
+    The entry point compaction calls. Returns the report, empty when
+    the knob is off or nothing could be folded.
+
+    IN COMPACTION AND NOWHERE ELSE, which is a placement argument and
+    not a convenience. The router normalises what it writes -- measured
+    2026-08-25, byte-identical output with the category word gone -- so
+    extraction cannot live on the write path. And recall is the latency
+    path: the hot block is a stable prefix whose prefill is paid once,
+    and a pass that rewrote it mid-conversation would cost that cache
+    on every turn. Compaction is rare, already off the answer's
+    critical path, and already the place this store is fed.
+
+    SWALLOWS EVERYTHING. A compaction that has already committed must
+    not be turned into an error the user reads because a model call
+    failed afterwards.
+    """
+    if not COMPACTION_AGGREGATE:
+        return []
+
+    try:
+        conn = rag.get_connection()
+        try:
+            report = run_pass(
+                conn,
+                max_df=COMPACTION_AGGREGATE_MAX_DF,
+                min_sources=COMPACTION_AGGREGATE_MIN_SOURCES,
+            )
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001 - see the docstring
+        log.warning("aggregate: the pass did not run (%s)", e)
+        return []
+
+    for item in report:
+        log.event("aggregate.subject", **item)
+
+    folded = sum(len(i.get("folded") or []) for i in report)
+    if folded:
+        log.event(
+            "aggregate.run",
+            subjects=len(report),
+            written=sum(1 for i in report if i.get("id")),
+            folded=folded,
+        )
+    return report

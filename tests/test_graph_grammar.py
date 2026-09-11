@@ -49,7 +49,19 @@ _ROUTER_CALLERS = {"forge/orchestrator.py", "forge/graphs/default.py"}
 # also is. That is the difference from the prose callers below:
 # constraining the model to a different structure works,
 # unconstraining it does not.
-_OWN_GRAMMAR_CALLERS = {"forge/graphs/delegate.py", "forge/expansion.py"}
+#
+# aggregate is the third, and it constrains something else again: not
+# the structure but the VOCABULARY. Its grammar is an alternation of
+# the words its sources used plus the words the store treats as
+# connectives, so a sentence naming hardware nobody owns cannot be
+# sampled. It is still a closed shape -- the alternation is finite and
+# every branch terminates -- which is why it belongs here and not with
+# the prose callers.
+_OWN_GRAMMAR_CALLERS = {
+    "forge/graphs/delegate.py",
+    "forge/expansion.py",
+    "forge/aggregate.py",
+}
 
 # Callers whose prompt asks for prose and which take the fallback
 # ANYWAY, on the measurement above. Each one must undo the shape it
