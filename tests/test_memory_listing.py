@@ -132,3 +132,33 @@ def test_the_ui_command_dispatcher_passes_arguments():
     ).read_text()
 
     assert "command.run(args)" in ui
+
+
+def test_a_folded_entry_says_so_and_says_into_what(tmp_path, monkeypatch, capsys):
+    """
+    A superseded entry is in the store, findable by search, and absent
+    from the hot block. The listing is the one place a human sees all
+    three facts at once, so it has to carry the link that explains the
+    third -- and `!forget` on the aggregate, which puts it back, is a
+    guess without the id.
+    """
+    from forge import main as forge_main
+    from forge import rag
+
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "rag.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    conn = rag.get_connection()
+    source = rag.remember(
+        conn, kind="fact", content="Le NiPoGi a 32 Go de RAM", project=None
+    )
+    aggregate_id = rag.remember(
+        conn, kind="fact", content="Le NiPoGi AM06PRO a 32 Go de RAM", project=None
+    )
+    rag.supersede(conn, [source], aggregate_id)
+    conn.close()
+
+    forge_main._handle_command("!memory")
+
+    out = capsys.readouterr().out
+    assert f"#{source} [fact] -> #{aggregate_id}" in out
+    assert "(1 pliées)" in out
