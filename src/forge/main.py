@@ -263,10 +263,23 @@ def _handle_command(raw: str) -> None:
         breakdown = " · ".join(
             f"{k}: {n}" for k, n in sorted(counts["by_kind"].items())
         )
-        print(f"[memory] {counts['total']} entrées -- {breakdown}")
+        folded = sum(1 for e in entries if e.get("superseded_by"))
+        header = f"[memory] {counts['total']} entrées -- {breakdown}"
+        if folded:
+            header += f" ({folded} pliées)"
+        print(header)
         for entry in entries:
             head = " ".join(entry["content"].split())[:160]
-            print(f"  #{entry['id']} [{entry['kind']}] {head}")
+            # A folded entry says so and says INTO WHAT. Without the
+            # second half the listing shows an entry that is in the
+            # store, is findable by search, and is not in the block,
+            # with nothing to explain the difference -- and `!forget`
+            # on the aggregate, which is what puts it back, would be a
+            # guess.
+            mark = (
+                f" -> #{entry['superseded_by']}" if entry.get("superseded_by") else ""
+            )
+            print(f"  #{entry['id']} [{entry['kind']}]{mark} {head}")
         print()
 
     elif cmd == "!forget":

@@ -160,6 +160,48 @@ COMPACTION_KEEP_RECENT = int(os.getenv("COMPACTION_KEEP_RECENT", "20"))
 # change, not a rewrite.
 COMPACTION_STRATEGY = os.getenv("COMPACTION_STRATEGY", "rag_pointer")
 
+# --- Aggregation by subject (v3.19) -----------------------------------------
+# After a compaction has run, fold overlapping deliberate entries into
+# one fact per subject and point the sources at it (see
+# forge/aggregate.py and rag.supersede).
+#
+# WHAT IT IS FOR. The hot tier put the whole deliberate store in the
+# synthesis prompt and five real runs on 2026-08-26 established both
+# halves of the result: the model enumerates correctly out of eleven
+# lines when they do not overlap, and judges SCOPE when they do -- "Tu
+# peux me lister mon matériel ?" came back with one entry, then two,
+# then one, against three NiPoGi entries that overlap without any pair
+# being identical. GBNF was the candidate structural fix for that and
+# the computers run closed it. Overlapping entries are this pass's
+# work.
+#
+# OFF BY DEFAULT, like every mechanism on this path before it. It
+# spends one model call per subject on the turn that compacts, and
+# what it writes goes into the store, where a bad entry is
+# indistinguishable from a good one and stays. Earn it with
+# bench/in_container.sh rag_aggregate against a COPY of your store
+# before turning it on.
+COMPACTION_AGGREGATE = _bool("COMPACTION_AGGREGATE", "false")
+
+# The share of the store above which a word identifies nothing, used
+# to decide which words can name a subject and which ones an aggregate
+# may use freely.
+#
+# It starts at RECALL_LEXICAL_MAX_DF's value because it is the same
+# judgement about the same store, and it is a SEPARATE knob because
+# the two are measured against different things: that one is an
+# admission rule for a search, this one is the vocabulary an aggregate
+# is allowed. Tuning one must not move the other.
+COMPACTION_AGGREGATE_MAX_DF = float(os.getenv("COMPACTION_AGGREGATE_MAX_DF", "0.2"))
+
+# How many entries have to be foldable before anything is written. Two
+# is the floor that means the word "aggregate": an entry standing in
+# for one other entry is a rewrite of someone's note, which is not
+# what was asked for and not reversible by reading.
+COMPACTION_AGGREGATE_MIN_SOURCES = int(
+    os.getenv("COMPACTION_AGGREGATE_MIN_SOURCES", "2")
+)
+
 # --- Files tool workspace ---------------------------------------------------
 # The files tool (forge.tools.files) confines all read/write/list
 # operations to this directory. Paths outside it are rejected before

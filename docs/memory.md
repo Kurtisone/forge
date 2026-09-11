@@ -825,6 +825,170 @@ deleted — `!forget <id>` is the deliberate step.
 the pieces before deleting the block, so an interrupted run leaves a visible duplicate
 rather than a missing entry.
 
+## Aggregation by subject (v3.19)
+
+The hot tier carries every deliberate entry, so a completeness question no longer
+depends on retrieval. What five real runs on 2026-08-26 also established is that
+carrying them is not enough when they overlap: `Quels sont tous les ordinateurs
+que je possède ?` came back three machines out of three from eleven lines, and
+`Tu peux me lister mon matériel ?` came back with one entry, then two, then one,
+against these three:
+
+    - [fact] Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM
+    - [fact] NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, Ansible
+    - [fact] Le NiPoGi a 32 Go de RAM
+
+That is a judgement of SCOPE, and a defensible one — no pair is identical, and
+there are zero exact duplicates in the whole store, so `remember_many`'s
+duplicate check (the only merging this codebase had) finds nothing. GBNF was the
+candidate structural fix and the computers run closed it: the model enumerates
+correctly when the lines do not overlap.
+
+### What happens to the sources, which had to be settled before any code
+
+Replacing them is destructive and irreversible on entries a human typed. Leaving
+them alongside grows the block and restores the overlap. Neither, therefore: a
+source is **linked** to the entry that now speaks for it (`superseded_by`), and
+exactly one reader — `rag.hot_entries` — skips it.
+
+Both retrieval channels keep superseded rows in scope, and that is the property
+the design rests on rather than an oversight. An aggregate written by a 9B may
+quietly drop a detail; if that also dropped the source out of retrieval, the
+store would answer *je n'ai rien* while the text sits in it. Word containment
+does not imply vector reach either — this page measured the opposite when a fact
+was given the word `matériel` and came back at rank 109. **The block gets
+shorter; nothing gets harder to find.**
+
+A link and not `status='superseded'`: the flag cannot say by what, so nothing
+can audit a fold and undoing one is guesswork. `!memory` shows `#312 [fact] ->
+#341`; `!forget 341` releases everything #341 spoke for.
+
+### Two halves, and only one of them is a model
+
+Choosing which entries belong to one subject is enumerable, so it is arithmetic:
+the largest set of entries sharing one informative word is a subject, take it,
+remove those entries, repeat. Rarest-first was the obvious reading and it splits
+the group it aims at — the rarest token shared by two NiPoGi entries is `06`,
+out of AM06PRO, which names two of the three and leaves the third alone forever.
+
+Writing the sentence is the other half. Its grammar is an alternation of the
+words its sources used plus the words the store treats as connectives, so
+`Nvidia` and `512` are not caught after the fact, they are unsamplable. It fixes
+the language for free: every literal came out of an entry the user wrote.
+
+### The gates, and what each failure looks like
+
+| gate | what it checks | what happens |
+| --- | --- | --- |
+| closure | every word of the aggregate is in its lexicon | the subject is abandoned, nothing written |
+| repetition | no pair of informative words is used twice | one retry naming the repeat, then abandoned |
+| coverage | every informative word of a source is in the aggregate | one retry naming the loss; then that source stays active and the rest still fold |
+| quorum | at least `COMPACTION_AGGREGATE_MIN_SOURCES` sources fold | nothing written |
+| budget | the aggregate is shorter than what it folds, by more than the token estimator's error | nothing written |
+
+### What the gates cannot do, measured
+
+On 2026-09-11 this sentence passed closure, coverage, quorum **and** budget, and
+folded three entries a human had typed:
+
+    Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un processeur
+    Ryzen 5500U, 32 Go de RAM, SSD 256 Go, Arch, Ansible, services Podman.
+
+A mini PC is not a processor. **No arithmetic on words will ever see that**, and
+none of these gates is a truth check. What the run changed is the shape the
+model is asked for: a sentence needs a verb, a verb makes a copula reachable,
+and a copula makes a false copula reachable. The grammar now produces a
+labelled list — `head : item, item` — which has no verb slot at all, and which
+is what the store already holds. The entries worth aggregating were never prose.
+
+The second sentence of that run failed differently and the same way:
+
+    Possède un Steam Deck et un Steam Deck sous SteamOS, [...]
+
+`Steam Deck` twice, `NiPoGi AM06PRO` twice. Nothing in the lexicon makes reusing
+a word cost anything, and "do not leave anything out" pushes straight there. The
+repetition gate refuses a pair of informative words used twice — both words, so
+`32 Go de RAM, SSD 256 Go` is left alone, because `32 go` and `256 go` are
+different pairs.
+
+The token estimator drifted 21.4%, 21.5% and 16.2% across the runs, which is why
+the budget gate takes a margin rather than a `>=`: the first version refused
+nothing and folded a two-entry group for a saving of three estimated tokens.
+
+### The list needed an end, not just a shape
+
+The first list grammar wrote its tail as `(", " item)*`. Measured 2026-09-11:
+three calls out of four ran to `n_predict` — 1536 completion tokens, ~55 seconds
+each on the Deck — and one came back as `Steam Deck` repeated some four hundred
+times. Nothing in the grammar ever *required* the model to stop.
+
+`tests/test_graph_grammar.py` already carries this from the other direction: the
+router grammar was never only stopping JSON, it was the only hard terminator in
+the loop, and free decoding runs to `n_predict`. A closed shape needs an end the
+sampler is forced to reach, not merely allowed to. The list is now at most twelve
+items, written as explicit optional groups, then a mandatory `.`.
+
+A runaway is checked before closure and before the repetition scan, because it is
+a decoding failure rather than a finding about words — reporting it as seventeen
+repeated pairs buries what happened. The check stays even with a terminating
+grammar: a provider without GBNF has no terminator at all.
+
+Nothing is written unless it is going to replace something. Every gate is a
+comparison between texts, so all of them run before `rag.remember`.
+
+The word frequencies behind "informative" are counted here rather than asked of
+FTS5, which is the opposite of what `rag.informative_terms` does and for a
+reason that holds only here: nothing in these gates ever matches the index, they
+compare one text to another. That also lets the tokenizer split `32Go` into
+`32` + `go`, which unicode61 does not — and the entries worth aggregating are
+exactly the telegraphic ones that glue a number to its unit.
+
+### Where it runs, and what it costs
+
+In compaction, after the strategy has committed, only when a compaction actually
+happened. Not on the write path, because the router normalises what it writes
+(measured 2026-08-25, byte-identical output with the category word gone). Not on
+the recall path, because the hot block is a stable prefix whose prefill is paid
+once — ~180-192 tokens of a 195-token block survived in the KV cache across
+three consecutive runs — and a pass that rewrote it mid-conversation would cost
+that every turn.
+
+One model call per subject, on the rare turn that compacts. The pass swallows
+its own failures: a compaction that has already committed must not become an
+error the user reads.
+
+### Earning the knob
+
+`COMPACTION_AGGREGATE` ships false, like every mechanism on this path before it.
+
+    podman cp data/forge_rag.db forge:/tmp/real_copy.db
+    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db
+    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db --llm
+
+Without `--llm` the harness makes no model call and writes nothing — it prints
+the groups and the block. With `--llm` it writes **to the copy**, runs every
+gate, and prints the block on both sides. Read the sentences it produced: every
+gate here is arithmetic on words, and none of them can tell you whether what was
+written is true.
+
+### Trying it for real
+
+The same discipline the measurement campaigns needed, now for live trials:
+`!clear` **before** the history crosses the compaction threshold. Otherwise the
+trial question is still in the window when compaction fires, its own exchange
+gets archived, and the next trial's best match is the previous trial. Four
+transcripts of `Tu peux me lister mon matériel ?` reached the store that way at
+0.5757–0.7312 — three refusals and one answer — on messages persisted on
+2026-08-22, the day before `forge/outcome.py` existed to mark them.
+
+That gap is the general point and it outlives this branch: the mark is applied at
+persist time and read at compaction time, and those two moments can be days
+apart. **Any rule about what compaction may index has a latency equal to the
+lifetime of the rolling history.** A filter merged today protects nothing already
+sitting unmarked in `memory.json`.
+
+`!clear` also empties the tiroir, which is a known debt and not this branch's.
+
 ## Execution Traces
 
 Every run appends a record to `TRACE_FILE` (default: `data/traces.jsonl`):

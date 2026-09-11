@@ -114,7 +114,7 @@ def log_effective_settings() -> None:
     Reads the modules' own attributes rather than re-importing the
     constants, so what is printed is what the code will actually use.
     """
-    from forge import compaction
+    from forge import aggregate, compaction
     from forge.graphs import recall
     from forge.providers import llama_cpp
 
@@ -133,6 +133,13 @@ def log_effective_settings() -> None:
         compaction_token_target=compaction.COMPACTION_TOKEN_TARGET,
         compaction_keep_recent=compaction.COMPACTION_KEEP_RECENT,
         compaction_strategy=compaction.COMPACTION_STRATEGY,
+        # The aggregation knobs belong on this line for the reason the
+        # line exists. This pass WRITES to the store, so "why is there
+        # an entry nobody typed" is a question someone will ask, and
+        # the first thing to settle is whether it was even on.
+        compaction_aggregate=aggregate.COMPACTION_AGGREGATE,
+        compaction_aggregate_max_df=aggregate.COMPACTION_AGGREGATE_MAX_DF,
+        compaction_aggregate_min_sources=aggregate.COMPACTION_AGGREGATE_MIN_SOURCES,
     )
 
 

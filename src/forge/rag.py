@@ -45,9 +45,41 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     content TEXT NOT NULL,
     project TEXT,
     created_at TEXT NOT NULL,
-    status TEXT DEFAULT 'active'
+    status TEXT DEFAULT 'active',
+    superseded_by INTEGER
 );
 """
+
+# --- Supersession (v3.19) --------------------------------------------------
+# A LINK AND NOT A FLAG, and not an overwrite either.
+#
+# The aggregation tier writes one fact per subject out of several
+# overlapping ones. What happens to the sources is the question that
+# had to be settled before any of it was written, because both obvious
+# answers are wrong. Replacing them is destructive and irreversible on
+# entries a human deliberately typed. Leaving them alongside grows the
+# hot block and puts back exactly the overlap the aggregation removed
+# -- three NiPoGi lines, no two identical, which is what made a 9B
+# read "mon matériel" as one machine out of four.
+#
+# So neither: the source is never deleted and never edited, and it
+# carries the id of the entry that now speaks for it.
+#
+# WHY A LINK AND NOT status='superseded'. The column next to this one
+# has been dead since v3.7 and would have done the job mechanically.
+# It cannot say BY WHAT, so nothing can audit the fold and undoing one
+# is guesswork -- on a store whose entries were written by hand, that
+# is the wrong side of the trade. With the link, `!memory` shows the
+# fold and one UPDATE reverses it.
+#
+# WHAT IT DOES NOT CHANGE, which is the part that matters most: both
+# retrieval channels keep superseded rows in scope. Only hot_entries
+# skips them. An aggregate that dropped "SSD 256 Go" must not make
+# "SSD 256 Go" unreachable, and word containment does NOT imply
+# vector reach -- docs/memory.md measured the opposite when a fact was
+# given the word "matériel" and came back at rank 109. The block gets
+# shorter; nothing gets harder to find.
+_SUPERSESSION_COLUMN = "superseded_by"
 
 _VEC_SCHEMA = f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors USING vec0(
@@ -133,8 +165,41 @@ def get_connection() -> sqlite3.Connection:
     conn.execute(_SCHEMA)
     conn.execute(_VEC_SCHEMA)
     conn.commit()
+    _ensure_supersession(conn)
     _ensure_fts(conn)
     return conn
+
+
+def _ensure_supersession(conn: sqlite3.Connection) -> None:
+    """
+    Add `superseded_by` to a store created before it existed.
+
+    THE MIGRATION IS AN ALTER AND NOTHING ELSE, which is what makes it
+    safe to run on every connection: a NULL in the new column means
+    "not superseded", which is true of every row already written. No
+    backfill, no window in which half the store is readable, no
+    deploy/ step to forget -- the same property _ensure_fts has for
+    the opposite reason (its backfill is FTS5's own `rebuild`).
+
+    Checked against pragma table_info rather than caught as an
+    OperationalError. "duplicate column name" is a string comparison
+    against a message SQLite is free to reword, and swallowing an
+    OperationalError here would also swallow a disk error on the one
+    statement that changes the schema.
+
+    Ordered BEFORE _ensure_fts because the FTS triggers fire on
+    UPDATE, and the first thing to update a row will be a
+    supersession. Nothing depends on the ordering today; it costs
+    nothing to keep the column in place before anything can write it.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_entries)")}
+    if _SUPERSESSION_COLUMN in columns:
+        return
+    conn.execute(
+        f"ALTER TABLE memory_entries ADD COLUMN {_SUPERSESSION_COLUMN} INTEGER"
+    )
+    conn.commit()
+    log.event("rag.supersession_column_added")
 
 
 def _ensure_fts(conn: sqlite3.Connection) -> bool:
@@ -322,8 +387,146 @@ def forget(conn: sqlite3.Connection, entry_id: int) -> bool:
     """
     cur = conn.execute("DELETE FROM memory_entries WHERE id = ?", (entry_id,))
     conn.execute("DELETE FROM memory_vectors WHERE rowid = ?", (entry_id,))
+
+    # Forgetting an AGGREGATE releases everything it spoke for.
+    #
+    # Without this, `!forget` on a bad aggregate is the one way this
+    # design becomes the destructive one it was chosen not to be: the
+    # sources stay in the store, stay out of the hot block, and the
+    # only record of why is a link pointing at a row that no longer
+    # exists. The entries would be invisible and unexplainable, which
+    # is the exact failure the memory_vectors comment above has warned
+    # about since v3.7, one table over.
+    #
+    # Deliberately not a foreign key with ON DELETE SET NULL: this
+    # store is opened by hand with sqlite3, where foreign keys are off
+    # by default, so the constraint would hold in the application and
+    # silently not hold in the repair tool.
+    released = conn.execute(
+        f"UPDATE memory_entries SET {_SUPERSESSION_COLUMN} = NULL "
+        f"WHERE {_SUPERSESSION_COLUMN} = ?",
+        (entry_id,),
+    ).rowcount
     conn.commit()
+    if released:
+        log.event("rag.supersession_released", aggregate_id=entry_id, entries=released)
     return cur.rowcount > 0
+
+
+def supersede(
+    conn: sqlite3.Connection, source_ids: list[int], aggregate_id: int
+) -> list[int]:
+    """
+    Point several entries at the one that now speaks for them, and
+    return the ids actually folded.
+
+    Three refusals, each of which would otherwise produce a store that
+    cannot be reasoned about:
+
+      unknown aggregate  A link to a row that does not exist hides its
+                         sources with no way to find out why.
+
+      self-reference     An entry speaking for itself drops out of the
+                         block and nothing replaces it.
+
+      chains             A source that is ALREADY superseded is
+                         skipped rather than re-pointed. Re-pointing
+                         loses the first link, and following chains on
+                         the way back would make one `!forget` restore
+                         some entries and not others. One fold deep,
+                         always reversible by inspection.
+
+    The FTS triggers fire on this UPDATE and re-index the row with the
+    same content, which is a no-op by value and the reason the content
+    column is not touched here.
+    """
+    if not source_ids:
+        return []
+
+    known = conn.execute(
+        f"SELECT {_SUPERSESSION_COLUMN} FROM memory_entries WHERE id = ?",
+        (aggregate_id,),
+    ).fetchone()
+    if known is None:
+        log.warning(
+            "rag: refusing to supersede %s -- the aggregate #%s does not exist",
+            source_ids,
+            aggregate_id,
+        )
+        return []
+    if known[0] is not None:
+        log.warning(
+            "rag: refusing to supersede %s -- the aggregate #%s is itself "
+            "superseded, and chains are not followed",
+            source_ids,
+            aggregate_id,
+        )
+        return []
+
+    folded: list[int] = []
+    for source_id in source_ids:
+        if source_id == aggregate_id:
+            continue
+        cur = conn.execute(
+            f"UPDATE memory_entries SET {_SUPERSESSION_COLUMN} = ? "
+            f"WHERE id = ? AND {_SUPERSESSION_COLUMN} IS NULL",
+            (aggregate_id, source_id),
+        )
+        if cur.rowcount:
+            folded.append(source_id)
+    conn.commit()
+
+    if folded:
+        log.event("rag.superseded", aggregate_id=aggregate_id, sources=folded)
+    return folded
+
+
+def unsupersede(conn: sqlite3.Connection, aggregate_id: int) -> list[int]:
+    """
+    Put every source of one aggregate back in the block. The undo, in
+    one call, because a fold nobody can reverse is a deletion with a
+    longer name.
+    """
+    sources = [
+        r[0]
+        for r in conn.execute(
+            f"SELECT id FROM memory_entries WHERE {_SUPERSESSION_COLUMN} = ?",
+            (aggregate_id,),
+        )
+    ]
+    if not sources:
+        return []
+    conn.execute(
+        f"UPDATE memory_entries SET {_SUPERSESSION_COLUMN} = NULL "
+        f"WHERE {_SUPERSESSION_COLUMN} = ?",
+        (aggregate_id,),
+    )
+    conn.commit()
+    log.event("rag.unsuperseded", aggregate_id=aggregate_id, sources=sources)
+    return sources
+
+
+def superseded_by(conn: sqlite3.Connection, aggregate_id: int) -> list[dict]:
+    """The entries one aggregate speaks for, oldest first."""
+    rows = conn.execute(
+        f"""
+        SELECT id, kind, content, project, created_at
+        FROM memory_entries
+        WHERE {_SUPERSESSION_COLUMN} = ?
+        ORDER BY id ASC
+        """,
+        (aggregate_id,),
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "kind": r[1],
+            "content": r[2],
+            "project": r[3],
+            "created_at": r[4],
+        }
+        for r in rows
+    ]
 
 
 def remember(
@@ -962,7 +1165,7 @@ def list_entries(
 
     rows = conn.execute(
         f"""
-        SELECT id, kind, content, project, status, created_at
+        SELECT id, kind, content, project, status, created_at, superseded_by
         FROM memory_entries
         {where}
         ORDER BY id DESC
@@ -971,6 +1174,11 @@ def list_entries(
         params,
     ).fetchall()
 
+    # superseded_by is reported and never filtered on here. This is the
+    # reader for a human debugging the store, and an entry that has
+    # been folded into another is exactly what such a reader needs to
+    # see -- with the id it was folded into, so `!forget` on the
+    # aggregate is an informed step rather than a guess.
     return [
         {
             "id": r[0],
@@ -979,6 +1187,7 @@ def list_entries(
             "project": r[3],
             "status": r[4],
             "created_at": r[5],
+            "superseded_by": r[6],
         }
         for r in rows
     ]
@@ -1017,6 +1226,13 @@ def hot_entries(conn: sqlite3.Connection) -> list[dict]:
                         false for NULL in SQL, so `!=` would drop it
                         without a word.
 
+    SUPERSEDED ROWS ARE EXCLUDED, and this is the ONLY reader that
+    excludes them. An entry folded into an aggregate has something
+    else speaking for it in the block, so carrying both is the overlap
+    the aggregation tier exists to remove. Both retrieval channels
+    keep it in scope: the block gets shorter, nothing gets harder to
+    find. See the supersession comment at the top of this module.
+
     ARCHIVED_KIND is excluded and nothing else is. Not `kind =
     'fact'`: docs/memory.md records that the memory tool defaults a
     missing kind to "fact" rather than failing, so the kind on any row
@@ -1028,7 +1244,7 @@ def hot_entries(conn: sqlite3.Connection) -> list[dict]:
         """
         SELECT id, kind, content, project, created_at
         FROM memory_entries
-        WHERE kind IS NOT ?
+        WHERE kind IS NOT ? AND superseded_by IS NULL
         ORDER BY id ASC
         """,
         (ARCHIVED_KIND,),

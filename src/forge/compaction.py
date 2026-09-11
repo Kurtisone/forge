@@ -25,7 +25,7 @@ copy of that arithmetic would be a second definition of the same fact,
 free to drift from the one that matters.
 """
 
-from forge import rag, transcript
+from forge import aggregate, rag, transcript
 from forge.config import (
     COMPACTION_ENABLED,
     COMPACTION_KEEP_RECENT,
@@ -135,6 +135,23 @@ def maybe_compact(history: list[dict], force: bool = False) -> list[dict]:
     # Pinned messages are the "tiroir": kept as a distinct block ahead
     # of the summary rather than re-threaded back into strict
     # chronological order.
+    #
+    # The aggregation pass runs HERE, after the strategy has committed
+    # and only when a compaction actually happened. Both halves of
+    # that placement are deliberate. After, because it reads the
+    # deliberate store and not the messages this pass evicted -- it is
+    # a different job on a different table, and running it inside
+    # _strategy_rag_pointer would tie it to one strategy out of two.
+    # Only when a compaction happened, because this is the rare event
+    # already off the answer's critical path; hanging a model call on
+    # every turn is what COMPACTION_TOKEN_TARGET exists to avoid one
+    # floor down.
+    #
+    # It returns a report and swallows its own failures: a compaction
+    # that has already committed must not become an error the user
+    # reads because a model call afterwards did not work.
+    aggregate.maybe_aggregate()
+
     return compacted
 
 
