@@ -825,6 +825,122 @@ deleted — `!forget <id>` is the deliberate step.
 the pieces before deleting the block, so an interrupted run leaves a visible duplicate
 rather than a missing entry.
 
+## Aggregation by subject (v3.19)
+
+The hot tier carries every deliberate entry, so a completeness question no longer
+depends on retrieval. What five real runs on 2026-08-26 also established is that
+carrying them is not enough when they overlap: `Quels sont tous les ordinateurs
+que je possède ?` came back three machines out of three from eleven lines, and
+`Tu peux me lister mon matériel ?` came back with one entry, then two, then one,
+against these three:
+
+    - [fact] Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM
+    - [fact] NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, Ansible
+    - [fact] Le NiPoGi a 32 Go de RAM
+
+That is a judgement of SCOPE, and a defensible one — no pair is identical, and
+there are zero exact duplicates in the whole store, so `remember_many`'s
+duplicate check (the only merging this codebase had) finds nothing. GBNF was the
+candidate structural fix and the computers run closed it: the model enumerates
+correctly when the lines do not overlap.
+
+### What happens to the sources, which had to be settled before any code
+
+Replacing them is destructive and irreversible on entries a human typed. Leaving
+them alongside grows the block and restores the overlap. Neither, therefore: a
+source is **linked** to the entry that now speaks for it (`superseded_by`), and
+exactly one reader — `rag.hot_entries` — skips it.
+
+Both retrieval channels keep superseded rows in scope, and that is the property
+the design rests on rather than an oversight. An aggregate written by a 9B may
+quietly drop a detail; if that also dropped the source out of retrieval, the
+store would answer *je n'ai rien* while the text sits in it. Word containment
+does not imply vector reach either — this page measured the opposite when a fact
+was given the word `matériel` and came back at rank 109. **The block gets
+shorter; nothing gets harder to find.**
+
+A link and not `status='superseded'`: the flag cannot say by what, so nothing
+can audit a fold and undoing one is guesswork. `!memory` shows `#312 [fact] ->
+#341`; `!forget 341` releases everything #341 spoke for.
+
+### Two halves, and only one of them is a model
+
+Choosing which entries belong to one subject is enumerable, so it is arithmetic:
+the largest set of entries sharing one informative word is a subject, take it,
+remove those entries, repeat. Rarest-first was the obvious reading and it splits
+the group it aims at — the rarest token shared by two NiPoGi entries is `06`,
+out of AM06PRO, which names two of the three and leaves the third alone forever.
+
+Writing the sentence is the other half. Its grammar is an alternation of the
+words its sources used plus the words the store treats as connectives, so
+`Nvidia` and `512` are not caught after the fact, they are unsamplable. It fixes
+the language for free: every literal came out of an entry the user wrote.
+
+### The gates, and what each failure looks like
+
+| gate | what it checks | what happens |
+| --- | --- | --- |
+| closure | every word of the aggregate is in its lexicon | the subject is abandoned, nothing written |
+| coverage | every informative word of a source is in the aggregate | that source stays active, the rest still fold |
+| quorum | at least `COMPACTION_AGGREGATE_MIN_SOURCES` sources fold | nothing written |
+| budget | the aggregate is shorter than what it folds | nothing written |
+
+Nothing is written unless it is going to replace something. Every gate is a
+comparison between texts, so all of them run before `rag.remember`.
+
+The word frequencies behind "informative" are counted here rather than asked of
+FTS5, which is the opposite of what `rag.informative_terms` does and for a
+reason that holds only here: nothing in these gates ever matches the index, they
+compare one text to another. That also lets the tokenizer split `32Go` into
+`32` + `go`, which unicode61 does not — and the entries worth aggregating are
+exactly the telegraphic ones that glue a number to its unit.
+
+### Where it runs, and what it costs
+
+In compaction, after the strategy has committed, only when a compaction actually
+happened. Not on the write path, because the router normalises what it writes
+(measured 2026-08-25, byte-identical output with the category word gone). Not on
+the recall path, because the hot block is a stable prefix whose prefill is paid
+once — ~180-192 tokens of a 195-token block survived in the KV cache across
+three consecutive runs — and a pass that rewrote it mid-conversation would cost
+that every turn.
+
+One model call per subject, on the rare turn that compacts. The pass swallows
+its own failures: a compaction that has already committed must not become an
+error the user reads.
+
+### Earning the knob
+
+`COMPACTION_AGGREGATE` ships false, like every mechanism on this path before it.
+
+    podman cp data/forge_rag.db forge:/tmp/real_copy.db
+    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db
+    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db --llm
+
+Without `--llm` the harness makes no model call and writes nothing — it prints
+the groups and the block. With `--llm` it writes **to the copy**, runs every
+gate, and prints the block on both sides. Read the sentences it produced: every
+gate here is arithmetic on words, and none of them can tell you whether what was
+written is true.
+
+### Trying it for real
+
+The same discipline the measurement campaigns needed, now for live trials:
+`!clear` **before** the history crosses the compaction threshold. Otherwise the
+trial question is still in the window when compaction fires, its own exchange
+gets archived, and the next trial's best match is the previous trial. Four
+transcripts of `Tu peux me lister mon matériel ?` reached the store that way at
+0.5757–0.7312 — three refusals and one answer — on messages persisted on
+2026-08-22, the day before `forge/outcome.py` existed to mark them.
+
+That gap is the general point and it outlives this branch: the mark is applied at
+persist time and read at compaction time, and those two moments can be days
+apart. **Any rule about what compaction may index has a latency equal to the
+lifetime of the rolling history.** A filter merged today protects nothing already
+sitting unmarked in `memory.json`.
+
+`!clear` also empties the tiroir, which is a known debt and not this branch's.
+
 ## Execution Traces
 
 Every run appends a record to `TRACE_FILE` (default: `data/traces.jsonl`):
