@@ -402,6 +402,24 @@ def _escape(literal: str) -> str:
     return literal.replace("\\", "\\\\").replace('"', '\\"')
 
 
+#: How far past its own sources an answer has to go before it stops
+#: being an aggregate and starts being a decoding failure.
+#:
+#: Shipped at 1.0 and that was wrong twice over. Measured 2026-09-11:
+#: it fired on 187 characters against 173 of notes -- an 8% overrun --
+#: and what it refused was seven correct items followed by padding,
+#: which is exactly what the repetition gate exists to name and hand to
+#: a retry. A guard meant to catch six thousand characters of loop must
+#: not be the thing that speaks first about an 8% overrun; at 1.0 it
+#: was also a second, cruder copy of the budget gate, measured in
+#: characters instead of tokens.
+#:
+#: Two, because a merge of overlapping notes has no legitimate reason to
+#: be twice their combined length, and because the number only has to
+#: separate a decoding failure from an imperfect aggregate. The gates
+#: that judge an imperfect aggregate are the three below it.
+_RUNAWAY_FACTOR = 2
+
 #: The most items a list may have, and the reason the list can END.
 #:
 #: The first version wrote the tail as ``(", " item)*`` and had NO
@@ -642,7 +660,7 @@ def _ask(
     # buries what happened. Kept even though the grammar now
     # terminates: a provider without GBNF has no terminator at all,
     # which is the same reason `invented` stays.
-    budget = sum(len(source) for source in sources)
+    budget = _RUNAWAY_FACTOR * sum(len(source) for source in sources)
     if len(written) > budget:
         log.warning(
             "aggregate: %r ran away -- %d characters for %d of notes, which is "

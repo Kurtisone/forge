@@ -284,3 +284,22 @@ def test_a_runaway_answer_is_named_as_one(store, monkeypatch):
     assert report[0]["refused"] == "runaway"
     assert len(report[0]["written"]) <= 200
     assert len(rag.hot_entries(store)) == 4
+
+
+def test_an_eight_percent_overrun_is_not_a_runaway(store, monkeypatch):
+    """
+    Measured 2026-09-11: the guard shipped at 1.0 and fired on 187
+    characters against 173 of notes, refusing seven correct items
+    followed by padding -- which is what the repetition gate exists to
+    name and hand to a retry. A guard for six thousand characters of
+    loop must not speak first about an 8% overrun.
+    """
+    padded = (
+        "Le NiPoGi AM06PRO : processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go, "
+        "Arch, Ansible, services Podman, matériel pour NiPoGi, NiPoGi AM06PRO"
+    )
+    _answers(monkeypatch, padded)
+
+    report = _run(store)
+
+    assert report[0]["refused"] != "runaway"
