@@ -433,14 +433,31 @@ And the column that settles it: **every `--expect` entry was in the
 block.** Both mechanisms exist to reach `#307` and `#317`; the block
 carries them unconditionally, for a prefill paid once.
 
-So, as defaults on this store: `RECALL_HOT_FACTS` is the one worth
-turning on, and it is the only one of the three that delivered anything
-here. `RECALL_LEXICAL` stays off while the block is on, and becomes
-worth re-measuring the day the block truncates or the aggregation tier
-starts superseding rows. `RECALL_EXPANSION` stays off, and its own
-precondition already made it inert in production — with no
-`RECALL_MAX_DISTANCE` set, nothing is ever dropped, so there is never a
-failure to rescue.
+So, as defaults on this store: `RECALL_HOT_FACTS` is the one worth having
+on, and it is the only one of the three that delivered anything here.
+`RECALL_LEXICAL` returns nothing the block does not already carry, and is
+worth re-measuring the day the block truncates or the aggregation tier starts
+superseding rows. `RECALL_EXPANSION` should be **off**.
+
+**And that last one is a live cost, not a hypothetical.** This section said,
+when it was first written, that the expansion was inert in the deployment
+because no `RECALL_MAX_DISTANCE` was set. That was read off the repository's
+own `.env`, which is not the file the container is given: the running
+configuration sets `RECALL_MAX_DISTANCE=0.88@a5c47b`, `RECALL_EXPANSION=llm`,
+`RECALL_HOT_FACTS=true` and `RECALL_LEXICAL=true`. All four were already on.
+
+Which makes the measurement above a description of what runs today rather than
+of a hypothetical: on three questions of four, a refused recall spends **~10
+seconds** building rewrites, searching with them and returning **nothing**,
+because the same cutoff that dropped the first pass drops the rescue's own rows
+at 0.8899, 0.9581 and 0.9979. Setting `RECALL_EXPANSION=off` removes ten
+seconds from every refused question and loses nothing that was measured to
+exist.
+
+The general lesson is older than this page and it caught this one anyway: a
+claim about what is *deployed* cannot be read from a checkout. The repository's
+`.env` is an example someone edited once; the container is given a different
+file.
 
 None of that is an argument for deleting either mechanism. They were
 both measured and both won on their own terms against the store of
