@@ -122,7 +122,7 @@ accepted -- including the one worth reading before you edit
 
 Forge is an experimental local runtime, not a production framework.
 The public API (orchestrator, tool registry, providers, graph engine) is
-stabilising from v3.0 onward; v3.20 is current, and
+stabilising from v3.0 onward; v3.21 is current, and
 [docs/roadmap.md](docs/roadmap.md) says what each version actually did.
 
 ---
