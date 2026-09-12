@@ -844,6 +844,13 @@ duplicate check (the only merging this codebase had) finds nothing. GBNF was the
 candidate structural fix and the computers run closed it: the model enumerates
 correctly when the lines do not overlap.
 
+**Read the rest of this section with one thing in front:** the tier folds the
+block, it does not answer that question, and on that question it currently costs
+something. Measured on 2026-09-11, before and after a real fold, `Tu peux me
+lister mon matériel ?` went from naming two machines of three to naming one — the
+answer stays inside the aggregated entry. What the fold buys is eleven
+overlapping lines becoming eight, and no model call.
+
 ### What happens to the sources, which had to be settled before any code
 
 Replacing them is destructive and irreversible on entries a human typed. Leaving
@@ -852,9 +859,11 @@ source is **linked** to the entry that now speaks for it (`superseded_by`), and
 exactly one reader — `rag.hot_entries` — skips it.
 
 Both retrieval channels keep superseded rows in scope, and that is the property
-the design rests on rather than an oversight. An aggregate written by a 9B may
-quietly drop a detail; if that also dropped the source out of retrieval, the
-store would answer *je n'ai rien* while the text sits in it. Word containment
+the design rests on rather than an oversight. A fold can lose a nuance no
+arithmetic sees; if it also dropped the source out of retrieval, the store would
+answer *je n'ai rien* while the text sits in it. Measured on a copy after the
+first real fold: `#17`, `#307` and `#315` all still come back, on both channels,
+for the questions they answer. Word containment
 does not imply vector reach either — this page measured the opposite when a fact
 was given the word `matériel` and came back at rank 109. **The block gets
 shorter; nothing gets harder to find.**
@@ -863,7 +872,7 @@ A link and not `status='superseded'`: the flag cannot say by what, so nothing
 can audit a fold and undoing one is guesswork. `!memory` shows `#312 [fact] ->
 #341`; `!forget 341` releases everything #341 spoke for.
 
-### Two halves, and only one of them is a model
+### Two halves, and both of them turned out to be arithmetic
 
 Choosing which entries belong to one subject is enumerable, so it is arithmetic:
 the largest set of entries sharing one informative word is a subject, take it,
@@ -871,77 +880,171 @@ remove those entries, repeat. Rarest-first was the obvious reading and it splits
 the group it aims at — the rarest token shared by two NiPoGi entries is `06`,
 out of AM06PRO, which names two of the three and leaves the third alone forever.
 
-Writing the sentence is the other half. Its grammar is an alternation of the
-words its sources used plus the words the store treats as connectives, so
-`Nvidia` and `512` are not caught after the fact, they are unsamplable. It fixes
-the language for free: every literal came out of an entry the user wrote.
+Writing the line was the other half, and it was a 9B under a GBNF grammar until
+2026-09-11. Two runs of the harness against a copy of the real store settled it:
+**seven model calls, zero aggregates written**, and the failure was not a lottery
+but the same shape every time — the answer ran to the grammar's maximum item
+count. `nipogi` came back as its three notes concatenated, `steam` as a cycle of
+three items repeated four times, and once as `Steam Deck` glued to the front of
+every item until the cap stopped it.
+
+    Le NiPoGi a : 32 Go de RAM, Matériel NiPoGi AM06PRO, processeur Ryzen
+    5500U, 32 Go de RAM, SSD 256 Go, NiPoGi AM06PRO, Arch, 5500U, [...]
+
+    Steam Deck SteamOS : Steam Deck, SteamOS, Podman, Steam Deck, SteamOS,
+    Podman, Steam Deck, SteamOS, Podman, Steam Deck, SteamOS, Podman.
+
+Nothing in a lexicon of **words** makes reusing a word expensive. "Say each thing
+ONCE" was therefore a rule of the prompt, enforced by nothing, set against "do
+not leave anything out", which was enforced by a gate. A model does what the
+enforced half asks.
+
+So the grammar's unit moved up one level, to the **detail** — each candidate
+detail emittable at most once, in order, the list ending when they run out.
+Repetition and the runaway stopped being samplable and the calls dropped from
+18–33 s to 6–7 s. One failure survived: on the NiPoGi group the model **omitted**
+`32 Go de RAM` and `Arch`, and labelled the list `NiPoGi` rather than `Matériel`,
+losing the one word this page records as the reason `#307` is reachable at all on
+the word channel. On the `steam` group it produced, to the character, what the
+arithmetic produces for free.
+
+That is the finding, and it is the same one this page has recorded about
+grammars, thresholds and rewrites: **once the choice is enumerated, the only
+freedom left to the model is to omit.** The line is composed in `aggregate.merge`
+now, out of the details the sources already contain, and the pass costs nothing.
+
+### A detail is only ever dropped by a detail that says more
+
+`labelled` reads a note as an optional label and its comma-separated details —
+the shape the store is already written in. `distinct` deduplicates them under one
+rule, and it is the safety property the whole tier rests on: **a detail is
+dropped only in favour of a detail that contains every one of its words,
+connectives included.**
+
+Informative-word containment was the obvious reading and it is wrong in a way no
+arithmetic recovers from. `pas`, `ne`, `jamais`, `sans` are connectives by
+frequency — exactly the words an informative-word rule ignores — so under it
+`Le NiPoGi n'a pas 32 Go de RAM` is contained in `Le NiPoGi a 32 Go de RAM` and
+gets folded into its own opposite, in a store that would then answer the
+contrary of what it holds. Requiring every word inverts that: a negation carries
+a word its positive does not, so the negation can never be the one dropped.
+Nothing that says more is ever deleted by something that says less — with no
+negation list, no stopword list and no French, which matters for the same corpus
+of NiPoGi, busctl and aardvark-dns that the frequency count exists for.
+
+Two details whose word sets are equal are the one case containment cannot order
+(`SSD 256 Go` against `SSD 256Go`, which tokenize identically here). The
+spelled-out surface wins, on the one axis this page has measured: an
+instruction-tuned embedding model retrieves a telegram worst, and `#313` spent
+six campaigns unreachable for being one.
+
+### Sometimes there is nothing to write at all
+
+The real store's `steam` subject is two entries and one of them is the other's
+opening words:
+
+    - [fact] Possède un Steam Deck
+    - [fact] Possède un Steam Deck sous SteamOS, fait tourner des conteneurs Podman dessus
+
+The merge writes a correct line for it and the budget gate refuses it, correctly:
+the line was `#317` with a head glued on, 27 estimated tokens against 33. So when
+every surviving detail belongs to one entry, that entry **speaks for the others
+as it stands** — nothing composed, nothing stored, one line fewer in the block
+and a sentence the user typed left in it.
+
+Quorum and budget do not apply there, because both exist to judge new text.
+Quorum refuses an entry standing in for a single other entry, on the grounds that
+it is a rewrite of somebody's note; absorbing rewrites nothing, so one source is
+enough. The one thing absorption still checks is the namespace: an entry folded
+into an entry of another project drops out of the block under a name nobody filed
+it with.
 
 ### The gates, and what each failure looks like
 
 | gate | what it checks | what happens |
 | --- | --- | --- |
-| closure | every word of the aggregate is in its lexicon | the subject is abandoned, nothing written |
-| repetition | no pair of informative words is used twice | one retry naming the repeat, then abandoned |
-| coverage | every informative word of a source is in the aggregate | one retry naming the loss; then that source stays active and the rest still fold |
-| quorum | at least `COMPACTION_AGGREGATE_MIN_SOURCES` sources fold | nothing written |
+| closure | every word of the aggregate is in its lexicon | the subject is abandoned — **cannot fire** under a writer that only copies |
+| repetition | no pair of informative words is used twice | the subject is abandoned |
+| coverage | every informative word of a source is in the aggregate | that source stays active and the rest still fold — **cannot fire** |
+| quorum | at least `COMPACTION_AGGREGATE_MIN_SOURCES` sources fold | nothing written — **cannot fire**, since nothing is held back |
 | budget | the aggregate is shorter than what it folds, by more than the token estimator's error | nothing written |
 
-### What the gates cannot do, measured
+Three of the five cannot fail any more, and they stay where a gate on a model
+used to be. They are the assertions that say so: the day anything here composes
+a word rather than copying one, the write is refused rather than discovered
+later in the store. The retry that used to sit behind two of them is gone with
+the call it was retrying.
 
-On 2026-09-11 this sentence passed closure, coverage, quorum **and** budget, and
-folded three entries a human had typed:
+Repetition is the one the arithmetic can still fail on its own output, and what
+it catches has changed. It used to catch a model concatenating its notes; it now
+catches two details saying one thing in words that share no set — `32 Go de RAM`
+against `32 Go de mémoire` — which set arithmetic cannot merge and must not
+pretend to have. Refusing leaves the block with the two overlapping entries it
+already had, which is the outcome this tier is meant to improve on and not the
+one it is allowed to fake.
+
+The token estimator drifted 21.4%, 21.5% and 16.2% across the model runs, which
+is why the budget gate takes a margin rather than a `>=`: the first version
+refused nothing and folded a two-entry group for a saving of three estimated
+tokens.
+
+### What no gate can see, which is why they are not a truth check
+
+Under the grammar, this sentence passed closure, coverage, quorum **and** budget,
+and folded three entries a human had typed:
 
     Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un processeur
     Ryzen 5500U, 32 Go de RAM, SSD 256 Go, Arch, Ansible, services Podman.
 
 A mini PC is not a processor. **No arithmetic on words will ever see that**, and
-none of these gates is a truth check. What the run changed is the shape the
-model is asked for: a sentence needs a verb, a verb makes a copula reachable,
-and a copula makes a false copula reachable. The grammar now produces a
-labelled list — `head : item, item` — which has no verb slot at all, and which
-is what the store already holds. The entries worth aggregating were never prose.
+none of these gates is a truth check. What the run changed was the shape the
+model was asked for: a sentence needs a verb, a verb makes a copula reachable,
+and a copula makes a false copula reachable. A labelled list — `head : item,
+item` — has no verb slot at all, and it is what the store already holds.
 
-The second sentence of that run failed differently and the same way:
+The class of error did not disappear when the model did. Every word of a line is
+now one the user typed, which is a strong property and not that one: a true
+detail and another true detail can still be put side by side into a sentence
+nobody meant. Read what the harness prints.
 
-    Possède un Steam Deck et un Steam Deck sous SteamOS, [...]
+### The block getting shorter is not the point
 
-`Steam Deck` twice, `NiPoGi AM06PRO` twice. Nothing in the lexicon makes reusing
-a word cost anything, and "do not leave anything out" pushes straight there. The
-repetition gate refuses a pair of informative words used twice — both words, so
-`32 Go de RAM, SSD 256 Go` is left alone, because `32 go` and `256 go` are
-different pairs.
+The first fold measured end to end made the answers **worse**. The block went
+from 11 entries and 195 tokens to 8 and 166, and the hardware question stopped
+mentioning the RAM.
 
-The token estimator drifted 21.4%, 21.5% and 16.2% across the runs, which is why
-the budget gate takes a margin rather than a `>=`: the first version refused
-nothing and folded a two-entry group for a saving of three estimated tokens.
+The line was `Matériel : Le NiPoGi a 32 Go de RAM, NiPoGi AM06PRO, processeur
+Ryzen 5500U, ...` — and what the model dropped is its own first item. `Matériel`
+and the list under it are one line typed by one person; another entry's sentence
+between them reads as part of the label rather than as an item. So the details of
+the entry that gave the head come first, and the others follow.
 
-### The list needed an end, not just a shape
+Measured 2026-09-11 on the block the real store produces, three passes with the
+arms rotated between them — llama-server keeps one slot, so a prompt repeated
+back to back measures the KV cache and not the model. Each cell is how many of
+the three passes got it:
 
-The first list grammar wrote its tail as `(", " item)*`. Measured 2026-09-11:
-three calls out of four ran to `n_predict` — 1536 completion tokens, ~55 seconds
-each on the Deck — and one came back as `Steam Deck` repeated some four hundred
-times. Nothing in the grammar ever *required* the model to stop.
+| block | `matériel` keeps 32 Go de RAM | `matériel` names machines | `tous les ordinateurs` names three |
+|---|---|---|---|
+| not folded | **3/3** | two of three, 3/3 | **3/3** |
+| folded, details in source order | **0/3** | two of three, 3/3 | 2/3 |
+| folded, the head's own list first | **3/3** | **one** of three, 3/3 | **3/3** |
+| folded, informative-word dedup | **3/3** | one of three, 3/3 | 0/3 |
 
-`tests/test_graph_grammar.py` already carries this from the other direction: the
-router grammar was never only stopping JSON, it was the only hard terminator in
-the loop, and free decoding runs to `n_predict`. A closed shape needs an end the
-sampler is forced to reach, not merely allowed to. The list is now at most twelve
-items, written as explicit optional groups, then a mandatory `.`.
+Three things to take from that table, and the last one matters most. The ordering
+rule is worth its line of code. The fourth row is why `distinct` compares every
+word: dropping `Le NiPoGi a 32 Go de RAM` in favour of `32 Go de RAM` is what
+informative-word containment does, it is what folds a negation into its opposite,
+and it lost the Steam Deck on the computers question three times out of three —
+the safe rule and the one that measures better are the same rule.
 
-A runaway is checked before closure and before the repetition scan, because it is
-a decoding failure rather than a finding about words — reporting it as seventeen
-repeated pairs buries what happened. The check stays even with a terminating
-grammar: a provider without GBNF has no terminator at all.
-
-Nothing is written unless it is going to replace something. Every gate is a
-comparison between texts, so all of them run before `rag.remember`.
-
-The word frequencies behind "informative" are counted here rather than asked of
-FTS5, which is the opposite of what `rag.informative_terms` does and for a
-reason that holds only here: nothing in these gates ever matches the index, they
-compare one text to another. That also lets the tokenizer split `32Go` into
-`32` + `go`, which unicode61 does not — and the entries worth aggregating are
-exactly the telegraphic ones that glue a number to its unit.
+And **nothing here beats not folding.** The shipped order ties on the computers
+question and loses a machine on the hardware one: an answer that used to name the
+NiPoGi and the Dell now names the NiPoGi alone, because the aggregated entry is
+where the model stays. The scope judgement this page has recorded since v3.18 is
+therefore not solved by this tier — it is, on one question of two, made slightly
+narrower. The tier's case is the block it keeps small as the store grows, and it
+should be turned on for that reason or not at all.
 
 ### Where it runs, and what it costs
 
@@ -949,27 +1052,47 @@ In compaction, after the strategy has committed, only when a compaction actually
 happened. Not on the write path, because the router normalises what it writes
 (measured 2026-08-25, byte-identical output with the category word gone). Not on
 the recall path, because the hot block is a stable prefix whose prefill is paid
-once — ~180-192 tokens of a 195-token block survived in the KV cache across
-three consecutive runs — and a pass that rewrote it mid-conversation would cost
-that every turn.
+once — ~180-192 tokens of a 195-token block survived in the KV cache across three
+consecutive runs — and a pass that rewrote it mid-conversation would cost that
+every turn. Losing the model call removed the latency argument and left that one
+standing: a block that changes between two recalls is re-prefilled whatever wrote
+it.
 
-One model call per subject, on the rare turn that compacts. The pass swallows
-its own failures: a compaction that has already committed must not become an
-error the user reads.
+No model call, no provider to be down, and the pass still swallows its own
+failures: a compaction that has already committed must not become an error the
+user reads.
 
 ### Earning the knob
 
 `COMPACTION_AGGREGATE` ships false, like every mechanism on this path before it.
+Not for what it costs any more, but for what it writes: an entry in this store is
+read as something the user said, and it stays.
 
     podman cp data/forge_rag.db forge:/tmp/real_copy.db
     bench/in_container.sh rag_aggregate --db /tmp/real_copy.db
-    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db --llm
+    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db --apply
 
-Without `--llm` the harness makes no model call and writes nothing — it prints
-the groups and the block. With `--llm` it writes **to the copy**, runs every
-gate, and prints the block on both sides. Read the sentences it produced: every
-gate here is arithmetic on words, and none of them can tell you whether what was
-written is true.
+Without `--apply` the harness writes nothing and now shows everything: the
+groups, the exact line each subject would fold into, the gate that would refuse
+it, and what the block would weigh either way. It runs the real pass with the
+write turned off rather than a second copy of the gate sequence in a harness,
+because a harness that computes the fold separately is one that can be right
+about a pass that is wrong. With `--apply` it writes **to the copy**.
+
+Measured on a copy of the real store, 2026-09-11:
+
+| | |
+|---|---|
+| subjects | 2 |
+| written | 1 (`nipogi`, 3 sources, 57 → 36 estimated tokens) |
+| absorbed | 1 (`steam`, `#1` into `#317`, nothing written) |
+| refused | 0 |
+| block | 11 entries / 195 tokens → 8 / 166 |
+
+And the sources are still reachable after the fold — `#17`, `#307` and `#315`
+all come back on both channels for `Quel processeur a mon NiPoGi ?` and `Combien
+de RAM a le NiPoGi ?`, superseded and all. The block gets shorter; nothing gets
+harder to find.
 
 ### Trying it for real
 

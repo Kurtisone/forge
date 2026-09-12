@@ -22,7 +22,8 @@ merging this codebase had -- finds nothing. GBNF was the candidate
 structural fix for the scope judgement and the computers run closed
 it: the model enumerates correctly when the lines do not overlap.
 
-TWO HALVES, AND ONLY ONE OF THEM IS ALLOWED TO BE A MODEL.
+BOTH HALVES ARE ARITHMETIC, AND THE SECOND ONE STOPPED BEING A MODEL
+ON 2026-09-11.
 
 Choosing WHICH entries belong to one subject is enumerable, and this
 repository's standing rule is that an enumerable choice goes in a
@@ -31,17 +32,34 @@ arithmetic: the rarest word that still names several entries is the
 name of a subject. No model call, no threshold nobody measured, and
 the same answer every time it runs.
 
-Writing the aggregate SENTENCE is the other half, and that one needs a
-model -- see the grammar in this module, which is what keeps the model
-inside the vocabulary it was given.
+Writing the line was a model under a GBNF grammar, and the real store
+measured what that costs. Seven calls across two runs, zero aggregates
+written, and the same failure every time: the answer ran to the
+grammar's maximum item count. `nipogi` came back as its three notes
+concatenated; `steam` as a cycle of three items repeated four times.
+Nothing in a lexicon of WORDS makes reusing a word expensive, so "say
+each thing ONCE" was a rule of the prompt, enforced by nothing, set
+against "do not leave anything out", which was enforced by a gate.
 
-THE TWO GATES, AND WHY THEY POINT IN OPPOSITE DIRECTIONS.
+Moving the grammar's unit from the word to the DETAIL -- each
+candidate detail emittable at most once, in order, the list ending
+when they run out -- fixed the repetition and the runaway structurally
+and left one failure standing: the model omits. Measured the same day,
+it dropped `32 Go de RAM` and `Arch` from the NiPoGi group and
+relabelled it `NiPoGi`, losing the word `matériel` that docs/memory.md
+records as the reason #307 is reachable at all on the word channel.
 
-An aggregate is text nobody wrote, standing in for text somebody did.
-docs/memory.md already states the danger from the other side, about
-expanding a query versus expanding a fact: a wrong expansion of a fact
-writes something nobody said into memory, where it is
-indistinguishable from something they did, and it stays. So:
+Which is the finding: once the choice is enumerated, the only freedom
+left to the model is to OMIT. So the line is now composed here, out of
+the details the sources already contain -- see `merge`.
+
+THE GATES, AND WHAT EACH ONE STILL ANSWERS.
+
+An aggregate stands in for text somebody wrote. docs/memory.md states
+the danger from the other side, about expanding a query versus
+expanding a fact: a wrong expansion of a fact writes something nobody
+said into memory, where it is indistinguishable from something they
+did, and it stays. So:
 
   coverage   every informative word of a source must appear in the
              aggregate. A source that fails is LEFT ACTIVE -- the
@@ -50,12 +68,16 @@ indistinguishable from something they did, and it stays. So:
              instead of dropping a detail silently.
 
   closure    every informative word of the aggregate must come from
-             its sources. An aggregate that fails is NOT WRITTEN AT
-             ALL. This is the gate that separates "a fact aggregated"
-             from "a fact invented", and it is a precondition to the
-             write rather than to the fold, because a hallucinated
-             entry is harmful whether or not anything is folded into
-             it.
+             its sources. Under a deterministic writer this can no
+             longer fail, and it stays as the assertion that says so:
+             the day anything in this module composes a word rather
+             than copying one, the write is refused rather than
+             discovered later in the store.
+
+  repetition no pair of informative words twice. It used to catch a
+             model concatenating its notes; what it catches now is two
+             details saying one thing in different words, which set
+             arithmetic cannot merge and must not pretend to have.
 
 WHY THE WORD COUNTS ARE COMPUTED HERE AND NOT ASKED OF FTS5.
 
@@ -93,29 +115,24 @@ from forge.config import (
     COMPACTION_AGGREGATE_MAX_DF,
     COMPACTION_AGGREGATE_MIN_SOURCES,
 )
-from forge.errors import ProviderError
-from forge.llm import call_llm
 from forge.logger import log
-from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
 from forge.tokens import estimate_tokens
 
 #: Word-ish tokens, with a digit/letter boundary treated as a word
 #: boundary. `32Go` -> `32`, `go`; `AM06PRO` -> `am`, `06`, `pro`.
-#: Length 1 is kept: French connectives include `a`, `à`, `y`, and the
-#: grammar built from this lexicon has to be able to form a sentence.
+#: Length 1 is kept: French connectives include `a`, `à`, `y`, and a
+#: detail that loses them stops being the sentence somebody wrote.
 _TOKEN_RE = re.compile(r"[0-9]+|[^\W\d_]+", re.UNICODE)
 
-#: The same text as the model will be allowed to write it. NOT split at
-#: the digit/letter boundary, because `AM06PRO`, `5500U` and `32Go` are
-#: single words on the page and a grammar that could only emit their
-#: pieces would have to glue them back with an empty separator -- which
-#: also glues `32` to `RAM`.
+#: The same text as somebody wrote it. NOT split at the digit/letter
+#: boundary, because `AM06PRO`, `5500U` and `32Go` are single words on
+#: the page, and this is the tokenizer that reads a name back off the
+#: page -- `surface` uses it to spell a subject `NiPoGi` rather than
+#: `Nipogi`.
 #:
-#: The two tokenizers stand in a deliberate order: everything this one
-#: produces, _TOKEN_RE splits into pieces the lexicon already holds. So
-#: anything the grammar can emit passes the closure gate by
-#: construction, and a test pins that rather than leaving it to be
-#: noticed when llama.cpp and ollama start disagreeing.
+#: The two stand in a deliberate order: everything this one produces,
+#: _TOKEN_RE splits into pieces the lexicon already holds, so a text
+#: built out of source words passes the closure gate by construction.
 _SURFACE_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
@@ -361,144 +378,243 @@ def invented(aggregate: str, allowed: set[str]) -> list[str]:
     return sorted(set(tokens(aggregate)) - allowed)
 
 
-# --- The sentence, and the only half a model is allowed to write -----------
+# --- The details, which are what the notes are made of ---------------------
+
+#: What separates one detail from the next inside a note. Comma and
+#: semicolon, because that is what the store actually holds:
+#: `NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, SSD 256Go, Ansible`.
+#:
+#: A note with no separator at all is ONE detail, and that is the
+#: honest reading of it rather than a degenerate case -- a sentence
+#: nobody punctuated is a sentence whose pieces nobody separated, and
+#: guessing where they would have is how an aggregate starts asserting
+#: things.
+_DETAIL_RE = re.compile(r"\s*[;,]\s*")
+
+#: How many words may precede the colon before it stops being a label.
+#:
+#: `Matériel : NiPoGi AM06PRO, ...` is a label and a list. `Le proxy
+#: podman écoute sur un socket unix : il est en lecture seule` is a
+#: sentence that happens to contain a colon, and taking its first nine
+#: words as the head of a list would produce a line nobody wrote in a
+#: shape nobody uses.
+_MAX_LABEL_WORDS = 3
 
 
-def surfaces(sources: list[str]) -> set[str]:
-    """Every word of the sources, as written on the page."""
-    return {w for source in sources for w in _SURFACE_RE.findall(source)}
-
-
-def _alternatives(sources: list[str], freq: Counter, limit: int) -> list[str]:
+def labelled(content: str) -> tuple[str | None, list[str]]:
     """
-    Every literal the grammar will let the model emit.
+    A note as it is actually written: an optional label, then details.
 
-    Source words keep the case they were WRITTEN in -- `NiPoGi`,
-    `AM06PRO`, `SSD` -- because an aggregate spelling them `nipogi`
-    would be a worse entry than the ones it replaces, and the entry
-    that made this tier necessary is the one written as a telegram in
-    the first place.
+    This is the tokenizer of this tier, one level up from words. The
+    branch's first version worked on words -- the grammar's unit was
+    the word, the repetition gate compared pairs of words -- and the
+    real store said what that costs: nothing in a lexicon of words
+    makes reusing a word expensive, so "do not leave anything out"
+    concatenated the notes and every gate downstream was left arguing
+    about the debris.
 
-    Common words get a lowercase and a capitalised form, which is the
-    whole of what a sentence needs: one of them starts it.
+    The detail is the unit the notes are already written in. Two notes
+    that overlap overlap by detail, and a merge that keeps details
+    whole is a recombination of what is stored rather than a rewrite
+    of it.
     """
-    alternatives: set[str] = set()
-    for written in surfaces(sources):
-        alternatives.add(written)
-        # Case variants only for words that are only letters. Folding
-        # AM06PRO would offer `Am06pro`, which is not a spelling of
-        # anything and is one more way for the sentence to be worse
-        # than the notes it replaces.
-        if written.isalpha():
-            alternatives.add(written.lower())
-            alternatives.add(written.capitalize())
-    for word in common(freq, limit):
-        alternatives.add(word)
-        alternatives.add(word.capitalize())
-    return sorted(alternatives)
+    label, body = None, content
+    head, colon, rest = content.partition(":")
+    if colon and rest.strip() and len(head.split()) <= _MAX_LABEL_WORDS:
+        label, body = head.strip(), rest
+    return label, [d.strip() for d in _DETAIL_RE.split(body) if d.strip()]
 
 
-def _escape(literal: str) -> str:
-    return literal.replace("\\", "\\\\").replace('"', '\\"')
+@dataclass(frozen=True)
+class Detail:
+    """One detail, and the entry it was written in."""
+
+    text: str
+    source: int
+
+    @property
+    def words(self) -> frozenset[str]:
+        return frozenset(tokens(self.text))
 
 
-#: How far past its own sources an answer has to go before it stops
-#: being an aggregate and starts being a decoding failure.
+#: Among details that say the same words, which surface is kept: the
+#: one written out in full.
 #:
-#: Shipped at 1.0 and that was wrong twice over. Measured 2026-09-11:
-#: it fired on 187 characters against 173 of notes -- an 8% overrun --
-#: and what it refused was seven correct items followed by padding,
-#: which is exactly what the repetition gate exists to name and hand to
-#: a retry. A guard meant to catch six thousand characters of loop must
-#: not be the thing that speaks first about an 8% overrun; at 1.0 it
-#: was also a second, cruder copy of the budget gate, measured in
-#: characters instead of tokens.
-#:
-#: Two, because a merge of overlapping notes has no legitimate reason to
-#: be twice their combined length, and because the number only has to
-#: separate a decoding failure from an imperfect aggregate. The gates
-#: that judge an imperfect aggregate are the three below it.
-_RUNAWAY_FACTOR = 2
-
-#: The most items a list may have, and the reason the list can END.
-#:
-#: The first version wrote the tail as ``(", " item)*`` and had NO
-#: TERMINATOR. Measured 2026-09-11: three calls out of four ran to
-#: n_predict -- 1536 completion tokens, ~55 seconds each on the Deck --
-#: and one of them came back as `Steam Deck` repeated some four hundred
-#: times. Nothing in the grammar ever required the model to stop, and a
-#: 9B given an open tail does not choose to.
-#:
-#: This is the lesson tests/test_graph_grammar.py already carries,
-#: arriving from the other direction: the router grammar was never only
-#: stopping JSON, it was the only hard TERMINATOR in the loop, and free
-#: decoding runs to n_predict. A closed shape needs an end the sampler
-#: is FORCED to reach, not merely allowed to.
-#:
-#: So: at most twelve items, written as explicit optional groups, then a
-#: mandatory ".". Twelve is generous for the real store -- its longest
-#: deliberate entry carries eight details -- and the point of the number
-#: is not the ceiling, it is that one exists.
-_MAX_ITEMS = 12
+#: `SSD 256 Go` and `SSD 256Go` tokenize identically -- the tokenizer
+#: of this module splits at the digit/letter boundary on purpose -- so
+#: something has to choose, and it has to choose the same way every
+#: time or two runs of this pass produce two different stores. The
+#: spelled-out form wins on the one axis docs/memory.md has measured:
+#: an instruction-tuned embedding model retrieves a telegram worst,
+#: and `#313` spent six campaigns unreachable for being one.
+def _spelled_out(detail: Detail) -> tuple[int, int]:
+    return (-len(detail.text.split()), -len(detail.text))
 
 
-def grammar(sources: list[str], freq: Counter, limit: int) -> str:
+def distinct(details: list[Detail]) -> list[Detail]:
     """
-    A GBNF grammar for a LABELLED LIST whose entire vocabulary is this
-    subject's lexicon.
+    The details that survive deduplication, in the order written.
 
-    A LIST AND NOT A SENTENCE, and that is the correction this module
-    needed most. Asking for a sentence asked for a verb, a verb made a
-    copula reachable, and a copula made a FALSE copula reachable.
-    Measured 2026-09-11 on the real store, through all four gates and
-    into a fold:
+    ONE RULE, AND IT IS THE SAFETY PROPERTY OF THIS WHOLE TIER: a
+    detail is dropped only in favour of a detail that contains EVERY
+    ONE of its words -- connectives included, not just the informative
+    ones.
 
-        Le NiPoGi AM06PRO, un matériel de la NiPoGi AM06PRO, est un
-        processeur Ryzen 5500U, 32 Go de RAM, SSD 256 Go, [...]
+    Informative-word containment was the obvious reading and it is
+    wrong in a way no arithmetic recovers from. `pas`, `ne`, `jamais`,
+    `sans` are connectives by frequency, so they are exactly the words
+    an informative-word rule ignores, and under it `Le NiPoGi n'a pas
+    32 Go de RAM` is contained in `Le NiPoGi a 32 Go de RAM` and gets
+    folded into its own opposite. Requiring every word inverts that:
+    a negation carries a word its positive does not, so the negation
+    can never be the one dropped.
 
-    A mini PC is not a processor, and no amount of arithmetic on words
-    was ever going to see that. `head : item, item, item` has no verb
-    at all, so the class of error stops being caught and starts being
-    unreachable -- the move this repository has now made twelve times.
+    Stated as the invariant it is: **nothing that says more is ever
+    deleted by something that says less.** No stopword list, no
+    negation list, no language -- which matters for the same corpus of
+    NiPoGi, busctl and aardvark-dns that the frequency count exists
+    for.
 
-    It also matches what the store already holds. The entries worth
-    aggregating are not prose, they are labelled telegrams:
-    `Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM`.
-    Asking for a sentence was asking the model to write something the
-    user never writes.
-
-    Items are capped at five words and the head at three, as explicit
-    optional groups rather than `{1,5}`: bounded repetition arrived in
-    llama.cpp after the rest of GBNF, and a grammar the server refuses
-    is a 400 on the call rather than a degraded call. The cap is what
-    keeps an item from growing back into the clause this form exists
-    to remove.
-
-    THE CLOSURE GATE, MOVED INTO THE SAMPLER. `invented` can only
-    report that a word came from nowhere once the model has written
-    it; an alternation the word is not in means it cannot be written.
-    `invented` stays, because the grammar only exists on llama.cpp --
-    on ollama or OpenRouter the same call runs unconstrained and the
-    check is all there is.
-
-    It also fixes the LANGUAGE for free. Every literal here came out
-    of entries the user wrote, so the list is in their language
-    without a single word of the prompt saying so.
-
-    Rule names are hyphenated. llama.cpp's lexer builds names out of
-    is_word_char(), which accepts [a-zA-Z0-9-] and NOT underscore; see
-    forge/gbnf.py for the debugging cycle that cost.
+    Equal word sets are the one case containment cannot order, and
+    `_spelled_out` breaks the tie. The position is the first one the
+    word set appeared at, so which surface wins never moves the line.
     """
-    words = " | ".join(f'"{_escape(w)}"' for w in _alternatives(sources, freq, limit))
-    optional_word = ' (" " aggregate-word)?'
-    optional_item = ' (", " aggregate-item)?'
-    return (
-        'root ::= aggregate-head " : " aggregate-item (", " aggregate-item)'
-        f'{optional_item * (_MAX_ITEMS - 2)} "."\n'
-        f"aggregate-head ::= aggregate-word{optional_word * 2}\n"
-        f"aggregate-item ::= aggregate-word{optional_word * 4}\n"
-        f"aggregate-word ::= {words}\n"
-    )
+    best: dict[frozenset[str], tuple[int, Detail]] = {}
+    for position, detail in enumerate(details):
+        words = detail.words
+        if not words:
+            continue
+        seen = best.get(words)
+        if seen is None:
+            best[words] = (position, detail)
+        elif _spelled_out(detail) < _spelled_out(seen[1]):
+            best[words] = (seen[0], detail)
+
+    survivors = [
+        (position, detail)
+        for words, (position, detail) in best.items()
+        if not any(words < other for other in best if other != words)
+    ]
+    return [detail for _, detail in sorted(survivors, key=lambda pair: pair[0])]
+
+
+def surface(term: str, entries: tuple[dict, ...]) -> str:
+    """
+    The subject's name as somebody wrote it -- `NiPoGi`, not `nipogi`
+    and not `Nipogi`.
+
+    The first occurrence in the entries, in their own order, so this
+    answers the same way on every run. `capitalize()` is the fallback
+    for a term that is a piece of a longer word (`am`, out of
+    AM06PRO) and therefore has no surface of its own.
+    """
+    for entry in entries:
+        for written in _SURFACE_RE.findall(entry["content"]):
+            if written.lower() == term:
+                return written
+    return term.capitalize()
+
+
+@dataclass(frozen=True)
+class Merged:
+    """The line a subject folds into, and what it is made of."""
+
+    head: str
+    details: tuple[Detail, ...]
+
+    #: The entry that already carries every surviving detail, when one
+    #: does. Then there is nothing to write: that entry can speak for
+    #: the others as it stands. See `_absorb`.
+    speaker: int | None = None
+
+    @property
+    def text(self) -> str:
+        return f"{self.head} : " + ", ".join(d.text for d in self.details) + "."
+
+
+def _head_source_first(details: list[Detail], head_source: int | None) -> list[Detail]:
+    """
+    The details of the entry that gave the head, before the others.
+
+    MEASURED, 2026-09-11, on the block the real store produces and the
+    two questions this tier exists for -- three passes, the arms
+    rotated between them because llama-server keeps one slot and a
+    prompt repeated back to back measures the KV cache rather than the
+    model:
+
+                            `lister mon matériel`   `tous les ordinateurs`
+      not folded            32 Go de RAM 3/3        3 machines 3/3
+      folded, source order  32 Go de RAM 0/3        3 machines 2/3
+      folded, this order    32 Go de RAM 3/3        3 machines 3/3
+
+    The line that lost the RAM opened `Matériel : Le NiPoGi a 32 Go de
+    RAM, NiPoGi AM06PRO, ...`, and what it lost is its own first item.
+    A label and the list under it were written in one line by one
+    person; putting another entry's detail between them leaves a
+    sentence where the user wrote their own list, and the model reads
+    that first item as part of the label rather than as an item.
+
+    Within each half the order is unchanged -- the order the details
+    were written in.
+    """
+    if head_source is None:
+        return details
+    return sorted(details, key=lambda d: d.source != head_source)
+
+
+def merge(entries: tuple[dict, ...], term: str) -> Merged:
+    """
+    One labelled list out of several overlapping notes, deterministically.
+
+    THE HEAD IS THE FIRST LABEL THE SOURCES CARRY, and the subject's
+    own name when none of them carries one. A label is the user's word
+    for what the list is about -- `Matériel` is the word docs/memory.md
+    records as the reason `#307` comes back at rank 1 on the word
+    channel -- so inventing a better one is both unnecessary and the
+    move this module exists to refuse. A second, different label is
+    not thrown away either: it becomes a detail, where the coverage
+    gate can see it.
+
+    THE ITEMS ARE THE SOURCES' OWN DETAILS, VERBATIM, deduplicated by
+    `distinct` and ordered by `_head_source_first`, which is the one
+    place this module rearranges anything and has a measurement behind
+    it. Every word of
+    the result was typed by the person it describes, which is the
+    strongest form of the closure gate this tier ever had -- stronger
+    than the grammar that used to enforce it, because a grammar
+    constrains which words may be emitted and this constrains which
+    SENTENCES may be.
+
+    AND SOMETIMES THERE IS NOTHING TO WRITE. When every surviving
+    detail turns out to belong to one entry, that entry already says
+    the whole subject and the others are older, shorter versions of
+    it -- `Possède un Steam Deck` against `Possède un Steam Deck sous
+    SteamOS, fait tourner des conteneurs Podman dessus`. `speaker`
+    names it, and `_absorb` folds the rest into it without composing
+    anything at all. The head is allowed to come from the speaker or
+    to be the subject's own name; a head taken from ANOTHER entry
+    means that entry said something this one does not, so the line
+    gets written after all.
+    """
+    head: str | None = None
+    head_source: int | None = None
+    collected: list[Detail] = []
+    for entry in entries:
+        label, details = labelled(entry["content"])
+        if label is not None:
+            if head is None:
+                head, head_source = label, entry["id"]
+            else:
+                collected.append(Detail(label, entry["id"]))
+        collected.extend(Detail(text, entry["id"]) for text in details)
+
+    survivors = tuple(_head_source_first(distinct(collected), head_source))
+    written_by = {d.source for d in survivors}
+    speaker = None
+    if len(written_by) == 1 and head_source in (None, *written_by):
+        speaker = written_by.pop()
+
+    return Merged(head or surface(term, entries), survivors, speaker)
 
 
 #: How much shorter an aggregate has to be before folding is worth it.
@@ -511,46 +627,6 @@ def grammar(sources: list[str], freq: Counter, limit: int) -> str:
 #: A margin wider than the estimator's observed drift is the smallest
 #: honest version of "shorter".
 _BUDGET_MARGIN = 0.25
-
-#: The instruction. Short on purpose: everything the model could get
-#: wrong about WHICH words to use, and about writing a clause instead
-#: of a list, is already impossible under the grammar. What is left is
-#: to say what the list is for.
-PROMPT = """/no_think
-These notes were written at different times and all describe the same
-thing. Rewrite them as ONE labelled list, keeping every detail: every
-model number, every quantity, every name.
-
-Format: a short label, then a colon, then the details separated by
-commas. Like the notes themselves.
-
-Say each thing ONCE. Do not add anything. Do not leave anything out.
-Do not comment on the notes -- the list replaces them and will be read
-on its own, by someone who will never see this one.
-
-Notes about {subject}:
-{sources}
-
-The list:"""
-
-#: Appended for the single retry, when coverage found a detail
-#: missing. It names the words rather than repeating the instruction:
-#: the instruction was followed, the answer was just shorter than the
-#: notes needed it to be.
-RETRY_MISSING = """
-
-The list must also contain these words, which are in the notes above
-and must not be lost: {missing}"""
-
-#: Appended for the single retry, when the answer said the same thing
-#: twice. Measured 2026-09-11: both sentences the model produced on the
-#: real store repeated their subject (`NiPoGi AM06PRO`, `Steam Deck`),
-#: because nothing in the lexicon makes reusing a word cost anything.
-RETRY_REPEATED = """
-
-Your last answer said this twice: {repeated}. Each thing appears once
-in the list, however many notes mention it."""
-
 
 # --- The pass, which runs in compaction and nowhere else -------------------
 
@@ -576,29 +652,28 @@ def _project(entries: tuple[dict, ...]) -> str | None:
     return projects.pop() if len(projects) == 1 else None
 
 
-def _clean(raw: str) -> str:
-    """
-    Same treatment the four graphs give their syntheses, and the same
-    one compaction's llm_summary strategy has a paragraph about. No
-    grammar means the router's, so the model can answer with a routing
-    decision -- and here that decision would not be shown to anyone
-    who could see it was wrong, it would be WRITTEN INTO THE STORE as
-    a fact about the user.
-    """
-    text = strip_think_blocks(raw)
-    unwrapped = try_unwrap_router_json(text, "aggregate")
-    return (unwrapped if unwrapped is not None else text).strip()
-
-
-def run_pass(conn, *, max_df: float, min_sources: int) -> list[dict]:
+def run_pass(
+    conn, *, max_df: float, min_sources: int, write: bool = True
+) -> list[dict]:
     """
     Aggregate what can be aggregated, and report what happened.
+
+    *write* is what bench/rag_aggregate.py turns off to show what this
+    would do without doing it. It is a parameter of the pass rather
+    than a second implementation in the harness, because the thing
+    worth reading before a fold is what the fold WILL be, and a
+    harness that computes it separately is a harness that can be
+    right about a pass that is wrong.
 
     NOTHING IS WRITTEN UNLESS IT IS GOING TO REPLACE SOMETHING. Every
     gate is a comparison between texts, so all of them run BEFORE the
     entry is stored:
 
-      closure   a word from nowhere -- the subject is abandoned.
+      closure   a word from nowhere -- the subject is abandoned. It
+                cannot fire under this writer; it is the assertion
+                that says so.
+      repetition two details saying one thing in different words --
+                the subject is abandoned.
       coverage  a source whose detail went missing stays active.
       quorum    fewer than *min_sources* foldable sources left, and
                 the aggregate would be one more overlapping line in
@@ -609,9 +684,10 @@ def run_pass(conn, *, max_df: float, min_sources: int) -> list[dict]:
     Returns one dict per subject, whether it was written or not. The
     caller logs it; bench/rag_aggregate.py prints it.
 
-    NEVER RAISES on a model failure. The pass runs after a compaction
-    that has already happened and already committed; a provider that
-    is down must not turn that into an error the user reads.
+    NEVER RAISES. The pass runs after a compaction that has already
+    happened and already committed, so nothing here may turn that into
+    an error the user reads -- which mattered more when a provider
+    could be down, and still holds for a store that cannot be written.
     """
     entries = rag.hot_entries(conn)
     if len(entries) < min_sources:
@@ -623,74 +699,8 @@ def run_pass(conn, *, max_df: float, min_sources: int) -> list[dict]:
 
     report: list[dict] = []
     for subject in subjects(entries, freq, limit, min_sources):
-        report.append(_one(conn, subject, freq, limit, min_sources))
+        report.append(_one(conn, subject, freq, limit, min_sources, write))
     return report
-
-
-def _ask(
-    subject: Subject,
-    sources: list[str],
-    freq: Counter,
-    limit: int,
-    missing: list[str] | None = None,
-    said_twice: list[str] | None = None,
-) -> dict:
-    """One constrained call. Returns {"written": ...} or {"refused": ...}."""
-    prompt = PROMPT.format(subject=subject.term, sources="\n".join(sources))
-    if missing:
-        prompt += RETRY_MISSING.format(missing=", ".join(missing))
-    if said_twice:
-        prompt += RETRY_REPEATED.format(repeated=", ".join(said_twice))
-
-    try:
-        raw = call_llm(prompt, grammar=grammar(sources, freq, limit))
-    except ProviderError as e:
-        log.warning(
-            "aggregate: %r not written, the provider failed (%s)", subject.term, e
-        )
-        return {"written": None, "refused": "provider"}
-
-    written = _clean(raw)
-    if not written:
-        return {"written": None, "refused": "empty"}
-
-    # FIRST, before closure and before the bigram scan. A runaway is
-    # not a vocabulary finding and not a repetition finding, it is a
-    # decoding failure, and reporting it as seventeen repeated pairs
-    # buries what happened. Kept even though the grammar now
-    # terminates: a provider without GBNF has no terminator at all,
-    # which is the same reason `invented` stays.
-    budget = _RUNAWAY_FACTOR * sum(len(source) for source in sources)
-    if len(written) > budget:
-        log.warning(
-            "aggregate: %r ran away -- %d characters for %d of notes, which is "
-            "a decoding failure and not an aggregate",
-            subject.term,
-            len(written),
-            budget,
-        )
-        return {"written": written[:200], "refused": "runaway"}
-
-    strangers = invented(written, lexicon(sources, freq, limit))
-    if strangers:
-        log.warning(
-            "aggregate: %r not written -- it says %s, and no entry does. An "
-            "aggregate is a recombination of what is already stored.",
-            subject.term,
-            ", ".join(repr(s) for s in strangers),
-        )
-        return {"written": written, "refused": "closure", "invented": strangers}
-
-    twice = repeated(written, freq, limit)
-    if twice:
-        log.warning(
-            "aggregate: %r says %s twice -- the notes were concatenated, not merged",
-            subject.term,
-            ", ".join(repr(t) for t in twice),
-        )
-        return {"written": written, "refused": "repetition", "repeated": twice}
-
-    return {"written": written}
 
 
 def _coverage(
@@ -707,52 +717,139 @@ def _coverage(
     return foldable, held_back
 
 
-def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) -> dict:
+def _absorb(
+    conn,
+    subject: Subject,
+    speaker: int,
+    freq: Counter,
+    limit: int,
+    write: bool,
+    outcome: dict,
+) -> dict:
+    """
+    Fold a subject into the entry that already says all of it.
+
+    THE CHEAPEST FOLD THERE IS, and the safest. Nothing is composed,
+    nothing is stored, and the text that survives is one the user
+    typed -- so the two questions every other path has to answer here
+    have no content: there is no word from nowhere and no detail that
+    could go missing.
+
+    NO QUORUM AND NO BUDGET. Both exist to judge NEW TEXT. Quorum
+    refuses an entry that stands in for a single other entry, because
+    that is a rewrite of somebody's note; absorbing one note into
+    another rewrites nothing, and the block is one line shorter for
+    it. Budget compares what a line costs against what it saves, and
+    this one costs nothing.
+
+    THE NAMESPACE IS THE ONE THING IT STILL HAS TO CHECK. A project is
+    a namespace -- rag._already_stored says so from the other side --
+    and hiding an entry of one project behind an entry of another
+    makes it unreachable from the block under a name nobody filed it
+    with. Those sources stay active.
+
+    What this can do is fold a note into a longer note that contradicts
+    it, if the contradiction is spelled with words the shorter one also
+    uses. `distinct` is what stops that, one level down: a detail is
+    only ever dropped by a detail that contains EVERY one of its words,
+    so `n'a pas` can never be absorbed by `a`.
+    """
+    keeper = next(e for e in subject.entries if e["id"] == speaker)
+    foldable, held_back = [], {}
+    for entry in subject.entries:
+        if entry["id"] == speaker:
+            continue
+        if entry.get("project") != keeper.get("project"):
+            held_back[entry["id"]] = ["(another project)"]
+            continue
+        missing = uncovered(keeper["content"], entry["content"], freq, limit)
+        if missing:
+            held_back[entry["id"]] = missing
+        else:
+            foldable.append(entry["id"])
+
+    outcome = {**outcome, "written": keeper["content"], "into": speaker}
+    if not foldable:
+        return {**outcome, "refused": "quorum", "held_back": held_back}
+
+    if not write:
+        return {**outcome, "folds": foldable, "held_back": held_back}
+
+    return {
+        **outcome,
+        "folded": rag.supersede(conn, foldable, speaker),
+        "held_back": held_back,
+    }
+
+
+def _one(
+    conn,
+    subject: Subject,
+    freq: Counter,
+    limit: int,
+    min_sources: int,
+    write: bool = True,
+) -> dict:
+    """
+    One subject, from its entries to the line that speaks for them.
+
+    THE ORDER IS THE POINT. `merge` composes the line out of details
+    the sources already contain, then every gate compares that text to
+    those texts, and only then does anything reach the store. An
+    aggregate that would be one more overlapping line in the block
+    instead of one fewer is never written at all.
+
+    Closure comes first and can no longer fail -- see the module
+    docstring. It is kept where a gate on a model used to be, so that
+    a writer which one day composes a word rather than copying one is
+    stopped here rather than found later in the store.
+    """
     sources = subject.sources()
     outcome: dict = {"subject": subject.term, "sources": subject.ids}
+    merged = merge(subject.entries, subject.term)
 
-    attempt = _ask(subject, sources, freq, limit)
+    if merged.speaker is not None:
+        return _absorb(conn, subject, merged.speaker, freq, limit, write, outcome)
 
-    # ONE RETRY, for the two failures a second ask can actually fix.
-    #
-    # Repetition and coverage are both the model being imprecise about
-    # length -- saying a thing twice, or saying it once too briefly --
-    # and naming what went wrong costs one call against losing the
-    # fold. Closure is NOT retried: a word from nowhere is the model
-    # asserting something about the user, and asking again is asking
-    # it to guess again.
-    #
-    # Once. A gate that retries until it passes is not a gate.
-    if attempt.get("refused") == "repetition":
-        second = _ask(subject, sources, freq, limit, said_twice=attempt["repeated"])
-        if not second.get("refused"):
-            outcome["retried"] = attempt["repeated"]
-            attempt = second
+    written = merged.text
 
-    if attempt.get("refused"):
-        return {**outcome, **attempt}
-    written = attempt["written"]
+    strangers = invented(written, lexicon(sources, freq, limit))
+    if strangers:
+        log.warning(
+            "aggregate: %r not written -- it says %s, and no entry does. An "
+            "aggregate is a recombination of what is already stored.",
+            subject.term,
+            ", ".join(repr(s) for s in strangers),
+        )
+        return {
+            **outcome,
+            "written": written,
+            "refused": "closure",
+            "invented": strangers,
+        }
+
+    # Two details saying one thing in different words. Set arithmetic
+    # cannot merge `32 Go de RAM` with `mémoire de 32 Go` -- they share
+    # no word set and neither contains the other -- so the line would
+    # carry both. Refusing is the honest outcome: the block keeps two
+    # overlapping entries instead of gaining a third that repeats
+    # itself.
+    twice = repeated(written, freq, limit)
+    if twice:
+        log.warning(
+            "aggregate: %r would say %s twice -- two details say one thing in "
+            "different words, which is not something arithmetic can merge",
+            subject.term,
+            ", ".join(repr(t) for t in twice),
+        )
+        return {
+            **outcome,
+            "written": written,
+            "refused": "repetition",
+            "repeated": twice,
+        }
 
     foldable, held_back = _coverage(subject, written, freq, limit)
-
-    # The coverage half of that one retry. The model fails this gate
-    # by being brief: on 2026-09-11 the real store's NiPoGi group was
-    # refused because the sentence dropped the single word `matériel`
-    # -- the word docs/memory.md records as the reason #307 comes back
-    # at rank 1 on the word channel. The second answer goes through
-    # the same grammar and the same checks, so nothing is loosened.
-    if (
-        held_back
-        and not outcome.get("retried")
-        and len(foldable) < len(subject.entries)
-    ):
-        missing = sorted({word for words in held_back.values() for word in words})
-        retry = _ask(subject, sources, freq, limit, missing=missing)
-        if not retry.get("refused"):
-            second, second_held = _coverage(subject, retry["written"], freq, limit)
-            if len(second) > len(foldable):
-                written, foldable, held_back = retry["written"], second, second_held
-                outcome["retried"] = missing
 
     if len(foldable) < min_sources:
         return {
@@ -769,6 +866,15 @@ def _one(conn, subject: Subject, freq: Counter, limit: int, min_sources: int) ->
             **outcome,
             "written": written,
             "refused": "budget",
+            "tokens": (cost, saved),
+        }
+
+    if not write:
+        return {
+            **outcome,
+            "written": written,
+            "folds": [e["id"] for e in foldable],
+            "held_back": held_back,
             "tokens": (cost, saved),
         }
 
@@ -814,9 +920,14 @@ def maybe_aggregate() -> list[dict]:
     on every turn. Compaction is rare, already off the answer's
     critical path, and already the place this store is fed.
 
+    The pass no longer costs a model call, which removes the argument
+    about latency and leaves the one about the KV cache standing. A
+    block that changes between two recalls is re-prefilled whatever
+    wrote it.
+
     SWALLOWS EVERYTHING. A compaction that has already committed must
-    not be turned into an error the user reads because a model call
-    failed afterwards.
+    not be turned into an error the user reads because the pass that
+    runs after it did not work.
     """
     if not COMPACTION_AGGREGATE:
         return []
@@ -847,13 +958,3 @@ def maybe_aggregate() -> list[dict]:
             folded=folded,
         )
     return report
-
-
-#: Appended to PROMPT for the single retry. It names the words rather
-#: than repeating the instruction, because the instruction was already
-#: followed -- what the model produced was a correct sentence that
-#: happened to be shorter than the notes needed it to be.
-RETRY = """
-
-The sentence you write must also contain these words, which are in the
-notes above and must not be lost: {missing}"""

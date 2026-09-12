@@ -4,17 +4,23 @@ What the aggregation pass would fold, what it would refuse, and what
 the block weighs on either side of it.
 
     bench/in_container.sh rag_aggregate --db /tmp/real_copy.db
-    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db --llm
+    bench/in_container.sh rag_aggregate --db /tmp/real_copy.db --apply
 
-WITHOUT --llm THIS MAKES NO MODEL CALL AND WRITES NOTHING. It reads the
-deliberate entries, groups them by subject with the same arithmetic the
-pass uses, and prints what it found. That half is free, deterministic,
-and the half worth looking at first: if the grouping is wrong, nothing
-downstream can be right.
+NOTHING HERE CALLS A MODEL ANY MORE, and that is the finding this
+harness produced. Seven calls across two runs on 2026-09-11 wrote zero
+aggregates: the answer ran to the grammar's maximum item count every
+time, `nipogi` as its three notes concatenated and `steam` as a cycle
+of three repeated four times. The writer is arithmetic now, so the
+whole pass is free, and the dry run shows the exact line each subject
+would fold into rather than only the groups.
 
-WITH --llm IT WRITES TO THE DATABASE YOU POINT IT AT. One call per
-subject, then every gate, then the entries and the supersession links.
-That is why --db is required and has no default: point it at
+WITHOUT --apply IT WRITES NOTHING. It runs the real pass with the
+write turned off -- the same code, not a second copy of it in a
+harness -- and prints the line, the gate that would refuse it, and
+what the block would weigh.
+
+WITH --apply IT WRITES TO THE DATABASE YOU POINT IT AT. That is why
+--db is required and has no default: point it at
 /app/data/forge_rag.db and you are not measuring the pass, you are
 running it on production. bench/in_container.sh puts a fresh copy at
 /tmp/real_copy.db for exactly this reason.
@@ -25,13 +31,19 @@ WHAT THE COLUMNS MEAN
               that named them. The name only matters for reading this
               output; the group is what the pass acts on.
 
-  REFUSED     Which gate stopped it, if one did. `closure` means the
-              sentence said something no entry says -- on llama.cpp
-              the grammar makes that unsamplable, so seeing it here
-              means the grammar was not in force. `coverage` is
-              reported per source under HELD BACK, with the words that
-              went missing. `quorum` and `budget` mean the fold would
-              not have been worth making.
+  ABSORBED    No line was composed at all: one entry already carried
+              every detail of the others, so it speaks for them as it
+              stands. The cheapest fold there is, and the one with
+              nothing to read -- the surviving text is the user's own.
+
+  REFUSED     Which gate stopped it, if one did. `repetition` means
+              two details say one thing in different words, which set
+              arithmetic cannot merge -- the notes stay as they are.
+              `budget` means the fold would not have been worth
+              making. `closure`, `coverage` and `quorum` cannot fire
+              under a writer that only copies details somebody wrote;
+              seeing one is a finding about this module, not about
+              the store.
 
   BLOCK       Entries and tokens before and after. This is the number
               the tier exists to move, and the one the hot tier's cap
@@ -41,7 +53,10 @@ WHAT THE COLUMNS MEAN
 
 THERE IS DELIBERATELY NO SUGGESTED THRESHOLD, and no verdict. Every
 number this prints is a description of one store. What it cannot tell
-you is whether the sentences are TRUE, and no harness can: read them.
+you is whether the lines are TRUE, and no harness can: read them.
+Every word in them was typed by the person they describe, which is a
+strong property and not that one -- a true detail and another true
+detail can still be put side by side into a sentence nobody meant.
 """
 
 import argparse
@@ -52,9 +67,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True)
     parser.add_argument(
-        "--llm",
+        "--apply",
         action="store_true",
-        help="actually call the model and WRITE the result to --db",
+        help="WRITE the aggregates and the supersession links to --db",
     )
     parser.add_argument(
         "--max-df",
@@ -120,28 +135,31 @@ def main() -> int:
             print(f"    #{entry['id']}  {entry['content']}")
         print()
 
-    if not args.llm:
-        print(
-            "No --llm, so no sentence was written and nothing was changed. "
-            "Read the groups above first: if they are wrong, nothing the "
-            "model writes for them can be right."
-        )
-        conn.close()
-        return 0
-
-    print(f"--- writing to {args.db}\n")
-    report = aggregate.run_pass(conn, max_df=max_df, min_sources=min_sources)
+    if args.apply:
+        print(f"--- writing to {args.db}\n")
+    report = aggregate.run_pass(
+        conn, max_df=max_df, min_sources=min_sources, write=args.apply
+    )
 
     for item in report:
         print(f"SUBJECT  {item['subject']}  {item['sources']}")
-        if item.get("written"):
-            print(f"    wrote     {item['written']}")
+        if item.get("into"):
+            print(f"    ABSORBED  by #{item['into']}, which already says it all")
+        elif item.get("written"):
+            verb = "wrote    " if item.get("id") else "would say"
+            print(f"    {verb} {item['written']}")
         if item.get("refused"):
             print(f"    REFUSED   {item['refused']}")
             if item.get("invented"):
                 print(f"              words from nowhere: {item['invented']}")
         if item.get("folded"):
-            print(f"    FOLDED    {item['folded']} -> #{item['id']}")
+            # An absorbed subject folds into an entry that already
+            # existed, so the target is `into` and there is no `id`.
+            print(
+                f"    FOLDED    {item['folded']} -> #{item.get('id') or item['into']}"
+            )
+        if item.get("folds"):
+            print(f"    WOULD FOLD {item['folds']}")
         for source_id, missing in (item.get("held_back") or {}).items():
             print(f"    HELD BACK #{source_id}, missing {missing}")
         if item.get("tokens"):
@@ -149,18 +167,39 @@ def main() -> int:
             print(f"    tokens    {saved} folded into {cost}")
         print()
 
-    after = rag.hot_entries(conn)
-    after_t = tokens.estimate_tokens(hot_memory.render(after))
+    after = _block_after(rag.hot_entries(conn), report) if not args.apply else None
+    entries_after = after if after is not None else rag.hot_entries(conn)
+    after_t = tokens.estimate_tokens(hot_memory.render(entries_after))
+    label = "WOULD BE" if not args.apply else "AFTER   "
     print(f"BLOCK BEFORE  {before_n} entries, {before_t} tokens")
-    print(f"BLOCK AFTER   {len(after)} entries, {after_t} tokens")
+    print(f"BLOCK {label}  {len(entries_after)} entries, {after_t} tokens")
     print(f"HEADROOM      {RECALL_HOT_MAX_TOKENS - after_t} tokens under the budget")
     print()
     print(
-        "Read the sentences. Every gate here is arithmetic on words, and "
-        "none of them can tell you whether what was written is true."
+        "Read the lines. Every gate here is arithmetic on words, and none of "
+        "them can tell you whether what would be written is true."
     )
     conn.close()
     return 0
+
+
+def _block_after(entries: list[dict], report: list[dict]) -> list[dict]:
+    """
+    The block the reported folds would leave behind.
+
+    The dry run changes nothing, so the only honest "after" is one
+    computed from the report: the entries that would be superseded
+    drop out, and the lines that would be written take their place,
+    at the end, which is where rag.hot_entries reads a new row.
+    """
+    folded = {i for item in report for i in (item.get("folds") or [])}
+    kept = [e for e in entries if e["id"] not in folded]
+    written = [
+        {"kind": "fact", "content": item["written"], "project": None}
+        for item in report
+        if item.get("folds") and not item.get("into")
+    ]
+    return kept + written
 
 
 if __name__ == "__main__":
