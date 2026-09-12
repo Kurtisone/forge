@@ -43,6 +43,7 @@ lived.
 | **v3.18** | done | Memory hot tier: the deliberate store goes in whole, unsearched — [detail](#v318--memory-hot-tier) |
 | **v3.19** | done | Aggregation by subject, composed in code rather than written by a model — [detail](#v319--aggregation-by-subject) |
 | **v3.20** | done | Five faults found in anger, plus 3.20.1 and 3.20.2 — [detail](#v320--five-faults-found-in-anger) |
+| **v3.21** | done | Forge stops assuming which model it is talking to, and the trace stops assuming a run answered — [detail](#v321--forge-stops-assuming-which-model-answered) |
 | **Kernel L2** | this branch | Capability layer and a deterministic Policy Engine — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [The Kernel layer](architecture.md#the-kernel-layer). Sits on the architectural maturity axis, not this product roadmap |
 
 ---
@@ -285,6 +286,53 @@ loop and a good file. Measured against 72 recorded replies: four
 decisions change, all four malformed output that used to reach the user,
 nothing from the 9B touched. The five left are reasoning leaked into
 prose, which nothing text-based catches
+
+### v3.21 — Forge stops assuming which model answered
+
+Four changes that come from one thing happening: the served model was
+swapped for the first time, and every place Forge had quietly assumed
+there was only ever one came apart at once.
+
+The prompt goes to `/completion` as raw text, so no chat template is
+applied and a model whose template is ChatML runs off-distribution from
+its first token. `LLAMA_CPP_APPLY_TEMPLATE` asks llama-server's
+`/apply-template` once what the loaded model wants and reuses the
+answer, so nothing in Forge names a format. It ships **off** and the
+reason is the cost, not caution: a constant suffix after the growing
+prompt breaks v3.12's pure-append property outright, 11/11 to 0/11, for
+a divergent tail of 33 characters -- about eight tokens a turn against
+the thousands v3.12 was fighting. Measured on the real flag: malformed
+envelopes 3 to 0, routing score 19 to 19, seventeen decisions out of
+thirty-one changed. It fixes a shape, not a quality, which is exactly
+why it is a knob and not a default.
+
+`LLM_MODEL` is a label that under llama.cpp is never even sent, so a
+trace recording it recorded an assumption. Every backend already returns
+what actually answered and Forge dropped it at the provider boundary --
+the same thing that happened to token counts, and the reason
+`types.Completion` exists. `RunMetrics.models` is a list because one run
+is several calls and nothing guarantees they were served by the same
+thing.
+
+Research names the pages it was built from, listed in code from the URLs
+the graph opened rather than asked of the model: a plausible URL a model
+produced is indistinguishable from one it read. Pages actually opened
+are named; every other search result contributed a snippet and is
+counted, never named.
+
+And a run that answered nothing was drawn green. `ok` is a rendering
+directive -- "surface as message, not crash" is written at every site
+that sets it -- and `_dispatch` returns ok=True for any tool that
+returns a string without raising, whatever the string says. Observed
+live: the router invented a hostname, `web_fetch` answered `[error]
+could not resolve host`, the indexing path recognised it and the trace
+drew a tick, three log lines apart. Setting ok False was not the fix
+either: `remember` derives from it, and 3.20.1 is the bug report from
+the last time those two were confused. The verdict is a separate field
+now, computed once on the single exit path -- once being structural,
+since `outcome.taken()` clears on read and a second caller would
+disagree with the first by construction. The web UI gained the third
+state it always needed.
 
 ---
 
