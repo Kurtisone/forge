@@ -42,6 +42,30 @@ LLAMA_CPP_USE_GRAMMAR = _bool("LLAMA_CPP_USE_GRAMMAR", "true")
 LLAMA_CPP_ID_SLOT = int(os.getenv("LLAMA_CPP_ID_SLOT", "0"))
 LLAMA_CPP_CACHE_PROMPT = _bool("LLAMA_CPP_CACHE_PROMPT", "true")
 
+# --- Chat template (v3.21) ------------------------------------------------
+# Forge posts a RAW prompt to /completion, so no chat template is applied
+# and the model sees plain text where its training saw role markers.
+# That was invisible while one model was served: Qwen3.5-9B, which Forge
+# was tuned around, handles it. Measured 2026-09-12 on a second model
+# whose template is ChatML, the same prompt wrapped in that model's own
+# framing took malformed replies -- a router envelope restated inside
+# the content of another -- from four in thirty-six to ZERO, in all
+# three arms carrying the framing and neither arm without it.
+#
+# On, Forge asks llama-server's /apply-template ONCE what the loaded
+# model wants, splits the answer around a sentinel and reuses the prefix
+# and suffix for the life of the process. Nothing about ChatML is
+# written down here; the server is asked, so this works for whatever is
+# loaded rather than for the models someone thought of.
+#
+# OFF by default, and the cost is why rather than caution: a constant
+# suffix AFTER the growing body breaks the pure-append property v3.12
+# bought, 11/11 transitions to 0/11. The divergent tail is 33 characters
+# -- about eight tokens recomputed a turn, against the thousands v3.12
+# was fighting -- so it is cheap, not free, and on a single-model
+# deployment it buys nothing measured. Turn it on when you change model.
+LLAMA_CPP_APPLY_TEMPLATE = _bool("LLAMA_CPP_APPLY_TEMPLATE", "false")
+
 # --- OpenRouter -----------------------------------------------------------
 # These were referenced by providers/llm_provider.py but never defined,
 # which meant FORGE_PROVIDER=openrouter could never actually work.
