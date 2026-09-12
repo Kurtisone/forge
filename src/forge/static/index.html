@@ -560,6 +560,24 @@ checkHealth()
 loadHistory()
 refreshContext()
 
+// The model name used to be read once, here, and never again -- so
+// swapping the served model left the header naming the old one for the
+// life of the tab, and the only way to find out was to reload. Reported
+// after an actual swap: "I had to refresh to see the change".
+//
+// Re-read on the two occasions it can have changed without this page
+// knowing, and on no others. After a turn, because that answer came
+// from whatever is loaded now. And on coming back to the tab, because
+// swapping a model means leaving this page for a terminal and
+// returning -- which is the reported case exactly.
+//
+// Deliberately NOT a setInterval: a tab left open overnight would poll
+// a llama-server it has nothing to ask, and the two events above are
+// the only ones that carry information.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkHealth()
+})
+
 // ── Health check ──────────────────────────────────────────────────
 // ── Context gauge ─────────────────────────────────────────────────
 // Two numbers live here and they answer different questions, so they
@@ -1094,6 +1112,7 @@ async function sendChat() {
   // turn is reflected immediately.
   await loadHistory()
   await refreshContext()
+  checkHealth()
 
   _busy = false
   document.getElementById('send-btn').disabled = false
