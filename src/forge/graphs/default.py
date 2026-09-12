@@ -124,7 +124,7 @@ def build() -> Graph:
 
     g.add_node("router", _router_node)
     g.add_node("dispatch", _dispatch_node)
-    g.add_node("fallback", _fallback_node)
+    g.add_node("fallback", _fallback_node, answers=False)
 
     # router → dispatch (always, even if router marked ok=False — dispatch
     # will detect the missing decision and mark itself failed)

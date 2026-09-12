@@ -466,7 +466,7 @@ def build() -> Graph:
     g.add_node("read_file", _read_file_node)
     g.add_node("run_tests", _run_tests_node)
     g.add_node("llm_review", _llm_review_node)
-    g.add_node("error", _error_node)
+    g.add_node("error", _error_node, answers=False)
 
     # Order matters -- Graph takes the first matching edge (see
     # graph.py docstring). run_tests is only visited when a

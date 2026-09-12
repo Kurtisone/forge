@@ -681,7 +681,7 @@ def build() -> Graph:
     g = Graph("recall", max_steps=4)
     g.add_node("recall", _recall_node)
     g.add_node("synthesize", _synthesize_node)
-    g.add_node("error", _error_node)
+    g.add_node("error", _error_node, answers=False)
 
     g.add_edge("recall", "synthesize", condition=lambda s: s.ok)
     g.add_edge("recall", "error", condition=lambda s: not s.ok)

@@ -147,3 +147,96 @@ class TestRecallReportsItself:
         # else keeps being indexed exactly as before.
         assert outcome.pending() is None
         assert Orchestrator()._indexable("Le port est 8080.") is True
+
+
+class TestAGraphThatEndsWithoutAnswering:
+    """
+    The structural half, generalised past recall.
+
+    Every graph's refusal node sets `ok = True` on purpose, so the user
+    reads a message rather than a crash -- and that is exactly what
+    erases the fact the store needs. recall.py was told to report it in
+    August; research, review, sysadmin and the default fallback were
+    not, and the real store shows what that cost: on 2026-09-12, 22 of
+    its 195 archived entries are the assistant refusing.
+
+    Declared on the node rather than derived from its output, because
+    deriving it from the output is the wording test that already lives
+    in forge/non_answer.py. The two halves are worth having precisely
+    because they fail differently.
+    """
+
+    def _graph(self, answers):
+        from forge.graph import Graph
+
+        def node(state):
+            state.final_output = "rien"
+            return state
+
+        g = Graph("probe")
+        g.add_node("only", node, answers=answers)
+        return g
+
+    def test_ending_on_a_node_that_does_not_answer_reports_it(self):
+        self._graph(answers=False).run("pourquoi ?")
+
+        assert outcome.pending() is not None
+
+    def test_ending_anywhere_else_reports_nothing(self):
+        self._graph(answers=True).run("pourquoi ?")
+
+        assert outcome.pending() is None
+
+    def test_the_reason_names_the_graph_and_the_node(self):
+        self._graph(answers=False).run("pourquoi ?")
+
+        reason = outcome.pending()
+        assert "probe" in reason
+        assert "only" in reason
+
+    def test_research_with_nothing_found_reports_it(self, monkeypatch):
+        from forge.graphs import research
+
+        monkeypatch.setattr(research.web_search, "search", lambda q: [])
+
+        state = research.build().run("pourquoi searxng a redémarré")
+
+        assert non_answer.is_non_answer(state.final_output)
+        assert outcome.pending() is not None
+
+    def test_a_research_answer_is_still_indexed(self, monkeypatch):
+        from forge.graphs import research
+
+        monkeypatch.setattr(
+            research.web_search,
+            "search",
+            lambda q: [{"title": "t", "url": "http://x", "snippet": "s"}],
+        )
+        monkeypatch.setattr(research.web_fetch, "run", lambda url: "le contenu")
+        monkeypatch.setattr(
+            research, "call_llm", lambda p, grammar=None: "SearXNG a redémarré."
+        )
+
+        research.build().run("pourquoi searxng a redémarré")
+
+        assert outcome.pending() is None
+
+    def test_an_unresolvable_sysadmin_target_reports_it(self, monkeypatch):
+        """
+        `#19` and `#26` of the real store, both of them the deterministic
+        node that exists because a model asked to diagnose the wrong
+        subsystem will do it fluently. Both were indexed.
+        """
+        from forge.graphs import sysadmin
+
+        # _run_fixed is sysadmin's one external boundary -- same level
+        # tests/test_sysadmin.py mocks at.
+        monkeypatch.setattr(sysadmin, "_run_fixed", lambda cmd, timeout: "")
+
+        state = sysadmin.build().run(
+            "pourquoi forge-inexistant plante ?",
+            initial_context={"target_hint": "forge-inexistant", "question": None},
+        )
+
+        assert non_answer.is_non_answer(state.final_output)
+        assert outcome.pending() is not None

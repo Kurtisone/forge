@@ -644,8 +644,8 @@ def build() -> Graph:
     g = Graph("sysadmin", max_steps=6)
     g.add_node("discover", _discover_node)
     g.add_node("collect", _collect_node)
-    g.add_node("target_missed", _target_missed_node)
-    g.add_node("collect_failed", _collect_failed_node)
+    g.add_node("target_missed", _target_missed_node, answers=False)
+    g.add_node("collect_failed", _collect_failed_node, answers=False)
     g.add_node("synthesize", _synthesize_node)
 
     g.add_edge("discover", "collect")

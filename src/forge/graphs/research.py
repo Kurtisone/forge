@@ -260,7 +260,7 @@ def build() -> Graph:
     g.add_node("search", _search_node)
     g.add_node("fetch", _fetch_node)
     g.add_node("synthesize", _synthesize_node)
-    g.add_node("error", _error_node)
+    g.add_node("error", _error_node, answers=False)
 
     g.add_edge("search", "fetch", condition=lambda s: s.ok)
     g.add_edge("search", "error", condition=lambda s: not s.ok)
