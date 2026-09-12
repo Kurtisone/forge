@@ -1,5 +1,5 @@
 """
-Per-run inference accounting.
+Per-run inference accounting: what a run cost, and what answered it.
 
 The problem this solves is one of reach, not of measurement. Usage is
 known at the provider boundary (see types.Completion), but the object
@@ -52,10 +52,25 @@ class RunMetrics:
     # expensive because the context is bloated or because it took many
     # steps.
     prompt_sizes: list[int] = field(default_factory=list)
+    # Every model that answered during this run, in first-seen order.
+    # A LIST and not one field, because one run is several calls -- a
+    # router decision and a graph synthesis at least -- and nothing
+    # guarantees they were served by the same thing. Under llama.cpp
+    # today they always are; a model swapped mid-run, an OpenRouter
+    # request routed to a different provider on the retry, or a future
+    # per-graph provider would each make a single field quietly wrong.
+    # A list that usually holds one element costs nothing and cannot
+    # lie.
+    models: list[str] = field(default_factory=list)
 
-    def add(self, usage: Usage, elapsed_ms: int) -> None:
+    def add(self, usage: Usage, elapsed_ms: int, model: str = "") -> None:
         self.llm_calls += 1
         self.llm_ms += elapsed_ms
+        # De-duplicated in order rather than appended per call: the
+        # question this answers is "which models answered", and ten
+        # copies of one name answers it worse than one copy does.
+        if model and model not in self.models:
+            self.models.append(model)
         if usage.prompt_tokens is not None:
             self.prompt_tokens = (self.prompt_tokens or 0) + usage.prompt_tokens
             self.prompt_sizes.append(usage.prompt_tokens)
@@ -78,6 +93,7 @@ class RunMetrics:
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "max_prompt_tokens": max(self.prompt_sizes) if self.prompt_sizes else None,
+            "models": list(self.models),
         }
 
 
@@ -93,7 +109,7 @@ def start_run() -> RunMetrics:
     return m
 
 
-def record(usage: Usage, elapsed_ms: int) -> None:
+def record(usage: Usage, elapsed_ms: int, model: str = "") -> None:
     """
     Add one completion to the current run's totals.
 
@@ -104,7 +120,7 @@ def record(usage: Usage, elapsed_ms: int) -> None:
     m = _current.get()
     if m is None:
         return
-    m.add(usage, elapsed_ms)
+    m.add(usage, elapsed_ms, model)
 
 
 def snapshot() -> dict | None:

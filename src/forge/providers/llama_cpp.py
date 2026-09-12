@@ -226,6 +226,12 @@ def call(url: str, model: str, prompt: str, grammar: str | None = None) -> Compl
     # prompt_n is already resolved above (tokens_evaluated, falling back
     # to timings.prompt_n) for the cache log -- reuse it rather than
     # re-deriving it with a different precedence.
+    # /completion answers with the model that produced THIS text, so no
+    # second request and no window in which /props could disagree with
+    # what actually ran. Basename because the field is a container path
+    # (/models/Foo.gguf) and the directory is this deployment's, not
+    # information about the model.
+    served = data.get("model")
     return Completion(
         text=content,
         usage=Usage(
@@ -233,4 +239,5 @@ def call(url: str, model: str, prompt: str, grammar: str | None = None) -> Compl
             completion_tokens=data.get("tokens_predicted", timings.get("predicted_n")),
             cached_tokens=tokens_cached,
         ),
+        model=served.rsplit("/", 1)[-1] if isinstance(served, str) else "",
     )

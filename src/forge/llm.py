@@ -67,13 +67,18 @@ def call_llm(prompt: str, grammar: str | None = None) -> str:
         raise ProviderError(f"unexpected provider failure: {e}") from e
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
-    metrics.record(result.usage, elapsed_ms)
+    metrics.record(result.usage, elapsed_ms, result.model)
     log.event(
         "llm.response",
         elapsed_ms=elapsed_ms,
         length=len(result.text),
         prompt_tokens=result.usage.prompt_tokens,
         completion_tokens=result.usage.completion_tokens,
+        # What answered, not what was asked for. The llm.call event
+        # above logs LLM_MODEL, which under llama.cpp is a label that
+        # is never sent anywhere -- the two lines disagreeing is the
+        # signal that the label is stale.
+        model=result.model,
     )
     _check_estimate(prompt, result.usage.prompt_tokens)
     return result.text

@@ -50,4 +50,8 @@ def call(url: str, api_key: str, model: str, prompt: str) -> Completion:
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
         ),
+        # OpenRouter routes: ask for a model and a provider of its
+        # choosing serves it, so the name that comes back is the only
+        # one that describes what ran.
+        model=data.get("model") or "",
     )
