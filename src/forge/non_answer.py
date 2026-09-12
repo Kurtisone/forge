@@ -118,6 +118,20 @@ COLLECT_FAILED_PREFIX = "[collecte impossible] "
 # seven fixtures and the three arms that failed the same way.
 NOTHING_COLLECTED_PREFIX = "[rien à lire] "
 
+# The two path guards in the orchestrator, which refuse a tool call
+# whose path the model invented or whose "path" is pasted text. They
+# answer the user with a question -- "which file do you mean?" -- so
+# the run is a success and the exchange belongs in the conversation;
+# what it does not belong in is the vector store, where a refusal is a
+# near-copy of the question that provoked it.
+#
+# Found on 2026-09-12 from the other end: a user reported that the
+# turn left NO trace in the web UI, question included. The guard was
+# returning ok=True with remember=False, and the UI rebuilds the
+# thread from the server after every turn.
+NO_PATH_PREFIX = "I don't have a real path for"
+NOT_A_PATH_PREFIX = "What the router put in"
+
 # The delegation flow re-asking mid-job. These two are French
 # sentences rather than bracketed markers, which is a weaker test and
 # is accepted for the reason stated under `startswith` below: a chat
@@ -142,6 +156,8 @@ _PREFIXES = (
     NOTHING_COLLECTED_PREFIX,
     DID_NOT_UNDERSTAND_PREFIX,
     NOT_YOUR_DECISION_PREFIX,
+    NO_PATH_PREFIX,
+    NOT_A_PATH_PREFIX,
 )
 _EXACT = (BACKEND_UNAVAILABLE, NOTHING_CLOSE_ENOUGH)
 
