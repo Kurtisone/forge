@@ -26,6 +26,13 @@ NIPOGI = [
     "Le NiPoGi AM06PRO a un processeur Ryzen 5500U et 32 Go de RAM",
 ]
 
+#: The real store's `steam` subject, where the older note is the
+#: newer one's own opening words.
+STEAM = [
+    "Possède un Steam Deck",
+    ("Possède un Steam Deck sous SteamOS, fait tourner des conteneurs Podman dessus"),
+]
+
 #: Stands in for the archived half of a real store, so that `de`, `le`,
 #: `a`, `et`, `un` and `avec` are common enough to identify nothing.
 FILLER = [
@@ -283,3 +290,81 @@ def test_a_store_that_cannot_be_written_is_not_an_error_the_user_reads(
     monkeypatch.setattr(aggregate.rag, "get_connection", lambda: 1 / 0)
 
     assert aggregate.maybe_aggregate() == []
+
+
+# --- The fold that writes nothing ------------------------------------------
+
+
+def test_a_note_is_absorbed_by_the_one_that_already_says_it(tmp_path, monkeypatch):
+    """
+    The real store's `steam` subject, which the budget gate refused as
+    an aggregate and is right to: the line it would have written was
+    #317 with a head glued on. Absorbing costs nothing, invents
+    nothing, and leaves the user's own sentence in the block.
+    """
+    conn = _store(
+        tmp_path / "steam.db",
+        monkeypatch,
+        STEAM,
+    )
+
+    report = _run(conn)
+
+    assert report[0]["into"] == 2
+    assert report[0]["folded"] == [1]
+    assert [e["content"] for e in rag.hot_entries(conn)] == [STEAM[1]]
+    conn.close()
+
+
+def test_absorbing_writes_no_new_entry(tmp_path, monkeypatch):
+    conn = _store(
+        tmp_path / "steam.db",
+        monkeypatch,
+        STEAM,
+    )
+    before = conn.execute("SELECT count(*) FROM memory_entries").fetchone()[0]
+
+    _run(conn)
+
+    assert conn.execute("SELECT count(*) FROM memory_entries").fetchone()[0] == before
+    conn.close()
+
+
+def test_absorption_needs_no_quorum(tmp_path, monkeypatch):
+    """
+    Quorum refuses an entry that stands in for a single other entry,
+    because that is a rewrite of somebody's note. Absorption rewrites
+    nothing, so one source is enough -- and this is the case where the
+    two rules differ, with min_sources at its default of two.
+    """
+    conn = _store(
+        tmp_path / "steam.db",
+        monkeypatch,
+        STEAM,
+    )
+
+    report = _run(conn, min_sources=2)
+
+    assert report[0].get("refused") is None
+    assert len(report[0]["folded"]) == 1
+    conn.close()
+
+
+def test_an_entry_of_another_project_is_not_hidden_behind_one(tmp_path, monkeypatch):
+    """
+    A project is a namespace. An entry folded into an entry of another
+    project drops out of the block under a name nobody filed it with.
+    """
+    monkeypatch.setattr(rag, "RAG_DB_FILE", str(tmp_path / "projects.db"))
+    monkeypatch.setattr(rag, "_embed", lambda text: [0.1] * rag.EMBEDDING_DIM)
+    conn = rag.get_connection()
+    rag.remember(conn, kind="fact", content=STEAM[0], project="jeux")
+    rag.remember(conn, kind="fact", content=STEAM[1], project="forge")
+    for content in FILLER:
+        rag.remember(conn, kind="history_summary", content=content, project=None)
+
+    report = _run(conn)
+
+    assert report[0]["refused"] == "quorum"
+    assert len(rag.hot_entries(conn)) == 2
+    conn.close()

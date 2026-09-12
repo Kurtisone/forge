@@ -522,6 +522,11 @@ class Merged:
     head: str
     details: tuple[Detail, ...]
 
+    #: The entry that already carries every surviving detail, when one
+    #: does. Then there is nothing to write: that entry can speak for
+    #: the others as it stands. See `_absorb`.
+    speaker: int | None = None
+
     @property
     def text(self) -> str:
         return f"{self.head} : " + ", ".join(d.text for d in self.details) + "."
@@ -547,19 +552,37 @@ def merge(entries: tuple[dict, ...], term: str) -> Merged:
     than the grammar that used to enforce it, because a grammar
     constrains which words may be emitted and this constrains which
     SENTENCES may be.
+
+    AND SOMETIMES THERE IS NOTHING TO WRITE. When every surviving
+    detail turns out to belong to one entry, that entry already says
+    the whole subject and the others are older, shorter versions of
+    it -- `Possède un Steam Deck` against `Possède un Steam Deck sous
+    SteamOS, fait tourner des conteneurs Podman dessus`. `speaker`
+    names it, and `_absorb` folds the rest into it without composing
+    anything at all. The head is allowed to come from the speaker or
+    to be the subject's own name; a head taken from ANOTHER entry
+    means that entry said something this one does not, so the line
+    gets written after all.
     """
     head: str | None = None
+    head_source: int | None = None
     collected: list[Detail] = []
     for entry in entries:
         label, details = labelled(entry["content"])
         if label is not None:
             if head is None:
-                head = label
+                head, head_source = label, entry["id"]
             else:
                 collected.append(Detail(label, entry["id"]))
         collected.extend(Detail(text, entry["id"]) for text in details)
 
-    return Merged(head or surface(term, entries), tuple(distinct(collected)))
+    survivors = tuple(distinct(collected))
+    written_by = {d.source for d in survivors}
+    speaker = None
+    if len(written_by) == 1 and head_source in (None, *written_by):
+        speaker = written_by.pop()
+
+    return Merged(head or surface(term, entries), survivors, speaker)
 
 
 #: How much shorter an aggregate has to be before folding is worth it.
@@ -662,6 +685,71 @@ def _coverage(
     return foldable, held_back
 
 
+def _absorb(
+    conn,
+    subject: Subject,
+    speaker: int,
+    freq: Counter,
+    limit: int,
+    write: bool,
+    outcome: dict,
+) -> dict:
+    """
+    Fold a subject into the entry that already says all of it.
+
+    THE CHEAPEST FOLD THERE IS, and the safest. Nothing is composed,
+    nothing is stored, and the text that survives is one the user
+    typed -- so the two questions every other path has to answer here
+    have no content: there is no word from nowhere and no detail that
+    could go missing.
+
+    NO QUORUM AND NO BUDGET. Both exist to judge NEW TEXT. Quorum
+    refuses an entry that stands in for a single other entry, because
+    that is a rewrite of somebody's note; absorbing one note into
+    another rewrites nothing, and the block is one line shorter for
+    it. Budget compares what a line costs against what it saves, and
+    this one costs nothing.
+
+    THE NAMESPACE IS THE ONE THING IT STILL HAS TO CHECK. A project is
+    a namespace -- rag._already_stored says so from the other side --
+    and hiding an entry of one project behind an entry of another
+    makes it unreachable from the block under a name nobody filed it
+    with. Those sources stay active.
+
+    What this can do is fold a note into a longer note that contradicts
+    it, if the contradiction is spelled with words the shorter one also
+    uses. `distinct` is what stops that, one level down: a detail is
+    only ever dropped by a detail that contains EVERY one of its words,
+    so `n'a pas` can never be absorbed by `a`.
+    """
+    keeper = next(e for e in subject.entries if e["id"] == speaker)
+    foldable, held_back = [], {}
+    for entry in subject.entries:
+        if entry["id"] == speaker:
+            continue
+        if entry.get("project") != keeper.get("project"):
+            held_back[entry["id"]] = ["(another project)"]
+            continue
+        missing = uncovered(keeper["content"], entry["content"], freq, limit)
+        if missing:
+            held_back[entry["id"]] = missing
+        else:
+            foldable.append(entry["id"])
+
+    outcome = {**outcome, "written": keeper["content"], "into": speaker}
+    if not foldable:
+        return {**outcome, "refused": "quorum", "held_back": held_back}
+
+    if not write:
+        return {**outcome, "folds": foldable, "held_back": held_back}
+
+    return {
+        **outcome,
+        "folded": rag.supersede(conn, foldable, speaker),
+        "held_back": held_back,
+    }
+
+
 def _one(
     conn,
     subject: Subject,
@@ -686,7 +774,12 @@ def _one(
     """
     sources = subject.sources()
     outcome: dict = {"subject": subject.term, "sources": subject.ids}
-    written = merge(subject.entries, subject.term).text
+    merged = merge(subject.entries, subject.term)
+
+    if merged.speaker is not None:
+        return _absorb(conn, subject, merged.speaker, freq, limit, write, outcome)
+
+    written = merged.text
 
     strangers = invented(written, lexicon(sources, freq, limit))
     if strangers:

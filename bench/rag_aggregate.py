@@ -31,6 +31,11 @@ WHAT THE COLUMNS MEAN
               that named them. The name only matters for reading this
               output; the group is what the pass acts on.
 
+  ABSORBED    No line was composed at all: one entry already carried
+              every detail of the others, so it speaks for them as it
+              stands. The cheapest fold there is, and the one with
+              nothing to read -- the surviving text is the user's own.
+
   REFUSED     Which gate stopped it, if one did. `repetition` means
               two details say one thing in different words, which set
               arithmetic cannot merge -- the notes stay as they are.
@@ -138,7 +143,9 @@ def main() -> int:
 
     for item in report:
         print(f"SUBJECT  {item['subject']}  {item['sources']}")
-        if item.get("written"):
+        if item.get("into"):
+            print(f"    ABSORBED  by #{item['into']}, which already says it all")
+        elif item.get("written"):
             verb = "wrote    " if item.get("id") else "would say"
             print(f"    {verb} {item['written']}")
         if item.get("refused"):
@@ -186,7 +193,7 @@ def _block_after(entries: list[dict], report: list[dict]) -> list[dict]:
     written = [
         {"kind": "fact", "content": item["written"], "project": None}
         for item in report
-        if item.get("folds")
+        if item.get("folds") and not item.get("into")
     ]
     return kept + written
 

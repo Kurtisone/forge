@@ -244,3 +244,49 @@ def test_an_aggregate_can_be_read_back_as_a_note_and_merged_again():
     label, details = aggregate.labelled(first.text)
     assert label == "Matériel"
     assert details[0] == "Le NiPoGi a 32 Go de RAM"
+
+
+# --- When there is nothing to write ----------------------------------------
+
+
+def test_a_note_contained_in_another_names_the_one_that_speaks_for_it():
+    """
+    `Possède un Steam Deck` against the same sentence continued. There
+    is no line to compose here: one of the two already says the whole
+    subject, and composing one anyway would replace a sentence the
+    user typed with a rearrangement of it.
+    """
+    merged = aggregate.merge(
+        (
+            entry(1, "Possède un Steam Deck"),
+            entry(
+                317,
+                "Possède un Steam Deck sous SteamOS, fait tourner des "
+                "conteneurs Podman dessus",
+            ),
+        ),
+        "steam",
+    )
+    assert merged.speaker == 317
+
+
+def test_two_notes_that_each_say_something_new_have_no_speaker():
+    merged = aggregate.merge(NIPOGI, "nipogi")
+    assert merged.speaker is None
+
+
+def test_a_head_taken_from_another_entry_means_there_is_a_line_to_write():
+    """
+    The label is a word of its own source. If it came from an entry
+    that contributed nothing else, that entry still said something the
+    speaker does not, and absorbing it would lose it.
+    """
+    merged = aggregate.merge(
+        (
+            entry(1, "Machines : le Dell R710"),
+            entry(2, "Le Dell R710 est au garage, 64 Go de RAM"),
+        ),
+        "r710",
+    )
+    assert merged.speaker is None
+    assert merged.head == "Machines"
