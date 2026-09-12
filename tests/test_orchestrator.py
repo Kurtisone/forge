@@ -342,7 +342,11 @@ def test_long_tool_output_is_persisted_in_full(monkeypatch, tmp_path):
     monkeypatch.setattr(orch_mod, "MEMORY_ENABLED", True)
     monkeypatch.setattr(memory_mod, "MEMORY_FILE", str(tmp_path / "memory.json"))
 
-    long_answer = "line\n" * 200  # 1000 chars, well past the old 300-char cap
+    # Numbered rather than 200 identical lines: the filler here is
+    # incidental (the subject is persistence, not content), and an
+    # identical-line block is a repetition loop that the router parser
+    # now rejects on purpose -- see tests/test_parser_json_path_guards.
+    long_answer = "".join(f"line {i}\n" for i in range(200))  # ~1500 chars
     monkeypatch.setattr(
         orch_mod,
         "call_llm",

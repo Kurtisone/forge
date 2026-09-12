@@ -2,7 +2,10 @@
 Turns raw router LLM output into a validated RouterDecision.
 
 Extraction cascade (applied in order):
-0. Repetition loop guard  ("Allo Allo Allo..." → placeholder)
+0. Repetition loop guard  ("Allo Allo Allo..." → placeholder).
+   Steps 0 and 4 also apply INSIDE a valid JSON object's
+   content, which is the path the grammar guarantees and the
+   one that used to be unguarded.
 1. Last valid JSON object  (takes the LAST, not first, complete
    {"tool":...} block — models tend to echo earlier JSON from
    history then generate a better answer at the end)
@@ -15,6 +18,7 @@ Extraction cascade (applied in order):
 
 import json
 import re
+from collections import Counter
 
 from forge.logger import log
 from forge.types import RouterDecision
@@ -46,7 +50,14 @@ _CODE_FENCE = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
 # Phrases that only appear in the prompt template, never in a real answer.
 # If the model echoes these, it has confused prompt with output.
 _PROMPT_LEAK_MARKERS = [
-    "No explanation or text outside the JSON",
+    # "No explanation or text outside the JSON" used to head this list
+    # and was DEAD: the prompt says "NEVER add text outside the JSON"
+    # and has for some time, so the marker could not fire on any output
+    # any model could produce. Nothing failed -- a leak marker that
+    # matches nothing is silent by nature. test_parser_leak_markers.py
+    # now asserts every marker here appears verbatim in a prompt this
+    # code actually builds, which is the only direction of this drift a
+    # test can close.
     "NEVER add text outside the JSON",
     'WHAT "content" MEANS PER TOOL',
     "Stop generating immediately after the closing brace",
@@ -59,6 +70,19 @@ _PROMPT_LEAK_MARKERS = [
     # cannot plausibly appear in a real answer.
     "you answered:",
     "is the new message you must answer now",
+    # The search-chaining instruction, added 2026-09-12 because it is
+    # the one that actually leaked. LFM2.5-8B-A1B answered fixture e02
+    # with this sentence and the two after it, verbatim, inside a valid
+    # JSON envelope -- so it passed the grammar, passed the cascade, and
+    # would have been spoken to the user as the answer to their
+    # question. It was in no version of this list.
+    #
+    # The other direction stays open and is worth naming rather than
+    # implying otherwise: this is a closed set with no way to discover
+    # its own members, the same shape of gap forge/non_answer.py
+    # measured at 22 refusals recognised out of 22 missed. Every
+    # sentence in the prompt is a candidate; six are registered.
+    "The search results above already contain titles",
 ]
 
 # Max chars shown to the user for a plain-text fallback.
@@ -161,12 +185,78 @@ def _all_json_objects(text: str) -> list[dict]:
     return results
 
 
-def _is_repetition_loop(text: str, threshold: float = 0.6) -> bool:
+def _is_repetition_loop(text: str, threshold: float = 0.6, max_ngram: int = 6) -> bool:
+    """
+    Whether one repeating unit covers most of the text.
+
+    The unit is up to `max_ngram` words, not one word, and that is the
+    whole point. Measured on 2026-09-12 against LFM2.5-8B-A1B, which
+    produced "les dernieres mises a jour de mises a jour de mises a
+    jour de ..." -- a textbook loop that the single-token version of
+    this function could not see and never could have. A share of ONE
+    token is bounded by the length of the repeating unit: a two-word
+    loop caps that share at 50%, a three-word loop at 33%, a four-word
+    loop at 25%. Against a 0.6 threshold every loop longer than one
+    word was invisible by construction, and the arithmetic says so
+    without needing a model to demonstrate it.
+
+    n=1 reproduces the old behaviour exactly, so nothing that was
+    caught before stops being caught.
+    """
     tokens = text.split()
     if len(tokens) < 10:
         return False
-    most_common = max(set(tokens), key=tokens.count)
-    return tokens.count(most_common) / len(tokens) > threshold
+    for n in range(1, max_ngram + 1):
+        # Three repeats is the fewest that distinguishes a loop from a
+        # writer making a point twice.
+        if len(tokens) < n * 3:
+            break
+        grams = Counter(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
+        _, count = grams.most_common(1)[0]
+        if count >= 3 and count * n / len(tokens) > threshold:
+            return True
+    return False
+
+
+def _unwrap_envelope(text: str) -> tuple[str, str | None]:
+    """
+    A `chat` answer that is itself a router envelope, and what to do
+    with it.
+
+    Returns ("answer", text) when the text is a real answer,
+    ("unwrap", inner) when it is a complete envelope wrapped one level
+    too deep and the inner content is the answer, and ("broken", None)
+    when it is an envelope the model never finished -- which is not an
+    answer under any reading.
+
+    Both shapes reach the user as a wall of raw JSON without this.
+    Measured 2026-09-12 on LFM2.5-8B-A1B: four replies out of
+    thirty-six, every one of them truncated. The escaping is why the
+    cascade cannot catch them by itself -- an inner envelope sits
+    inside a JSON *string*, so its quotes are escaped and
+    _all_json_objects() scanning the raw text does not see valid JSON
+    there. Only the outer object parses, and its content is the mess.
+
+    Across 72 recorded replies from two models, no real answer opened
+    a brace and named both protocol keys. An answer that merely
+    mentions them, or that is legitimately JSON data, does neither.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return ("answer", text)
+    if '"tool"' not in stripped or '"content"' not in stripped:
+        return ("answer", text)
+    try:
+        data = json.loads(stripped)
+    except ValueError:
+        return ("broken", None)
+    if not isinstance(data, dict) or "content" not in data or "tool" not in data:
+        return ("answer", text)
+    inner = data["content"]
+    if isinstance(inner, dict | list):
+        inner = json.dumps(inner, ensure_ascii=False)
+    inner = str(inner)
+    return ("unwrap", inner) if inner.strip() else ("broken", None)
 
 
 def _validate_json_obj(data: dict, cleaned: str) -> RouterDecision | None:
@@ -197,6 +287,89 @@ def _validate_json_obj(data: dict, cleaned: str) -> RouterDecision | None:
         content = json.dumps(content, ensure_ascii=False)
     if not str(content).strip():
         return None
+
+    # The same two checks the plain-text path applies, applied here
+    # too -- because this is the path the GBNF grammar guarantees the
+    # model takes, and until 2026-09-12 it was the only path with no
+    # checks on it at all. Proved with one string: the prompt's own
+    # "No explanation or text outside the JSON" served as bare text
+    # comes back as a placeholder, and served inside a valid
+    # {"tool":"chat","content":...} came back untouched, to be spoken
+    # to the user as an answer. The shape the grammar guarantees was
+    # exactly the shape that skipped the guards.
+    #
+    # Found by swapping the served model rather than by reading this
+    # file: a 9B produced neither failure in 36 fixtures, LFM2.5-8B-A1B
+    # produced nine. A check nothing exercises is not known to work.
+    #
+    # None rather than a placeholder: an object that leaked is not a
+    # decision, and the cascade should go on looking. If every object
+    # leaks, step 4 reaches the same text and returns the placeholder,
+    # so the outcome is unchanged and the earlier objects still get
+    # their chance.
+    if _contains_leaked_prompt(str(content)):
+        log.warning("router JSON content leaked prompt instructions, skipping")
+        return None
+
+    # The repetition guard applies to `chat` and to nothing else. A
+    # tool payload is DATA -- a config file of near-identical lines, a
+    # CSV, a fixture -- and "this text repeats itself" is a statement
+    # about prose degenerating, not about a file being boring. Caught
+    # by tests/test_orchestrator.py, whose 200-identical-line fixture
+    # this rejected on the first run; the old placement never saw it
+    # because json.dumps escapes the newlines, leaving the whole
+    # payload as one whitespace-free token.
+    # Terminal where it fires, unlike the leak check above it, and the
+    # difference is what step 4 can still see. A leaked marker is in
+    # the raw text too, so handing the cascade a None ends at the same
+    # placeholder either way. A loop is NOT: the envelope around it
+    # dilutes the repeating unit below the threshold, so returning
+    # None here served the whole raw JSON object to the user as prose
+    # -- measured on the real g02 output, where the loop is caught
+    # inside `content` and invisible one level out.
+    if tool == "chat" and _is_repetition_loop(str(content)):
+        log.warning("router JSON content is a repetition loop, discarding")
+        return RouterDecision(
+            tool="chat",
+            content="Je n'ai pas pu générer une réponse utile. Reformulez ou réessayez.",
+            raw=cleaned,
+            is_fallback=True,
+        )
+    if tool == "chat":
+        # Bounded, because an envelope inside an envelope inside an
+        # envelope is the same failure and a `while True` on model
+        # output is how a parser hangs.
+        for _ in range(3):
+            verdict, unwrapped = _unwrap_envelope(str(content))
+            if verdict == "answer":
+                break
+            if verdict == "broken":
+                log.warning("router content is an unfinished envelope, discarding")
+                return RouterDecision(
+                    tool="chat",
+                    content=(
+                        "Je n'ai pas pu générer une réponse utile. "
+                        "Reformulez ou réessayez."
+                    ),
+                    raw=cleaned,
+                    is_fallback=True,
+                )
+            log.warning("router wrapped its answer in a second envelope, unwrapping")
+            content = unwrapped
+        else:
+            # Budget exhausted and still an envelope. Serving what is
+            # left would hand the user the JSON this loop exists to
+            # remove, so the giving-up path refuses like the truncated
+            # one rather than falling through.
+            log.warning("router nested its envelope past any useful depth")
+            return RouterDecision(
+                tool="chat",
+                content=(
+                    "Je n'ai pas pu générer une réponse utile. Reformulez ou réessayez."
+                ),
+                raw=cleaned,
+                is_fallback=True,
+            )
     # Optional multi-step continuation flag. Absent (the common case,
     # and every fine-tune/model that predates this field) means True:
     # one step, same as before. Only an explicit false continues the
@@ -208,8 +381,17 @@ def _validate_json_obj(data: dict, cleaned: str) -> RouterDecision | None:
 def parse_router_output(raw: str) -> RouterDecision:
     cleaned = _strip_think_blocks(raw)
 
-    # 0. Repetition loop guard
-    if _is_repetition_loop(cleaned):
+    # 0. Repetition loop guard, on the RAW output, where prose and a
+    #    tool payload are not yet distinguishable -- so only the
+    #    unambiguous case is rejected here: one token, over and over.
+    #    A files:write body of fifty near-identical config lines is a
+    #    phrase-level loop by any measure and a perfectly good file,
+    #    and it arrives at this point looking exactly like degenerate
+    #    prose. The phrase-level test is applied twice below instead,
+    #    at the two points where the text is known to be an ANSWER:
+    #    inside a validated `chat` object, and on the plain-text
+    #    fallback.
+    if _is_repetition_loop(cleaned, max_ngram=1):
         log.warning("router output is a repetition loop, returning placeholder")
         return RouterDecision(
             tool="chat",
@@ -252,6 +434,17 @@ def parse_router_output(raw: str) -> RouterDecision:
         return RouterDecision(
             tool="chat",
             content="Je n'ai pas pu générer une réponse. Réessayez.",
+            raw=raw,
+            is_fallback=True,
+        )
+
+    # The fallback IS prose -- there is no tool payload left to
+    # confuse it with -- so the phrase-level test applies here.
+    if _is_repetition_loop(fallback):
+        log.warning("router fallback text is a repetition loop, returning placeholder")
+        return RouterDecision(
+            tool="chat",
+            content="Je n'ai pas pu générer une réponse utile. Reformulez ou réessayez.",
             raw=raw,
             is_fallback=True,
         )
