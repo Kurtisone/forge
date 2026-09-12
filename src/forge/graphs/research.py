@@ -46,7 +46,7 @@ Usage (Python):
   print(run("actualités jeu vidéo"))
 """
 
-from forge import lang, subtrace
+from forge import lang, non_answer, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RESEARCH_FETCH_CHARS_PER_RESULT,
@@ -128,7 +128,7 @@ def _search_node(state: AgentState) -> AgentState:
     if not results:
         state.ok = False
         state.error = "no results"
-        state.final_output = f"[no results] for query: {query!r}"
+        state.final_output = f"{non_answer.NO_RESULTS_PREFIX}for query: {query!r}"
         return state
 
     state.context["results"] = results
@@ -260,7 +260,7 @@ def build() -> Graph:
     g.add_node("search", _search_node)
     g.add_node("fetch", _fetch_node)
     g.add_node("synthesize", _synthesize_node)
-    g.add_node("error", _error_node)
+    g.add_node("error", _error_node, answers=False)
 
     g.add_edge("search", "fetch", condition=lambda s: s.ok)
     g.add_edge("search", "error", condition=lambda s: not s.ok)

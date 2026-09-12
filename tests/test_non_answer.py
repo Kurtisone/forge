@@ -95,3 +95,118 @@ class TestDefaultGraphProducers:
         state = default.build().run("bonjour")
 
         assert non_answer.is_non_answer(state.final_output)
+
+
+class TestProducersFoundInTheStore:
+    """
+    Four producers that were writing their own refusal and were not in
+    the closed set. None of them was found by reading the code: they
+    were found by reading the real store on 2026-09-12, where 22 of
+    195 archived entries are the assistant refusing and this module
+    recognised none of them.
+
+    Same discipline as every other class here -- the producer runs.
+    Asserting on the constants would pass while the producer wrote
+    something else.
+    """
+
+    def test_research_with_nothing_found_is_recognised(self, monkeypatch):
+        from forge.graphs import research
+
+        monkeypatch.setattr(research.web_search, "search", lambda q: [])
+
+        state = research.build().run("pourquoi searxng a redémarré")
+
+        assert non_answer.is_non_answer(state.final_output)
+
+    def test_web_search_with_nothing_found_is_recognised(self, monkeypatch):
+        from forge.tools import web_search
+
+        monkeypatch.setattr(web_search, "last_unresponsive", list)
+
+        assert non_answer.is_non_answer(web_search._format_results("tarte tatin", []))
+
+    def test_a_search_backend_failure_is_not_the_same_claim(self, monkeypatch):
+        """
+        Both are recognised, and they must not be recognised as the
+        same thing: an empty web and a search that did not run are one
+        HTTP response and opposite claims. The first lets the model
+        answer from its weights, and it sounds just as confident.
+        """
+        from forge.tools import web_search
+
+        monkeypatch.setattr(web_search, "last_unresponsive", lambda: ["duckduckgo"])
+
+        output = web_search._format_results("tarte tatin", [])
+
+        assert non_answer.is_non_answer(output)
+        assert output.startswith(non_answer.ERROR_PREFIX)
+
+    def test_an_unresolvable_sysadmin_target_is_recognised(self):
+        from forge.graphs import sysadmin
+        from forge.types import AgentState
+
+        state = AgentState(
+            user_input="pourquoi searxng a redémarré ?",
+            max_steps=1,
+            context={"target_missed": "searxng", "units": [], "containers": []},
+        )
+
+        assert non_answer.is_non_answer(
+            sysadmin._target_missed_node(state).final_output
+        )
+
+    def test_logs_that_could_not_be_collected_are_recognised(self):
+        from forge.graphs import sysadmin
+        from forge.types import AgentState
+
+        state = AgentState(
+            user_input="pourquoi searxng a redémarré ?",
+            max_steps=1,
+            context={
+                "log_source": "podman logs searxng",
+                "collect_failed": "command timed out after 0s",
+                "target_hint": "searxng",
+            },
+        )
+
+        assert non_answer.is_non_answer(
+            sysadmin._collect_failed_node(state).final_output
+        )
+
+
+class TestDelegationProducers:
+    """
+    The job dialogue re-asking mid-job. Five of the real store's
+    archived entries are copies of these two sentences, each one a
+    user turn followed by Forge asking again -- a question with no
+    answer in it, which is the shape that outranks the real answer to
+    the same question.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _runner(self):
+        from forge import runner
+        from forge.executors import EchoExecutor
+
+        r = runner.JobRunner(EchoExecutor(), timeout=5)
+        runner.set_runner(r)
+        yield r
+        r.stop()
+        runner.set_runner(None)
+
+    def test_a_question_instead_of_an_answer_is_recognised(self):
+        from forge import delegation, jobs
+
+        job = jobs.create({})
+        jobs.transition(job.id, jobs.AWAITING_USER, pending_field="objective")
+
+        assert non_answer.is_non_answer(delegation.intercept("C'est à dire ?"))
+
+    def test_an_unreadable_confirmation_is_recognised(self):
+        from forge import delegation, jobs
+
+        job = jobs.create({"objective": "a", "workspace": "b"})
+        jobs.transition(job.id, jobs.AWAITING_USER, pending_field=delegation.CONFIRM)
+
+        assert non_answer.is_non_answer(delegation.intercept("les tests passent"))

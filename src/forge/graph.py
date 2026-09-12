@@ -39,6 +39,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from forge import outcome
 from forge.errors import LoopGuardError
 from forge.logger import log
 from forge.types import AgentState, TraceStep
@@ -74,6 +75,22 @@ class Node:
     name: str
     fn: NodeFn
     edges: list[Edge] = field(default_factory=list)
+
+    #: Whether a run ending here answered the question.
+    #:
+    #: False is a node that exists to say Forge has nothing -- an
+    #: error node, or one of sysadmin's two refusals written in code.
+    #: `Graph.run` reports those to forge/outcome.py so the exchange
+    #: never reaches the vector store.
+    #:
+    #: This is the structural half of the same job forge/non_answer.py
+    #: does on text, and the difference is what each one survives.
+    #: The text test survives a run that forgets to report; this one
+    #: survives the sentence being reworded, which is the failure
+    #: nobody sees -- a refusal that stops matching is indexed as an
+    #: answer and shows up months later as a retrieval no one can
+    #: explain.
+    answers: bool = True
 
     def execute(self, state: AgentState) -> AgentState:
         started = time.monotonic()
@@ -137,9 +154,18 @@ class Graph:
     # Building
     # ------------------------------------------------------------------
 
-    def add_node(self, name: str, fn: NodeFn) -> Graph:
-        """Register a node. The first node added becomes the entry point."""
-        self._nodes[name] = Node(name=name, fn=fn)
+    def add_node(self, name: str, fn: NodeFn, answers: bool = True) -> Graph:
+        """
+        Register a node. The first node added becomes the entry point.
+
+        *answers* says whether a run that ENDS here answered anything.
+        Declare it False on a node whose whole purpose is to report
+        that Forge has nothing -- see `Node.answers`. It is declared
+        where the graph is built rather than derived from the node's
+        output, because deriving it from the output is the wording
+        test that already exists one module over.
+        """
+        self._nodes[name] = Node(name=name, fn=fn, answers=answers)
         if self._entry is None:
             self._entry = name
         return self
@@ -220,6 +246,13 @@ class Graph:
             if nxt is None:
                 # Terminal node reached
                 log.event("graph.terminal", node=current)
+                if not node.answers:
+                    # The run knows it has nothing, and every one of
+                    # these nodes sets ok=True on purpose so the user
+                    # reads a message instead of a crash. That is
+                    # right for the conversation and it erases the one
+                    # thing the store needs to know.
+                    outcome.do_not_index(f"{self.name}: ended on {current!r}")
                 break
             current = nxt
         else:
