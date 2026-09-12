@@ -30,6 +30,11 @@ sys.path.insert(0, str(_SCRIPT.parent))
 _spec.loader.exec_module(rag_hot_tier)
 
 
+def _run(monkeypatch, argv):
+    monkeypatch.setattr(sys, "argv", ["rag_hot_tier", *argv])
+    return rag_hot_tier.main()
+
+
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     path = tmp_path / "rag.db"
@@ -102,3 +107,65 @@ def test_placeholders_are_refused(db, capsys):
 
     assert rag_hot_tier.main() == 1
     assert "placeholders" in capsys.readouterr().out
+
+
+def test_the_rescue_arm_stays_asleep_without_a_cutoff(db, capsys, monkeypatch):
+    """
+    The expansion pass costs a model call per refused question, which
+    is the one cost in this harness that is paid per question rather
+    than once. It has to be asked for.
+    """
+    from forge.graphs import recall
+
+    monkeypatch.setattr(
+        recall,
+        "_rescue",
+        lambda q: pytest.fail("the rescue ran without --cutoff"),
+    )
+    _run(monkeypatch, ["--db", db, "--hit", "Quel processeur ?", "--expect", "-"])
+
+    assert "expansion rescue" not in capsys.readouterr().out
+
+
+def test_a_rescue_that_returns_nothing_is_not_reported_as_subsumed(
+    db, capsys, monkeypatch
+):
+    """
+    The distinction the first run of this arm got wrong, on the real
+    store: the rescue applies the same cutoff to its own results, so
+    on a store where everything sits beyond it, it brings back NOTHING
+    -- which is a finding about the cutoff and not about the block
+    absorbing anything.
+    """
+    from forge.graphs import recall
+
+    monkeypatch.setattr(recall, "_drop_distant", lambda results, query: [])
+    monkeypatch.setattr(recall, "_rescue", lambda q: [])
+
+    _run(
+        monkeypatch,
+        ["--db", db, "--cutoff", "0.88", "--miss", "Comment s'appelle mon chat ?"],
+    )
+
+    out = capsys.readouterr().out
+    assert "brought back NOTHING" in out
+    assert "subsumes" not in out.split("--- expansion rescue")[1]
+
+
+def test_what_the_rescue_adds_is_measured_against_the_block(db, capsys, monkeypatch):
+    from forge.graphs import recall
+
+    monkeypatch.setattr(recall, "_drop_distant", lambda results, query: [])
+    monkeypatch.setattr(
+        recall, "_rescue", lambda q: [{"id": 1, "distance": 0.5}, {"id": 3}]
+    )
+
+    _run(
+        monkeypatch,
+        ["--db", db, "--cutoff", "0.88", "--miss", "Comment s'appelle mon chat ?"],
+    )
+
+    out = capsys.readouterr().out
+    # #1 is a deliberate entry and #3 is the archived transcript.
+    assert "SUBSUMED      [1]" in out
+    assert "ADDS          [3]" in out

@@ -48,6 +48,25 @@ The three questions worth measuring are different ones.
               is a tripwire and not a policy (see config.py); this is
               the number that says whether that is still true.
 
+THE SECOND RESCUE, MEASURED ON THE SAME OUTPUT
+
+docs/memory.md left this open in one sentence: "two rescue mechanisms
+whose useful share the hot block absorbs -- and they get measured
+together, for themselves, or not at all." The word channel was the
+first. `--cutoff` adds the second.
+
+Given a cutoff, each question runs the first vector pass and the same
+filter recall applies. If nothing survives, the expansion pass fires
+exactly as it would live -- one model call, the same grammar, the same
+exclusion of archived transcript -- and what it brings back is split
+into SUBSUMED and ADDS against the same block. The column means the
+same thing for both mechanisms, which is the point of measuring them
+here rather than in two files.
+
+The cost column is seconds, not tokens, because this one is paid per
+refused question and not once: the block's prefill survives in the KV
+cache between calls and a model call does not.
+
 NO SUGGESTED THRESHOLD, for the same reason rag_hybrid prints none:
 there is no number to calibrate here. The cap is a budget, not a
 measurement, and the only thing that would change it is the store
@@ -79,6 +98,91 @@ def _cost_line(token_count: int) -> str:
     )
 
 
+def _measure_the_rescue(questions, in_block, cutoff: float) -> None:
+    """
+    The expansion pass, against the same block and the same columns.
+
+    Runs the real path: recall's own first-pass filter decides whether
+    the rescue fires at all, and the rescue is recall's own function,
+    not a reimplementation of it -- a harness that rebuilds the
+    mechanism it measures can be right about a mechanism that is
+    wrong.
+    """
+    import time
+
+    from forge.graphs import recall
+    from forge.tools import memory as memory_tool
+
+    print(f"\n--- expansion rescue vs the block (cutoff {cutoff})\n")
+    fired = rescued_total = adds_total = 0
+    spent = 0.0
+
+    for question, expect, is_hit in questions:
+        first = memory_tool.search(question, top_k=5)
+        kept = recall._drop_distant(first, question)
+        nearest = min(
+            (r["distance"] for r in first if isinstance(r.get("distance"), float)),
+            default=None,
+        )
+        print(f"{'hit ' if is_hit else 'miss'}  {question}")
+        # The nearest distance, kept or not. Without it a rescue that
+        # returns nothing reads as "it found nothing", when what
+        # happened is that the same cutoff dropped what it found.
+        near = f", nearest {nearest:.4f}" if nearest is not None else ""
+        print(
+            f"      first pass    {[r['id'] for r in kept] or '(nothing kept)'}{near}"
+        )
+        if kept:
+            print("      rescue        did not fire, and costs nothing here")
+            print()
+            continue
+
+        fired += 1
+        started = time.time()
+        rows = recall._rescue(question)
+        elapsed = time.time() - started
+        spent += elapsed
+        ids = [r["id"] for r in rows]
+        subsumed = [i for i in ids if i in in_block]
+        adds = [i for i in ids if i not in in_block]
+        rescued_total += len(subsumed)
+        adds_total += len(adds)
+        print(f"      rescue        {ids or '(nothing)'} in {elapsed:.1f}s")
+        print(f"      SUBSUMED      {subsumed or '(none)'}")
+        print(f"      ADDS          {adds or '(none)'}")
+        if expect is not None:
+            print(
+                f"      #{expect}        {'rescued' if int(expect) in ids else 'not rescued'}"
+            )
+        print()
+
+    print(
+        f"rescue fired on {fired} of {len(questions)} questions, "
+        f"{spent:.1f}s spent, SUBSUMED {rescued_total} / ADDS {adds_total}"
+    )
+    if fired and not (rescued_total or adds_total):
+        print(
+            "It brought back NOTHING, which is not the same finding as "
+            "subsumed: the rescue applies the same cutoff to its own results, "
+            "so what it found stayed beyond it. Read the nearest distances "
+            "above -- that is the v3.16 result reproduced, and the seconds are "
+            "spent either way."
+        )
+    elif fired and adds_total == 0:
+        print(
+            "Everything it brought back was already in the prompt. On this "
+            "store the hot tier subsumes what RECALL_EXPANSION was measured to "
+            "rescue, and the seconds above buy nothing the block does not "
+            "already carry."
+        )
+    if not fired:
+        print(
+            "The rescue never fired: every question kept something under the "
+            "cutoff. That is not a finding about the rescue, it is one about "
+            "the cutoff -- lower it to reach the path this measures."
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True)
@@ -104,6 +208,17 @@ def main() -> int:
         help="the entry id that should answer the --hit in the same position",
     )
     parser.add_argument("--miss", action="append", default=[], metavar="QUESTION")
+    parser.add_argument(
+        "--cutoff",
+        type=float,
+        default=None,
+        metavar="DISTANCE",
+        help="also measure the expansion rescue: rows further than this are "
+        "dropped from the first pass, and the rescue runs on the questions "
+        "that lose everything -- one model call each, exactly as it would "
+        "live. Without it the expansion arm does not run at all, which is "
+        "also what happens in production with no RECALL_MAX_DISTANCE set.",
+    )
     args = parser.parse_args()
 
     bad = placeholders(args.hit + args.miss)
@@ -123,6 +238,12 @@ def main() -> int:
         return 1
 
     os.environ["RAG_DB_FILE"] = args.db
+    if args.cutoff is not None:
+        # Read by forge.config at import time, below. Set here so the
+        # rescue runs under the number being measured rather than under
+        # whatever the environment happens to carry.
+        os.environ["RECALL_MAX_DISTANCE"] = str(args.cutoff)
+        os.environ.setdefault("RECALL_EXPANSION", "llm")
     from forge import hot_memory, rag, tokens
     from forge.config import RECALL_HOT_MAX_TOKENS, RECALL_LEXICAL_MAX_DF
 
@@ -216,6 +337,8 @@ def main() -> int:
         print()
 
     print(f"SUBSUMED {subsumed_total} / ADDS {adds_total}")
+    if args.cutoff is not None:
+        _measure_the_rescue(questions, in_block, args.cutoff)
     if adds_total == 0 and subsumed_total:
         print(
             "Every row the word channel returned was already in the prompt. On "
