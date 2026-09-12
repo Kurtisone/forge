@@ -25,6 +25,7 @@ import json
 import pytest
 
 import forge.orchestrator as orch_mod
+from forge import non_answer
 from forge.orchestrator import (
     Orchestrator,
     _decision_paths,
@@ -191,7 +192,7 @@ def test_invented_write_path_is_refused_before_dispatch(monkeypatch, tmp_path):
     result = Orchestrator(max_steps=2).run("améliore le fichier")
 
     assert result.tool == "chat"
-    assert "which file" in result.output.lower()
+    assert result.output.startswith(non_answer.NO_PATH_PREFIX)
     # The point of guarding before dispatch rather than reporting after.
     assert not (tmp_path / "src" / "app.py").exists()
 
@@ -221,7 +222,7 @@ def test_invented_review_path_is_refused(monkeypatch, tmp_path):
     result = Orchestrator(max_steps=1).run("améliore le fichier")
 
     assert result.tool == "chat"
-    assert "which file" in result.output.lower()
+    assert result.output.startswith(non_answer.NO_PATH_PREFIX)
 
 
 def test_invented_test_path_is_refused(monkeypatch, tmp_path):
@@ -252,7 +253,7 @@ def test_invented_test_path_is_refused(monkeypatch, tmp_path):
     result = Orchestrator(max_steps=1).run("lance les tests")
 
     assert result.tool == "chat"
-    assert "which" in result.output.lower()
+    assert result.output.startswith(non_answer.NO_PATH_PREFIX)
 
 
 def test_grounded_test_path_still_runs(monkeypatch):
@@ -429,7 +430,8 @@ def test_pasted_text_in_file_path_is_refused_even_though_it_is_grounded(monkeypa
     assert result.tool == "chat"
     # It is grounded -- that is the whole point of this test.
     assert _path_is_grounded(pasted, _state(user_input=f"Voici : {pasted}"))
-    assert "not a file path" in result.output
+    assert result.output.startswith(non_answer.NOT_A_PATH_PREFIX)
+    assert non_answer.is_non_answer(result.output)
 
 
 def test_the_refused_turn_stays_in_the_conversation(monkeypatch, tmp_path):
@@ -477,7 +479,7 @@ def test_the_refused_turn_never_reaches_the_vector_store(monkeypatch, tmp_path):
     messages are registered in forge/non_answer.py, so the exchange is
     written with index=False by the check that already exists.
     """
-    from forge import memory, non_answer
+    from forge import memory
     from forge.tools.registry import TOOLS
 
     monkeypatch.setattr(memory, "MEMORY_FILE", str(tmp_path / "memory.json"))

@@ -120,7 +120,7 @@ NOTHING_COLLECTED_PREFIX = "[rien à lire] "
 
 # The two path guards in the orchestrator, which refuse a tool call
 # whose path the model invented or whose "path" is pasted text. They
-# answer the user with a question -- "which file do you mean?" -- so
+# answer the user with a question -- "de quel fichier s'agit-il ?" -- so
 # the run is a success and the exchange belongs in the conversation;
 # what it does not belong in is the vector store, where a refusal is a
 # near-copy of the question that provoked it.
@@ -129,8 +129,18 @@ NOTHING_COLLECTED_PREFIX = "[rien à lire] "
 # turn left NO trace in the web UI, question included. The guard was
 # returning ok=True with remember=False, and the UI rebuilds the
 # thread from the server after every turn.
-NO_PATH_PREFIX = "I don't have a real path for"
-NOT_A_PATH_PREFIX = "What the router put in"
+#
+# They shipped in English, alone in a set that is otherwise French,
+# and they are the two members of it a user reads most often -- a
+# refusal is seen, an error prefix is skimmed. Translated on
+# 2026-09-12. That this was a safe edit at all is the DRIFT paragraph
+# above being right: the orchestrator builds both sentences from
+# these constants, so changing the words here changed the producer
+# too. Had it repeated the literals, the guard would have kept
+# answering in English while is_non_answer() went silent on it, and
+# every refusal would have been indexed as an answer.
+NO_PATH_PREFIX = "Je n'ai pas de vrai chemin pour"
+NOT_A_PATH_PREFIX = "Ce que le routeur a mis dans"
 
 # The delegation flow re-asking mid-job. These two are French
 # sentences rather than bracketed markers, which is a weaker test and

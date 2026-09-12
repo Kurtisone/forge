@@ -513,15 +513,21 @@ class Orchestrator:
                 # between "which file do you want reviewed" and "which
                 # tests do you want run" -- and the second question is
                 # the one this refusal usually needs to ask.
+                # In French, like every other fixed refusal Forge
+                # writes: this one is read by the user, not skimmed in
+                # a log. The two opening clauses are the constants
+                # themselves, so the sentence and the filter cannot
+                # drift apart -- see forge/non_answer.py.
                 state.final_output = (
-                    f'{non_answer.NOT_A_PATH_PREFIX} "{key}" is text, not a '
-                    "file path. I work on files in the workspace, not on "
-                    "text pasted into the message -- save it to a file "
-                    "first, or tell me which file you mean."
+                    f"{non_answer.NOT_A_PATH_PREFIX} « {key} » est du "
+                    "texte, pas un chemin de fichier. Je travaille sur "
+                    "les fichiers de l'espace de travail, pas sur du "
+                    "texte collé dans le message -- enregistre-le dans "
+                    "un fichier, ou dis-moi de quel fichier il s'agit."
                     if kind == "shape"
-                    else f'{non_answer.NO_PATH_PREFIX} "{key}" in this '
-                    "conversation, and I won't guess one. Which file do "
-                    "you mean?"
+                    else f"{non_answer.NO_PATH_PREFIX} « {key} » dans "
+                    "cette conversation, et je n'en inventerai pas. De "
+                    "quel fichier s'agit-il ?"
                 )
                 state.final_tool = "chat"
                 state.ok = True
