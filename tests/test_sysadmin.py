@@ -1082,3 +1082,111 @@ def test_a_run_that_read_nothing_never_reaches_the_store(monkeypatch):
 
     assert outcome.pending() is not None
     outcome.clear()
+
+
+# --- Discovery drops what has no journal of its own ------------------------
+
+#: Eight names, in the proportion the real traces show: half of what
+#: the user was shown came from udev. The escapes are systemd's own.
+_REAL_SHAPE = [
+    "plymouth-deactivate.service",
+    "dev-disk-by\\x2dpath-pci\\x2d0000:01:00.0\\x2dnvme\\x2d1\\x2dpart-by\\x2dpartlabel-var\\x2dA.device",
+    "keyboxd@etc-pacman.d-gnupg.service",
+    "sys-devices-pci0000:00-nvme-nvme0-nvme0n1-nvme0n1p1.device",
+    "dev-disk-by\\x2dpartlabel-var\\x2dB.device",
+    "steamos-manager.service",
+    "dev-disk-by\\x2dpartlabel-efi\\x2dA.device",
+    "dmemcg-booster-system.service",
+]
+
+
+def _discovers(monkeypatch, units, containers="searxng"):
+    def fake(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(units)
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return containers
+        return "log line"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", fake)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
+
+
+def test_device_units_never_reach_the_discovered_list(monkeypatch):
+    _discovers(monkeypatch, _REAL_SHAPE)
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": None, "question": None}
+    )
+
+    assert state.context["units"] == [
+        "plymouth-deactivate.service",
+        "keyboxd@etc-pacman.d-gnupg.service",
+        "steamos-manager.service",
+        "dmemcg-booster-system.service",
+    ]
+
+
+def test_every_other_unit_type_stays(monkeypatch):
+    """
+    A `.mount` that failed, a `.timer` that did not fire and a
+    `.socket` nothing is listening on are real questions with real
+    journal entries behind them. Only the type that has no journal of
+    its own is dropped.
+    """
+    kept = [
+        "home.mount",
+        "logrotate.timer",
+        "docker.socket",
+        "multi-user.target",
+        "user-1000.slice",
+        "session-3.scope",
+        "dev-nvme0n1.device",
+    ]
+    _discovers(monkeypatch, kept)
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": None, "question": None}
+    )
+
+    assert state.context["units"] == kept[:-1]
+
+
+def test_a_device_unit_named_as_a_target_is_reported_missing(monkeypatch):
+    """
+    Not collected-and-empty, which is what used to happen: the name
+    matched, `journalctl -u` returned nothing, and the run had to
+    explain an empty journal. Reporting it missing names what was
+    searched instead.
+    """
+    _discovers(monkeypatch, _REAL_SHAPE, containers="")
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={
+            "target_hint": "dev-disk-by\\x2dpartlabel-var\\x2dB.device",
+            "question": None,
+        },
+    )
+
+    assert non_answer.is_non_answer(state.final_output)
+    assert "cible introuvable" in state.final_output
+
+
+def test_the_suggestion_never_proposes_a_device(monkeypatch):
+    """
+    A missed target is offered the closest names discovery saw. Out of
+    522 units of which most were udev-generated, that pool suggested
+    things no question can be asked about.
+    """
+    _discovers(monkeypatch, _REAL_SHAPE, containers="")
+
+    state = build_sysadmin().run(
+        "",
+        initial_context={
+            "target_hint": "dev-disk-by-partlabel-var-C",
+            "question": None,
+        },
+    )
+
+    assert ".device" not in state.final_output
