@@ -22,7 +22,7 @@ throws away work they asked for.
 
 import unicodedata
 
-from forge import jobs, non_answer, runner, spec
+from forge import jobs, non_answer, runner, spec, turn
 from forge.logger import log
 
 #: pending_field value used while a completed spec waits for approval.
@@ -53,10 +53,6 @@ _MAX_KEYWORD_CHARS = 20
 
 _LIST_WORDS = frozenset({"jobs", "mes jobs", "les jobs"})
 
-# Past this, a trailing "?" is part of an answer rather than the whole
-# of one ("est-ce que src/forge convient ?" is still an answer).
-_MAX_QUESTION_CHARS = 40
-
 
 def _normalise(text: str) -> str:
     """Lowercase, unaccented, punctuation-free, single-spaced."""
@@ -70,22 +66,6 @@ def _is_keyword(text: str, words: frozenset[str]) -> bool:
     if len(text) > _MAX_KEYWORD_CHARS:
         return False
     return _normalise(text) in words
-
-
-def _looks_like_a_question(text: str) -> bool:
-    """
-    A short answer ending in a question mark is the user asking, not
-    answering.
-
-    Found on the first real run: "C'est à dire ?" was recorded as the
-    workspace, and "Aucune idée" as an acceptance criterion. The
-    interception cannot tell an answer from a question -- that is the
-    price of deciding in code rather than asking the model -- but this
-    much IS decidable in code, and re-asking costs a turn while
-    recording garbage costs the whole spec.
-    """
-    stripped = text.strip()
-    return stripped.endswith("?") and len(stripped) <= _MAX_QUESTION_CHARS
 
 
 def _list_jobs() -> str:
@@ -131,7 +111,7 @@ def intercept(user_input: str) -> str | None:
     if job.pending_field == CONFIRM:
         return _handle_confirmation(job, user_input)
 
-    if _looks_like_a_question(user_input):
+    if turn.is_question(user_input):
         field = spec.field(job.pending_field)
         return (
             f"{non_answer.NOT_YOUR_DECISION_PREFIX} : c'est toi qui décides. "
@@ -173,29 +153,9 @@ def _maybe_cancel_running(user_input: str) -> str | None:
     return f"Job {job.id} annulé."
 
 
-#: Past this, a trailing "?" is part of an answer, not a question
-#: about one ("faut-il le faire dans src/forge ou dans tests/ ?").
-_MAX_QUESTION_CHARS = 40
-
-
-def _is_question(text: str) -> bool:
-    """
-    A short message ending in a question mark is the user asking back.
-
-    Found on the first real run: asked "Dans quel dépôt ou quel
-    dossier ?", the answer "C'est à dire ?" was recorded as the value
-    of the field. That is the cost of deterministic interception -- a
-    question and an answer are the same shape -- and this narrows it
-    without handing the decision to the model. Bounded by length so
-    that a genuine answer phrased as a question still lands.
-    """
-    stripped = text.strip()
-    return len(stripped) <= _MAX_QUESTION_CHARS and stripped.endswith("?")
-
-
 def _fill_field(job: jobs.Job, user_input: str) -> str:
     """Record the answer and ask the next question, or show the spec."""
-    if _is_question(user_input):
+    if turn.is_question(user_input):
         f = spec.field(job.pending_field)
         return (
             f"{f.question}\n\n"

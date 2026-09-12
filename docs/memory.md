@@ -116,6 +116,28 @@ treated as an implicit remember too, which is closer to what a personal-assistan
 usage pattern actually wants; tighten the wording there if you'd rather require an
 explicit cue.
 
+**A turn that is a question never writes, whatever the payload says.** That rule is
+in code and not in the prompt, because the prompt already had it. From
+`traces.jsonl`, 2026-09-11:
+
+    user: Je possède un serveur ?
+    payload: {"action":"remember","kind":"fact","content":"Possède un serveur"}
+
+The question mark is the only thing separating that turn from a statement, and the
+payload does not carry it — so nothing downstream of the router can tell what
+happened, and the entry sits in the store as something the user said about
+themselves. Ask it again a week later and it is the store's best match for its own
+question, which is the failure this page records from three other directions.
+
+So the test is on the TURN, which is the one thing the payload cannot lose
+(`forge/turn.py`, the same module delegation reads for the same reason), and the
+question is answered with a recall instead — that is what it was asking for.
+Measured over every memory routing in the trace file before shipping it: 19
+remembers, 18 of them declarative and legitimate, one a question, and it is the
+bug. No genuine remember has ever been phrased as a question here, so the rule
+costs nothing that was measured to exist. A long message merely *ending* in a
+question mark still writes, on the same bound delegation has always used.
+
 `kind` is `"decision"`, `"todo"`, or `"fact"` (a plain piece of information — the
 one that matters for casual statements like the Steam Deck example above). If the
 router's JSON omits `kind` entirely, the memory tool defaults to `"fact"` rather
