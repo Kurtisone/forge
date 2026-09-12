@@ -217,7 +217,7 @@ src/forge/
 │
 ├── turn.py              # one conversational turn, shared by the API and the REPL
 ├── tokens.py            # local token estimation, checked against llama-server's own counts (v3.12)
-├── metrics.py           # per-run inference accounting, surfaced in the trace (v3.12)
+├── metrics.py           # per-run inference accounting + which model answered, in the trace (v3.12)
 ├── subtrace.py          # channel letting a graph publish its own node steps to the trace
 ├── tool_payload.py      # JSON_PAYLOAD_TOOLS + the tolerant payload parse, one source of truth
 ├── gbnf.py              # grammar checks shared by the router and the delegation spec

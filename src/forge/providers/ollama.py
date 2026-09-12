@@ -31,4 +31,9 @@ def call(url: str, model: str, prompt: str) -> Completion:
             prompt_tokens=data.get("prompt_eval_count"),
             completion_tokens=data.get("eval_count"),
         ),
+        # Ollama echoes the name it resolved, which can differ from the
+        # one asked for -- a bare "qwen3" resolves to whatever tag is
+        # local. Recording the answer rather than the request is the
+        # whole point.
+        model=data.get("model") or "",
     )

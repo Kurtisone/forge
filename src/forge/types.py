@@ -51,6 +51,19 @@ class Completion:
 
     text: str
     usage: Usage = field(default_factory=Usage)
+    # Which model produced this text, as the backend names it -- not
+    # LLM_MODEL, which for llama.cpp is never even sent and is only a
+    # label someone keeps in sync by hand. Exactly the argument above
+    # about usage, applied to the other thing every backend already
+    # returns and Forge was dropping at the provider boundary: a run
+    # recorded without it is a run nobody can attribute once the
+    # served model changes, and swapping models is a thing that
+    # happens.
+    #
+    # Empty string rather than None for "the backend did not say":
+    # this is a label, it is never arithmetic, and a falsy string
+    # reads the same at every call site.
+    model: str = ""
 
 
 @dataclass(frozen=True)
