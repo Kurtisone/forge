@@ -6,6 +6,7 @@
 # nothing matched them.
 LINKEDIN_POST.md
 docs/LINKEDIN_POST.md
+CLAUDE.md
 /PR-*.md
 data/*
 # A/B result files written by bench/router_ab.py. They hold the model's
