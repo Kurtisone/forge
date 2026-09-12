@@ -158,3 +158,18 @@ class TestTheUiHasThreeStates:
         src = self._source()
         assert ".trace-blank" in src
         assert "trace-blank-note" in src
+
+    def test_the_step_that_produced_nothing_is_not_green_either(self):
+        """
+        Reported from a real card: "web_fetch is green, and underneath
+        it says it answered nothing". Both were true, which is the
+        problem -- tool_ok means the tool returned a string without
+        raising, and the string was "[error] could not resolve host".
+
+        The LAST step is the one a blank run is about: _finish assigns
+        final_output from each step in turn and the last assignment
+        wins.
+        """
+        src = self._source()
+        assert ".step-pill.blank" in src
+        assert "(blank && last) ? 'blank' : 'ok'" in src

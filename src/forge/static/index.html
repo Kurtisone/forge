@@ -449,6 +449,10 @@
     }
     .step-pill.ok  { border-color: var(--green); color: var(--green); }
     .step-pill.err { border-color: var(--red);   color: var(--red); }
+    /* Ran, returned a string, and that string answered nothing. Left
+       at the neutral border and colour the bare .step-pill already
+       carries -- neither claim is true here. */
+    .step-pill.blank { border-color: var(--border); color: var(--muted); }
     .step-pill.expandable { cursor: pointer; user-select: none; }
     .step-pill.expandable:hover { background: var(--surface); }
     .step-pill .caret { display: inline-block; margin-left: 4px; transition: transform .15s; }
@@ -1273,7 +1277,18 @@ async function loadTraces() {
       ;(t.steps || []).forEach((s, i) => {
         const subId = `sub-${t.run_id}-${i}`
         const hasSub = Array.isArray(s.sub_steps) && s.sub_steps.length > 0
-        stepsHtml += `<span class="step-pill ${s.tool_ok ? 'ok' : 'err'} ${hasSub ? 'expandable' : ''}"` +
+        // The LAST step is the one whose output became the run's answer
+        // -- _finish assigns final_output from each step in turn and the
+        // last assignment wins -- so it is the one a blank run is about.
+        // Reported from a real card: "web_fetch is green, and underneath
+        // it says it answered nothing". Both were true and that is the
+        // problem: tool_ok means the tool returned a string without
+        // raising, which web_fetch did, and the string was
+        // "[error] could not resolve host". A green pill next to a ∅ is
+        // the card contradicting itself in the space of two lines.
+        const last = i === (t.steps || []).length - 1
+        const pill = !s.tool_ok ? 'err' : (blank && last) ? 'blank' : 'ok'
+        stepsHtml += `<span class="step-pill ${pill} ${hasSub ? 'expandable' : ''}"` +
           (hasSub ? ` onclick="toggleSubSteps('${subId}', this)"` : '') + `>` +
           `${s.router_tool || '?'} ${s.duration_ms != null ? s.duration_ms + 'ms' : '—'}` +
           (hasSub ? '<span class="caret">▸</span>' : '') +
