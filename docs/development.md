@@ -56,6 +56,27 @@ fill it and the suite starts failing in bulk on `database or disk is
 full`, which also looks like anything but its cause. `rm -rf
 /tmp/pytest-of-$USER` between series.
 
+### The web UI's renderer is executed, not read
+
+Three test files say the same thing in their docstrings -- "this suite
+has no JS runtime, so these are assertions on the source; a tripwire,
+not a proof". That was true of CI and never true of this machine, which
+has `deno`. `tests/test_ui_rendering.py` pulls `formatContent` and its
+helpers straight out of `index.html` and runs them.
+
+It found a bug the first time it ran. `_emphasis like this_` was
+reaching the screen with its underscores showing, because the UI
+implements `**bold**` and `*em*` and nothing else -- and both footers
+`graphs/research.py` appends were written in the syntax it does not
+have. One of them had been wrong since it was written.
+
+The functions are EXTRACTED rather than copied into a fixture. A second
+copy is a copy that drifts, and drift in a renderer is invisible until
+someone reads their own output and finds punctuation in it.
+
+Skipped where `deno` is absent, which includes CI today. A test that
+runs on one machine and skips on another is worth more than no test.
+
 ## The measurement harnesses
 
 `bench/` is not a second test suite. Tests pin behaviour that must not

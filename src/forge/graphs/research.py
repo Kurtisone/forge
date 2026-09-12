@@ -278,6 +278,17 @@ def build() -> Graph:
 #: Same shape and the same reason as sysadmin's _RUNNING_FOOTER: a
 #: fact established before the answer, held below it, where it cannot
 #: be reinterpreted by whatever the model decided to write.
+#: Asterisks and never underscores for emphasis. The web UI's
+#: inlineMarkdown implements `**bold**` and `*em*` and nothing else --
+#: measured by running that function, not by reading it -- so
+#: `_like this_` reaches the screen with its underscores showing. It
+#: had, in the local-container footer below, since that footer was
+#: written.
+#:
+#: Adding an underscore rule to the renderer is the wrong repair here:
+#: this assistant's answers are full of `file_path`, `MAX_STEPS` and
+#: `RECALL_MAX_DISTANCE`, and emphasis on `_` would eat identifiers.
+#:
 #: Where the answer came from, appended in code.
 #:
 #: The synthesis prompt has always said "cite which source a specific
@@ -295,12 +306,12 @@ def build() -> Graph:
 #: snippet and nothing else. Calling the second kind a source would
 #: overstate what was read, and that is exactly the overstatement a
 #: sources block is supposed to prevent.
-_SOURCES_READ = "\n\n---\n_Sources lues :_\n"
+_SOURCES_READ = "\n\n---\n*Sources lues :*\n"
 _SOURCES_SNIPPET_ONLY = (
-    "\n\n---\n_Aucune page n'a pu être ouverte. Réponse fondée sur les "
-    "extraits de recherche renvoyés par :_\n"
+    "\n\n---\n*Aucune page n'a pu être ouverte. Réponse fondée sur les "
+    "extraits de recherche renvoyés par :*\n"
 )
-_ALSO_SEEN = "\n_(+ {n} autre(s) résultat(s) vus en extrait seulement.)_"
+_ALSO_SEEN = "\n*(+ {n} autre(s) résultat(s) vus en extrait seulement.)*"
 
 #: A title long enough to wrap twice is a page title, not a label.
 _MAX_TITLE_CHARS = 90
@@ -367,9 +378,9 @@ def _sources_footer(results: list[dict], fetched: list[dict]) -> str:
 
 
 _LOCAL_FOOTER = (
-    "\n\n---\n_À noter : `{container}` est un conteneur qui tourne sur cette "
+    "\n\n---\n*À noter : `{container}` est un conteneur qui tourne sur cette "
     "machine. Cette réponse vient du web, qui n'en sait rien — demande-moi "
-    "ses logs si c'était la question._"
+    "ses logs si c'était la question.*"
 )
 
 #: How close a word has to be to a container name to be called one.
