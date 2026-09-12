@@ -430,3 +430,67 @@ def test_pasted_text_in_file_path_is_refused_even_though_it_is_grounded(monkeypa
     # It is grounded -- that is the whole point of this test.
     assert _path_is_grounded(pasted, _state(user_input=f"Voici : {pasted}"))
     assert "not a file path" in result.output
+
+
+def test_the_refused_turn_stays_in_the_conversation(monkeypatch, tmp_path):
+    """
+    Reported on 2026-09-12 as "no reply in the chat, and it erases my
+    message".
+
+    The guard sets ok=True on purpose -- it answers, by asking which
+    file was meant -- and it used to pass remember=False. The web UI
+    rebuilds the thread from /history after every turn and appends
+    nothing of its own when ok is true, so that pair is a combination
+    it cannot render: the question disappears along with the answer
+    that never arrived.
+
+    Persisted now, like every other refusal Forge writes. The three
+    guards above this one keep remember=False, and the difference is
+    ok: those report a run that FAILED, and memory.json holds only
+    genuine answers.
+    """
+    from forge import memory
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(memory, "MEMORY_FILE", str(tmp_path / "memory.json"))
+    monkeypatch.setitem(TOOLS, "review", lambda content: pytest.fail("dispatched"))
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {"tool": "review", "content": json.dumps({"file_path": "src/nope.py"})}
+        ),
+    )
+
+    Orchestrator(max_steps=1).run("tu en penses quoi du modèle LFM2.5 ?")
+
+    history = memory.load_memory()["history"]
+    assert [m["role"] for m in history] == ["user", "assistant"]
+    assert history[0]["content"] == "tu en penses quoi du modèle LFM2.5 ?"
+
+
+def test_the_refused_turn_never_reaches_the_vector_store(monkeypatch, tmp_path):
+    """
+    The other half, and the reason persisting it is safe: a refusal is
+    a near-copy of the question that provoked it, which makes it the
+    closest match for anyone asking that question again. Both guard
+    messages are registered in forge/non_answer.py, so the exchange is
+    written with index=False by the check that already exists.
+    """
+    from forge import memory, non_answer
+    from forge.tools.registry import TOOLS
+
+    monkeypatch.setattr(memory, "MEMORY_FILE", str(tmp_path / "memory.json"))
+    monkeypatch.setitem(TOOLS, "review", lambda content: pytest.fail("dispatched"))
+    monkeypatch.setattr(
+        orch_mod,
+        "call_llm",
+        lambda prompt: json.dumps(
+            {"tool": "review", "content": json.dumps({"file_path": "src/nope.py"})}
+        ),
+    )
+
+    result = Orchestrator(max_steps=1).run("améliore le fichier")
+
+    assert non_answer.is_non_answer(result.output)
+    assert all(m.get("index") is False for m in memory.load_memory()["history"])

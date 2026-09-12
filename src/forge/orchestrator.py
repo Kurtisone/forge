@@ -514,18 +514,37 @@ class Orchestrator:
                 # tests do you want run" -- and the second question is
                 # the one this refusal usually needs to ask.
                 state.final_output = (
-                    f'What the router put in "{key}" is text, not a file '
-                    "path. I work on files in the workspace, not on text "
-                    "pasted into the message -- save it to a file first, "
-                    "or tell me which file you mean."
+                    f'{non_answer.NOT_A_PATH_PREFIX} "{key}" is text, not a '
+                    "file path. I work on files in the workspace, not on "
+                    "text pasted into the message -- save it to a file "
+                    "first, or tell me which file you mean."
                     if kind == "shape"
-                    else f'I don\'t have a real path for "{key}" in this '
+                    else f'{non_answer.NO_PATH_PREFIX} "{key}" in this '
                     "conversation, and I won't guess one. Which file do "
                     "you mean?"
                 )
                 state.final_tool = "chat"
                 state.ok = True
-                return self._finish(state, remember=False)
+                # PERSISTED, unlike the three guards above it, and the
+                # difference is ok=True. Those report a run that
+                # FAILED, and memory.json deliberately holds only
+                # genuine answers. This one answers: it asks the user
+                # which file they meant, and that is a turn of the
+                # conversation.
+                #
+                # Reported on 2026-09-12 as "no reply, and it erases my
+                # message". The web UI rebuilds the thread from
+                # /history after every turn and appends nothing of its
+                # own when ok is true, so ok=True with remember=False
+                # is a combination it cannot render: the question
+                # disappears with the answer that never arrived.
+                #
+                # _indexable keeps it out of the vector store on its
+                # own, now that both messages are registered in
+                # forge/non_answer.py -- persisted in the conversation,
+                # never indexed, which is the rule this project already
+                # states for every refusal it writes.
+                return self._finish(state, remember=True)
 
             # --- Dispatch ------------------------------------------------
             result = self._dispatch(decision.tool, decision.content)
