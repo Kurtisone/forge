@@ -78,6 +78,10 @@ went into a default, or in a finding that killed a mechanism.
 | `no_think_ab` | Whether `/no_think` still does anything on the synthesis prompts | model |
 | `prose_grammar_ab` | What giving the graph syntheses their own grammar costs | model |
 
+What each of them found, and which default it settled, is in [The measurement
+record](campaigns.md) — read it before re-running one, because several of these
+questions are closed and the page says so in the first line of each section.
+
 Everything that reads the store runs through one script:
 
 ```bash

@@ -55,9 +55,9 @@ the turn, an arithmetic gate between two texts.
 The corollary is that defaults here are earned rather than chosen. Every
 mechanism with a knob ships **off** until a harness in [`bench/`](bench/) has
 measured it against a copy of the real store — and several shipped off
-*because* of what the harness said. `docs/memory.md` is the long version: it
-records the campaigns that failed, at the length that makes them
-reproducible.
+*because* of what the harness said. [docs/campaigns.md](docs/campaigns.md) is
+the long version: every campaign, its numbers, and what it settled — including
+the ones that ended by killing the mechanism they were measuring.
 
 ---
 
@@ -94,6 +94,7 @@ Everything past "how do I start it" lives in [docs/](docs/README.md):
 - [Configuration](docs/configuration.md) — the settings you are likely to touch
 - [Tools](docs/tools.md) — what each tool does, refuses, and costs
 - [Memory, RAG and traces](docs/memory.md) — the three stores and how they differ
+- [The measurement record](docs/campaigns.md) — what was measured, and what each campaign settled
 - [HTTP API](docs/api.md) — routes, auth, delegation jobs
 - [Development](docs/development.md) — tests, CI, measurement harnesses
 - [Version history and roadmap](docs/roadmap.md) — what landed when
