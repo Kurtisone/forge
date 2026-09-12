@@ -470,26 +470,65 @@ FIXTURES = [
     #    is 40 s to "file not found", and on a mutating tool it is a
     #    file nobody asked for.
     #
-    #    NOT REPRODUCED, and the fixtures stay anyway. Replayed the
-    #    same day with the same history and the same fourteen tools --
-    #    a prompt rebuilt to 14762 characters, the exact length the
-    #    live log reports -- both questions routed to `chat` six times
-    #    out of six, cold and warm. So this is intermittent, and the
-    #    first two attempts to reproduce it were worth more than the
-    #    result: one probe built a 3275-character prompt because
-    #    available_tools() returns [] outside a configured process, so
-    #    the model was choosing between no tools at all.
+    #    REPRODUCED on 2026-09-12, and deterministically: h02 routed to
+    #    `review` in every single run -- forward order, reverse order
+    #    with the fixture moved to first position, and three more
+    #    replays on its own. Nothing about the order or the cache
+    #    changes it. It was called intermittent on the strength of six
+    #    replays through a hand-built probe, which is what a probe is
+    #    worth against a harness that builds the prompt the same way
+    #    the product does.
     #
-    #    What is not explained away is WHICH path was invented.
-    #    `src/forge/graph.py` is this prompt's own review example, and
-    #    that example's question -- "Peux-tu relire src/forge/graph.py
-    #    et me donner ton avis ?" -- is the shape of "tu en penses quoi
-    #    de X". A copied example is a hypothesis here, not a finding.
+    #    The pair was built to separate two candidate triggers, and it
+    #    separated them the other way round. h01 -- which carries the
+    #    filename-shaped token, dots, dashes and an uppercase
+    #    extension -- routes to `research` correctly, every time. h02,
+    #    whose subject could not be a file, is the one that fails. So
+    #    the trigger is not a token that looks like a path. It is the
+    #    SHAPE OF THE QUESTION: "tu en penses quoi de X" is the shape
+    #    of this prompt's own review example, "Peux-tu relire
+    #    src/forge/graph.py et me donner ton avis ?".
     #
-    #    The two fixtures separate the two candidate triggers if it
-    #    ever does reproduce: h01 carries a token shaped like a
-    #    filename (dots, dashes, an uppercase extension), h02 asks the
-    #    same question about something that could not be a file.
+    #    And the model is not inventing a path. It is TRANSCRIBING.
+    #    h02 answers {"file_path": "src/forge/graph.py"} -- the example
+    #    at prompt.py:334, verbatim. h03, the same question behind
+    #    twelve turns of contentless filler, answers {"file_path":
+    #    "...", "question": "...", "test_path": "..."} -- the review
+    #    tool's schema at prompt.py:120, verbatim, placeholder dots
+    #    included. Two arms, two different literals, each copied from
+    #    whichever part of the prompt was nearest to hand. A path that
+    #    is invented can be argued about; a schema copied with its own
+    #    ellipses in place of values cannot.
+    #
+    #    What does fix it is history with something in it: the same
+    #    question behind four turns about an unrelated subject routes
+    #    to `research`, 3/3. So the live failures were not "no history"
+    #    -- they were a history that gave the model nothing to hold on
+    #    to, which left the prompt's examples as the most concrete text
+    #    in front of it.
+    #
+    #    Both forms are refused by the orchestrator's grounding guard
+    #    (neither `src/forge/graph.py` nor `...` appears in the
+    #    conversation), so the cost stays one routing call and a reply
+    #    asking which file was meant. This is a routing fault contained
+    #    by a deterministic check, which is the arrangement this
+    #    codebase keeps arriving at.
+    #
+    #    NOT fixed by rewording the example. That move has lost twelve
+    #    times here and the thirteenth is not special -- it is the same
+    #    class of change as the rule it would be repairing. Recorded,
+    #    measured, and left for a mechanism that cannot be ignored.
+    #
+    #    MODEL-SPECIFIC, measured the same day by swapping the served
+    #    model for LFM2.5-8B-A1B-Q4_K_M: all four h fixtures pass. That
+    #    is not a fix and reading it as one is the trap this harness
+    #    warns about in cmd_compare. The same model routes 42% of the
+    #    whole set to `chat` where the 9B routes 19%, so h01-h04 -- which
+    #    accept chat OR research -- pass by landing in the wider of the
+    #    two answers. h02's own reply is a `chat` envelope nested inside
+    #    the content of another, and h04's trails off into "... wait, I
+    #    forgot to mention". The transcription stopped; what replaced it
+    #    is not better.
     _fx(
         id="h01",
         user="Tu en penses quoi du LLM LFM2.5-8B-A1B-GGUF ?",
@@ -498,6 +537,36 @@ FIXTURES = [
     ),
     _fx(
         id="h02",
+        user="Tu en penses quoi de Podman par rapport à Docker ?",
+        expect=["chat", "research"],
+        forbid=["review", "files", "test"],
+    ),
+    # The schema-transcription arm. Same question as h02, behind a
+    # history that says nothing -- which is what the live failures had.
+    # Kept separate from h02 because the two copy different literals,
+    # and a model that stops doing one may go on doing the other.
+    _fx(
+        id="h03",
+        history=[
+            ("user", f"question numéro {i}")
+            if i % 2 == 0
+            else ("assistant", f"réponse numéro {i}")
+            for i in range(12)
+        ],
+        user="Tu en penses quoi de Podman par rapport à Docker ?",
+        expect=["chat", "research"],
+        forbid=["review", "files", "test"],
+    ),
+    # The control, and the only arm that passes on this model: the same
+    # question behind four turns that carry a subject.
+    _fx(
+        id="h04",
+        history=[
+            ("user", "On va parler du projet Forge"),
+            ("assistant", "D'accord, je t'écoute."),
+            ("user", "C'est un runtime d'agent LLM"),
+            ("assistant", "Compris."),
+        ],
         user="Tu en penses quoi de Podman par rapport à Docker ?",
         expect=["chat", "research"],
         forbid=["review", "files", "test"],
