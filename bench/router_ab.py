@@ -470,14 +470,36 @@ FIXTURES = [
     #    is 40 s to "file not found", and on a mutating tool it is a
     #    file nobody asked for.
     #
-    #    REPRODUCED on 2026-09-12, and deterministically: h02 routed to
-    #    `review` in every single run -- forward order, reverse order
-    #    with the fixture moved to first position, and three more
-    #    replays on its own. Nothing about the order or the cache
-    #    changes it. It was called intermittent on the strength of six
-    #    replays through a hand-built probe, which is what a probe is
-    #    worth against a harness that builds the prompt the same way
-    #    the product does.
+    #    WHAT IT ACTUALLY IS, after being called two opposite things in
+    #    one day: stable inside a llama-server process, and different
+    #    across a restart. Not intermittent, not deterministic. Both
+    #    earlier readings were over-confident about a near-tie.
+    #
+    #    The morning of 2026-09-12, on Qwen3.5-9B: `review` with
+    #    {"file_path": "src/forge/graph.py"} in every run -- forward,
+    #    reverse with the fixture moved to first position, three
+    #    replays on its own. Recorded in a results file, so this is not
+    #    a memory of it.
+    #
+    #    The same evening, same GGUF, same n_ctx, same single slot, and
+    #    a prompt verified byte-identical between this harness and the
+    #    orchestrator's own: `chat`, twelve times out of twelve. The
+    #    server had been restarted in between -- the model was swapped
+    #    to LFM2.5-8B-A1B and back.
+    #
+    #    Two hypotheses died proving that. It is not fixture ORDER:
+    #    reverse changes nothing. It is not the shared KV cache either,
+    #    which was the obvious suspect once order was ruled out, and
+    #    which this harness's own --no-cache flag exists to test --
+    #    cache on and cache off give the same twelve. What is left is
+    #    the serving process, and attributing it further than that
+    #    would be inventing a cause: the earlier build flags were not
+    #    recorded.
+    #
+    #    So this pair is a TRIPWIRE ACROSS RESTARTS, not a regression
+    #    test, and its value is exactly that it flips. A fixture whose
+    #    verdict depends on which llama-server is running is the only
+    #    instrument here that can say so.
     #
     #    The pair was built to separate two candidate triggers, and it
     #    separated them the other way round. h01 -- which carries the
@@ -518,6 +540,11 @@ FIXTURES = [
     #    times here and the thirteenth is not special -- it is the same
     #    class of change as the rule it would be repairing. Recorded,
     #    measured, and left for a mechanism that cannot be ignored.
+    #
+    #    The live UI confirms it from the other end: asked on a cleared
+    #    conversation, with `!clear` first and nothing before it, the
+    #    same question gets a straight and correct answer about
+    #    daemons, groups and CI/CD. The guard has nothing to refuse.
     #
     #    HOW MUCH OF THE COMPARISON WAS FORGE'S OWN SETTINGS, measured
     #    2026-09-12 after the swap, five arms over these same fixtures
