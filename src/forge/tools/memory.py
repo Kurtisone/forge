@@ -21,6 +21,10 @@ also optional (top_k defaults to 5). "kind" on remember defaults to
 isn't a decision or a todo, and a small local model asked to route a
 plain statement won't reliably invent a kind for it either.
 
+A "remember" on a turn that is a QUESTION is refused and answered as
+a recall instead -- see _remember, and forge/turn.py for the one
+definition of what a question is.
+
 Recall output is formatted for a prompt, not for a log: entries are
 ranked so deliberately-recorded ones come before archived transcript,
 and each is clipped to MEMORY_RECALL_MAX_CHARS. What this tool returns
@@ -48,7 +52,7 @@ import difflib
 import json
 import re
 
-from forge import rag
+from forge import rag, turn
 from forge.config import MEMORY_RECALL_MAX_CHARS, RECALL_LEXICAL_TOP_K
 from forge.kernel.capability import LOCAL_READONLY
 from forge.logger import log
@@ -124,6 +128,38 @@ _TERSE_NOTE = (
 
 
 def _remember(instruction: dict) -> str:
+    # A QUESTION IS NOT A FACT ABOUT THE USER, and by the time the
+    # payload gets here the only sign that it was one is gone.
+    # Measured in the real traces on 2026-09-12: "Je possède un
+    # serveur ?" came back as
+    # {"action":"remember","kind":"fact","content":"Possède un serveur"}
+    # -- the question mark dropped in passing, the user's question
+    # stored as something they told Forge about themselves. Asked
+    # again later, the store answers it with itself.
+    #
+    # The router prompt already carries the rule in as many words
+    # ("Only use this tool when the user explicitly asks you to
+    # remember/save something"), which makes this the twelfth time on
+    # this repository that a rule the model was asked to follow got
+    # replaced by one it cannot break.
+    #
+    # THE SHAPE OF THE TURN IS THE TEST, and the turn is the one thing
+    # the payload cannot lie about -- forge/turn.py holds it for
+    # exactly this kind of check. Measured over every memory routing
+    # in traces.jsonl: 19 remembers, 18 of them declarative and
+    # legitimate, one of them a question, and it is this bug. No
+    # genuine remember has ever been phrased as a question on this
+    # store, so the rule costs nothing that was measured to exist.
+    #
+    # What happens instead is a recall of that same question, because
+    # that is what "Je possède un serveur ?" was asking for. The other
+    # 39 memory routings in the same file are recalls of questions
+    # exactly like it.
+    asked = turn.get_input()
+    if turn.is_question(asked):
+        log.event("memory.remember_refused", reason="question", turn=asked[:120])
+        return _recall({"query": asked})
+
     kind = instruction.get("kind", "").strip().lower() or "fact"
     text = instruction.get("content", "").strip()
     project = instruction.get("project") or None
