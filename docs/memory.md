@@ -847,6 +847,54 @@ prompt. Both are the same open question — two rescue mechanisms whose
 useful share the hot block absorbs — and they get measured together,
 for themselves, or not at all.
 
+### Measured together, 2026-09-12, and now concluded
+
+`bench/rag_hot_tier.py --cutoff` runs both rescues against the same
+block and reports them in the same two columns. On the real store as it
+stands (193 entries, 11 deliberate), with `#307` and `#317` named as
+the answers:
+
+| | fired on | cost | SUBSUMED | ADDS |
+|---|---|---|---|---|
+| word channel | every question | one FTS5 query | **7** | **0** |
+| expansion | 3 questions of 4 | **28.9 s** | 0 | 0 |
+
+**The word channel returns nothing the block does not already hold**,
+and on this store that is close to a tautology rather than a
+coincidence: `RECALL_LEXICAL_EXCLUDE_ARCHIVED` ships `true`, so it only
+ever returns non-archived rows, and the block is exactly the set of
+non-archived rows. The measurement is worth having anyway, because the
+identity breaks in two cases the harness reports directly — when the
+block **truncates** (the cap stops being a tripwire) and when an
+aggregate **supersedes** a row, which the block skips and the word
+channel still reaches.
+
+**The expansion pass returned nothing at all**, which is a different
+finding from subsumed and the harness now says so. It applies the same
+cutoff to its own results, and the nearest distances on the three
+questions where it fired were `0.8899`, `0.9581` and `0.9979` against a
+cutoff of `0.88` — the v3.16 result reproduced on a store that has
+changed since. Twenty-nine seconds, three model calls, zero rows.
+
+And the column that settles it: **every `--expect` entry was in the
+block.** Both mechanisms exist to reach `#307` and `#317`; the block
+carries them unconditionally, for a prefill paid once.
+
+So, as defaults on this store: `RECALL_HOT_FACTS` is the one worth
+turning on, and it is the only one of the three that delivered anything
+here. `RECALL_LEXICAL` stays off while the block is on, and becomes
+worth re-measuring the day the block truncates or the aggregation tier
+starts superseding rows. `RECALL_EXPANSION` stays off, and its own
+precondition already made it inert in production — with no
+`RECALL_MAX_DISTANCE` set, nothing is ever dropped, so there is never a
+failure to rescue.
+
+None of that is an argument for deleting either mechanism. They were
+both measured and both won on their own terms against the store of
+their day; what changed is that a later tier answers the same questions
+for less. The harness is one command, and the day the block stops
+covering the store it is the thing that says so.
+
 There is deliberately **no suggested budget** in that output. The cap
 is a budget and not a measurement; the only thing that moves it is the
 store growing, and `HEADROOM` reports that directly.
