@@ -14,7 +14,10 @@ mocked-away _run_fixed.
 import json
 import subprocess
 
+import pytest
+
 import forge.graphs.sysadmin as sysadmin_mod
+from forge import non_answer
 from forge.graphs.sysadmin import build as build_sysadmin
 
 
@@ -992,3 +995,90 @@ def test_a_systemd_unit_gets_no_running_claim(monkeypatch):
 
     assert "WAS RUNNING" not in captured["prompt"]
     assert "État observé" not in state.final_output
+
+
+def test_an_empty_collection_is_not_diagnosed(monkeypatch):
+    """
+    The command ran and returned nothing. There is no judgement to make
+    here -- a diagnosis of zero lines is invention with extra steps --
+    and until 2026-09-12 the empty block reached the synthesis under a
+    "--- collected logs ---" header.
+
+    That this needed fixing at all was measured: asked whether an empty
+    log block contained what was needed to answer "pourquoi searxng a
+    redémarré ?", the model said yes (bench/sysadmin_verdict.py).
+    """
+
+    def collects_nothing(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["searxng.service"])
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return "searxng"
+        return "   \n  "
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", collects_nothing)
+    monkeypatch.setattr(
+        sysadmin_mod,
+        "call_llm",
+        lambda *a, **k: pytest.fail("the model was asked to diagnose nothing"),
+    )
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": "searxng", "question": "pourquoi ?"}
+    )
+
+    assert non_answer.is_non_answer(state.final_output)
+    assert "podman logs searxng" in state.final_output
+
+
+def test_an_empty_collection_is_not_evidence_that_nothing_is_wrong(monkeypatch):
+    """
+    `podman logs` on a container that never wrote a line and
+    `journalctl -u` on a window that does not cover the incident look
+    identical from here. The message has to say which claim it is
+    making, because the other one is the failure this whole graph is
+    shaped around.
+    """
+
+    def collects_nothing(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["searxng.service"])
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return ""
+        return ""
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", collects_nothing)
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": "searxng.service", "question": None}
+    )
+
+    assert "ne dit pas que tout va bien" in state.final_output
+
+
+def test_a_run_that_read_nothing_never_reaches_the_store(monkeypatch):
+    """
+    The other half, and the reason this node is declared answers=False:
+    an exchange whose reply is a refusal is a near-copy of its own
+    question, which makes it the closest match for anyone asking it
+    again.
+    """
+    from forge import outcome
+
+    outcome.clear()
+
+    def collects_nothing(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["searxng.service"])
+        if cmd == sysadmin_mod._DISCOVER_CONTAINERS_CMD():
+            return "searxng"
+        return ""
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", collects_nothing)
+
+    build_sysadmin().run(
+        "", initial_context={"target_hint": "searxng", "question": "pourquoi ?"}
+    )
+
+    assert outcome.pending() is not None
+    outcome.clear()

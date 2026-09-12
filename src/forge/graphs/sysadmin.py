@@ -34,6 +34,43 @@ Nodes:
   synthesize_node   -- single LLM call producing a diagnosis and a
                         proposed fix, never an executed action
 
+Three nodes written entirely in code refuse instead, and each exists
+because a model, handed evidence about something else, answered
+fluently anyway: target_missed (the named target is in neither list),
+collect_failed (the command errored), nothing_collected (the command
+returned no lines).
+
+THE FOURTH CASE IS THE ONE THAT IS STILL OPEN, and it has now been
+measured rather than assumed. Logs are collected before anyone reads
+the question -- that is what makes the question answerable -- so they
+may simply not contain the answer. The prompt says so and asks the
+model to say so plainly; when it complies the reply is prose, which
+forge/non_answer.py cannot match and the run does not report, so the
+exchange is stored as though it were a diagnosis.
+
+The obvious fix is a verdict the code can read. bench/sysadmin_verdict.py
+asked for one four ways, over eight fixtures whose answer is known, on
+2026-09-12:
+
+    arm       right  FALSE NO  FALSE YES
+    plain         5         0          3
+    negated       5         3          0
+    cite          5         0          3
+    reason        3         3          2
+
+Read the two error columns, not the first one. `plain` ("do these logs
+answer?") is wrong only in the YES direction; `negated` (the same
+question inverted) is wrong only in the NO direction. Each arm answers
+the SHAPE of the question it was asked and gets right exactly the
+fixtures where that shape happens to be correct. `cite`, which had to
+name the line that answers and could have said NONE, never chose NONE
+where it had the option -- it took line 1 in six cases of seven. And
+`plain` said YES about an EMPTY log block, which is what
+nothing_collected now refuses without asking anyone.
+
+So there is no verdict channel here at this model size, in any of the
+four shapes, and one deterministic case was hiding inside the idea.
+
 Edges:
   discover_node  -> collect_node     (always)
   collect_node   -> synthesize_node  (always -- a failed individual
@@ -432,6 +469,41 @@ _RUNNING_FOOTER = (
 )
 
 
+def _nothing_collected_node(state: AgentState) -> AgentState:
+    """
+    Report an empty collection, deterministically.
+
+    The command ran, returned nothing, and there is no judgement to
+    make: a diagnosis of zero lines is invention with extra steps.
+    Until now this reached the synthesis with an empty block under a
+    "--- collected logs ---" header, which is the same shape as
+    handing the model a 403 and asking what is wrong with the service.
+
+    This is the ONLY part of "the logs do not answer the question"
+    that needs no model, and measuring the rest is what established
+    that it is the only part available. See the module docstring.
+
+    An empty log file is not a quiet system, and the message says so:
+    `podman logs` on a container that has never written a line and
+    `journalctl -u` on a window with no entries look identical from
+    here, and neither is evidence that nothing is wrong.
+    """
+    source = state.context["log_source"]
+    target = state.context.get("target_hint")
+    subject = f"« {target} »" if target else "le système"
+
+    state.final_output = (
+        f"{non_answer.NOTHING_COLLECTED_PREFIX}`{source}` n'a rien renvoyé "
+        f"pour {subject}. Il n'y a donc rien à diagnostiquer ici — et une "
+        "sortie vide ne dit pas que tout va bien : elle dit que ce journal "
+        "est vide, ce qui arrive aussi quand la cible écrit ailleurs ou "
+        "quand la fenêtre interrogée ne couvre pas l'incident."
+    )
+    state.final_tool = "sysadmin"
+    log.event("sysadmin.done", chars=len(state.final_output), collected=0)
+    return state
+
+
 def _collect_failed_node(state: AgentState) -> AgentState:
     """
     Report a failed collection, deterministically.
@@ -646,6 +718,7 @@ def build() -> Graph:
     g.add_node("collect", _collect_node)
     g.add_node("target_missed", _target_missed_node, answers=False)
     g.add_node("collect_failed", _collect_failed_node, answers=False)
+    g.add_node("nothing_collected", _nothing_collected_node, answers=False)
     g.add_node("synthesize", _synthesize_node)
 
     g.add_edge("discover", "collect")
@@ -659,6 +732,11 @@ def build() -> Graph:
         "collect",
         "collect_failed",
         condition=lambda s: bool(s.context.get("collect_failed")),
+    )
+    g.add_edge(
+        "collect",
+        "nothing_collected",
+        condition=lambda s: not (s.context.get("collected_logs") or "").strip(),
     )
     g.add_edge("collect", "synthesize")
 

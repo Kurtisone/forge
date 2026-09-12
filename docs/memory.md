@@ -183,12 +183,42 @@ twenty-two are prose a model chose, and they split in two. Five are a chat turn
 declining ("Je ne peux pas analyser les logs de ton Steam Deck") — an answer like
 any other, and a phrase list aimed at it would start dropping real answers. Four
 are a `sysadmin` or `research` **synthesis** reporting that the logs it collected
-or the results it found do not answer the question. Those are different: the run
-has the material to know, it ran the collection, and nothing in it reports a
-verdict — the only trace is a sentence a model chose to write. Giving that
-synthesis a verdict the code can read, rather than a sentence it has to parse, is
-the next mechanism on this path and it needs its own campaign. (The other four of
+or the results it found do not answer the question. Those looked different: the
+run has the material to know, it ran the collection, and nothing in it reports a
+verdict — the only trace is a sentence a model chose to write. (The other four of
 the twenty-two were recalls, which stopped being indexed at all on 2026-08-23.)
+
+### The verdict the code could read, asked for four ways
+
+Giving that synthesis a verdict instead of a sentence was the obvious next
+mechanism, and `bench/sysadmin_verdict.py` is what it had to get past: eight
+fixtures whose answer is known, one model call each, on 2026-09-12.
+
+| arm | right | FALSE NO | FALSE YES |
+|---|---|---|---|
+| `plain` — do these logs answer the question? | 5 | 0 | 3 |
+| `negated` — is the answer missing from them? | 5 | 3 | 0 |
+| `cite` — which line answers it, or NONE | 5 | 0 | 3 |
+| `reason` — one bounded phrase, then the verdict | 3 | 3 | 2 |
+
+**Read the two error columns and ignore the first one.** `plain` is wrong only
+in the YES direction and `negated`, which is the same question inverted, only in
+the NO direction: each arm answers the *shape* of the question it was asked and
+scores on exactly the fixtures where that shape happens to be right. `cite` could
+have said NONE and never did where it had the option — line 1, six times out of
+seven. `reason` filled its phrase slot with hallucinated prompt instructions
+("Keep the answer short. No explanations.") in half the cases, and on the one
+where it described the crash correctly it then answered NO.
+
+So there is no verdict channel at this model size, in any of the four shapes.
+What the campaign did produce is the case that never needed a model: `plain` said
+an **empty** log block contained what was needed to answer a question about a
+restart, and `graphs/sysadmin.py` now refuses that in code, with
+`[rien à lire] ` and a node declared `answers=False`. An empty log file is not a
+quiet system.
+
+The rest of the family stays open, and the harness is the cheapest thing in this
+repository to re-run the day a larger provider is wired up.
 
 A recall answer is never indexed, good or bad. It was rebuilt from entries the
 store already holds, so writing it back gives the store a second, worse copy —
@@ -866,6 +896,13 @@ deleted — `!forget <id>` is the deliberate step.
 `rag_resplit` rewrites rows in place and there is no undo — take the backup. It inserts
 the pieces before deleting the block, so an interrupted run leaves a visible duplicate
 rather than a missing entry.
+
+One harness in `bench/` reads no store at all: `sysadmin_verdict` asks whether the
+model can tell that a log block does not answer a question, over fixtures whose
+answer is known. Its inputs are written rather than collected — `traces.jsonl`
+records the *source* of a collection and never its content — which is stated at
+the top of the file, because a harness that produced a confident verdict from its
+own boilerplate is a thing that has already happened here twice.
 
 ## Aggregation by subject (v3.19)
 
