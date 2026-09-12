@@ -43,6 +43,24 @@ empty outputs are detected and replaced with a clean placeholder.
 
 ---
 
+### One rule, arrived at the hard way
+
+**A choice that can be enumerated goes in a grammar or in code, never in a
+prompt.** Not a preference — the record. Thirteen times now a rule written in
+the prompt has been followed most of the time and silently broken the rest,
+and each one was replaced by something that cannot break it: a GBNF grammar
+whose alternation makes the wrong token unsamplable, a check on the shape of
+the turn, an arithmetic gate between two texts.
+
+The corollary is that defaults here are earned rather than chosen. Every
+mechanism with a knob ships **off** until a harness in [`bench/`](bench/) has
+measured it against a copy of the real store — and several shipped off
+*because* of what the harness said. `docs/memory.md` is the long version: it
+records the campaigns that failed, at the length that makes them
+reproducible.
+
+---
+
 ### Quick start
 
 ```bash
@@ -102,7 +120,9 @@ accepted -- including the one worth reading before you edit
 ### Status
 
 Forge is an experimental local runtime, not a production framework.
-The public API (orchestrator, tool registry, providers, graph engine) is stabilising from v3.0 onward.
+The public API (orchestrator, tool registry, providers, graph engine) is
+stabilising from v3.0 onward; v3.20 is current, and
+[docs/roadmap.md](docs/roadmap.md) says what each version actually did.
 
 ---
 

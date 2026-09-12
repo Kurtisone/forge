@@ -29,6 +29,78 @@ root; without it `pytest -v` fails at collection with
 formatting alone -- running only the latter locally will let a patch
 through that CI then rejects.
 
+## Running the tests
+
+```bash
+PYTHONPATH=src pytest -q
+```
+
+One thing about that command is load-bearing and does not look it: the
+directory holding `pytest` has to be on your **PATH**, not merely the
+interpreter you invoke. `tools/test.py` resolves its runner with
+`shutil.which()` against the real process PATH (deliberately — the
+subprocess itself gets a minimal environment, and a runner installed
+somewhere other than `/usr/bin` would be unreachable otherwise), so
+running the suite as `…/venv/bin/python -m pytest` without activating
+the venv fails six tests in `tests/test_test_tool.py` and the failures
+look exactly like a regression in the tool. Activate the venv, or:
+
+```bash
+PATH=…/venv/bin:$PATH PYTHONPATH=src …/venv/bin/python -m pytest -q
+```
+
+The suite writes about 540 MB to `TMPDIR` — one sqlite-vec store per
+test that needs one — and pytest keeps the last three runs. On a box
+where `/tmp` is a small tmpfs (1.5 GB on the Deck), three full runs
+fill it and the suite starts failing in bulk on `database or disk is
+full`, which also looks like anything but its cause. `rm -rf
+/tmp/pytest-of-$USER` between series.
+
+## The measurement harnesses
+
+`bench/` is not a second test suite. Tests pin behaviour that must not
+change; these answer questions the test suite cannot ask — what a
+distance is on *this* store, what a prompt costs on *this* box, whether
+a model can make a judgement at all. Most of them end in a number that
+went into a default, or in a finding that killed a mechanism.
+
+| Harness | What it answers | Needs |
+|---|---|---|
+| `router_ab` | What the router prompt costs and what it decides (see below) | server, two checkouts |
+| `recall_distance` | What distance a good memory hit sits at here | server + embeddings |
+| `instruct_prefix` | Whether the embedding model's query instruction helps on this store | store copy |
+| `rag_dilution` | What burying a sentence in a compacted block costs | store copy |
+| `recall_expansion` | What asking again in other words rescues, and what it lets in | store copy + model |
+| `rag_hybrid` | Which channel reaches which entry, and what the words drag in | store copy |
+| `rag_hot_tier` | What the hot block answers, costs, and makes redundant | store copy |
+| `rag_aggregate` | What the aggregation pass would fold and what it would refuse — **free and deterministic since v3.19**, writes only under `--apply` | store copy |
+| `sysadmin_verdict` | Whether the model can tell that a log block does not answer the question | model |
+| `no_think_ab` | Whether `/no_think` still does anything on the synthesis prompts | model |
+| `prose_grammar_ab` | What giving the graph syntheses their own grammar costs | model |
+
+Everything that reads the store runs through one script:
+
+```bash
+bench/in_container.sh rag_hybrid --db /tmp/real_copy.db \
+    --hit "Tu peux me lister mon matériel ?" --expect 307 \
+    --miss "Comment s'appelle mon chat ?"
+```
+
+`in_container.sh` copies this checkout and a **fresh copy of the store**
+into the container and runs one harness there with `PYTHONPATH` pointing
+at the copy. Both halves matter. Without the copy, a benchmark is one
+keystroke away from measuring — or writing to — production. Without the
+`PYTHONPATH`, `from forge import rag` resolves to the image's deployed
+code rather than the checkout you just copied in, which is precisely the
+case you reach for a harness in.
+
+`sysadmin_verdict` is the one harness with no store behind it: the log
+blocks it asks about are written, because `traces.jsonl` records the
+*source* of a collection and never its content. It says so at the top,
+for the reason `bench/_harness.py` has a `PLACEHOLDER` check — a harness
+producing a confident verdict from its own boilerplate has happened here
+twice.
+
 ## Prompt Cache & Routing A/B (v3.12)
 
 `bench/router_ab.py` measures what the router prompt costs and what it
