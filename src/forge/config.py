@@ -66,6 +66,34 @@ LLAMA_CPP_CACHE_PROMPT = _bool("LLAMA_CPP_CACHE_PROMPT", "true")
 # deployment it buys nothing measured. Turn it on when you change model.
 LLAMA_CPP_APPLY_TEMPLATE = _bool("LLAMA_CPP_APPLY_TEMPLATE", "false")
 
+# --- One backend per capability (v3.22) -----------------------------------
+# FORGE_PROVIDER is the backend for the whole process, which is the
+# assumption ARCHITECTURE.md's Niveau 2 is written against: the Router
+# asks for a capability, the Registry lists candidates, the Scheduler
+# chooses. There has never been anything to choose between, because
+# every capability resolved to the same backend by construction.
+#
+# This is the smallest change that makes plurality real without
+# inventing the Scheduler: the backend is chosen by CAPABILITY, from
+# configuration, deterministically. Each capability still has exactly
+# one candidate -- so kernel/registry.candidates() is untouched and
+# _dispatch's hard stop on an ambiguous capability keeps meaning what
+# it says.
+#
+# Format: comma-separated `capability=provider` or
+# `capability=provider:model`, the model being required by the backends
+# that actually send one (LLM_MODEL is never sent to llama.cpp, and is
+# mandatory for openrouter).
+#
+#   CAPABILITY_PROVIDER=research=openrouter:z-ai/glm-4.6,delegate=openrouter:z-ai/glm-4.6
+#
+# Empty by default, which is exactly today's behaviour: everything
+# resolves to FORGE_PROVIDER. Deliberately not a set of measured
+# scores -- see kernel/capability.py on why hardcoding plausible cost
+# and quality numbers would let a Scheduler look informed while
+# deciding on fiction.
+CAPABILITY_PROVIDER = os.getenv("CAPABILITY_PROVIDER", "")
+
 # --- OpenRouter -----------------------------------------------------------
 # These were referenced by providers/llm_provider.py but never defined,
 # which meant FORGE_PROVIDER=openrouter could never actually work.
