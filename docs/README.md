@@ -12,6 +12,13 @@ already been tried", now live in [campaigns.md](campaigns.md), and
 end is only worth writing down at the length that makes it
 reproducible.
 
+`roadmap.md` failed the same rule the same day, in a shape line counts
+hide: 41 lines and 15 000 characters, because it was a table whose
+cells had grown into essays — 4346 of them in v3.20's single cell. It
+is an index again, with the detail in sections under it. The tell was
+that all nine measurements it cited were already in `campaigns.md`: a
+page drifts by taking on a neighbour's job, not by getting long.
+
 | Page | Read it when |
 |---|---|
 | [Architecture](architecture.md) | You want to know how a turn flows, or why a boundary is where it is |
