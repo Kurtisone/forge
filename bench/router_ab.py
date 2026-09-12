@@ -519,6 +519,37 @@ FIXTURES = [
     #    class of change as the rule it would be repairing. Recorded,
     #    measured, and left for a mechanism that cannot be ignored.
     #
+    #    HOW MUCH OF THE COMPARISON WAS FORGE'S OWN SETTINGS, measured
+    #    2026-09-12 after the swap, five arms over these same fixtures
+    #    (bench/lfm-settings-sweep.json). Forge sends a RAW prompt to
+    #    /completion -- no chat template is applied, ever -- so a model
+    #    whose template is ChatML runs off-distribution from the first
+    #    token. Wrapping the same prompt in <|im_start|> framing takes
+    #    the malformed-envelope count from 4 to 0, in all three arms
+    #    that carry it and in neither arm that does not. That class of
+    #    failure was Forge's, not the model's, and reading it as the
+    #    model's is what this harness's own cmd_compare warns about
+    #    from the other direction.
+    #
+    #    Two hypotheses died in the same run, and they are recorded
+    #    because a dead one costs the next person the same week.
+    #    Allowing <think> in the grammar -- the theory being that a
+    #    reasoning model under a grammar that pins the first token has
+    #    nowhere to put its reasoning but `content` -- changed nothing:
+    #    2 leaks with it against 1 without. And temperature 0.3 with a
+    #    repeat penalty scored WORST of the five. Greedy is fine here.
+    #
+    #    What survives is the routing score, and only because it is
+    #    large enough to survive: 20/31 as shipped, 22/31 at the best
+    #    setting found, against 27/31 for the 9B. Two fixtures is this
+    #    set's noise floor (cmd_compare says so, and the control itself
+    #    moved 21 to 20 between two runs), five is not.
+    #
+    #    Cost of the framing, measured rather than assumed: it breaks
+    #    the pure-append property outright, 11/11 to 0/11, for a
+    #    divergent tail of 33 characters -- about eight tokens
+    #    recomputed per turn, against the thousands v3.12 was fighting.
+    #
     #    MODEL-SPECIFIC, measured the same day by swapping the served
     #    model for LFM2.5-8B-A1B-Q4_K_M: all four h fixtures pass. That
     #    is not a fix and reading it as one is the trap this harness
