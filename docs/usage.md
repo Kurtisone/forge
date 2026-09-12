@@ -82,8 +82,21 @@ podman run -it --rm \
   forge-core python -m forge.main
 ```
 
-REPL commands: `!help`, `!clear`, `!trace`, `!remember`, `!recall`. Multi-line paste: type your question
-then append ` ``` ` or paste question + code in one go (auto-detected via `select()`).
+REPL commands: `!help`, `!clear`, `!compact`, `!memory [kind]`, `!forget <id>`,
+`!trace`, `!capabilities`, `!remember <kind> <project|-> <content>`, `!recall <query>`.
+Multi-line paste: type your question then append ` ``` ` or paste question + code in
+one go (auto-detected via `select()`).
+
+Two of those are the pair for reading and repairing the vector store, and they
+exist because `!recall` cannot do it: semantic search needs a question, so it can
+never tell you what is *in* there. `!memory` lists entries as stored, with their
+ids and the breakdown by kind; `!forget <id>` removes one from both tables.
+
+`!clear` empties the rolling history **and the tiroir** — pinned messages
+included, which is a known debt. It is also the cheap way to keep a live trial
+out of the store: compaction indexes one entry per exchange, so a trial question
+still in the window when the threshold is crossed gets archived, and the next
+trial's best match is the previous trial.
 
 **CLI (one-shot commands, no REPL):**
 

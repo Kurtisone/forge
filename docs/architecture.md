@@ -287,6 +287,16 @@ AgentState.final_output  (+ full trace in AgentState.trace)
 
 ## Design Philosophy
 
+- **An enumerable choice goes in a grammar or in code, never in a prompt** — the rule the
+  rest of this list is downstream of, and the one with a body count. Thirteen times a rule
+  written in the router or a graph prompt has been followed most of the time and silently
+  broken the rest; each was replaced by something that cannot break it — an alternation that
+  makes the wrong token unsamplable, a test on the shape of the turn, arithmetic between two
+  texts. A prompt states what the code cannot: instructions, not decisions.
+- **A default is measured, not chosen** — every mechanism with a knob ships **off** until a
+  harness in `bench/` has run it against a copy of the real store, and several ship off
+  *because* of what the harness said. `docs/memory.md` keeps the failed campaigns at the
+  length that makes them reproducible, which is the point of writing them down at all.
 - **Deterministic routing over free-form reasoning** — the model picks a tool from a fixed set,
   not an open-ended plan.
 - **Explicit tool activation** — a tool requires `run()` *and* an `ENABLED_TOOLS` opt-in.

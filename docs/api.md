@@ -16,6 +16,8 @@ is a client of this API and has no privileged path of its own.
 | `GET` | `/traces?n=10` | optional | Recent execution traces |
 | `POST` | `/remember` | optional | Store a decision/todo in vector memory (v3.7) |
 | `GET` | `/search?q=...` | optional | Semantic search over remembered decisions/todos |
+| `GET` | `/memory` | optional | List the vector store **as stored**, no query and no embedding call — `search` is semantic by construction, so it cannot tell you what is in there without a question (v3.14). `?kind=` filters, and the breakdown by kind comes with it |
+| `DELETE` | `/memory/{id}` | optional | Forget one entry, from both tables. The deliberate step `deploy/rag_resplit.py` stops short of: it reports the entries that are a refusal and nothing else, and deletes none of them |
 | `GET` | `/history` | optional | Full rolling history with stable ids (v3.9) |
 | `GET` | `/drawer` | optional | Currently pinned messages, the "tiroir" (v3.9) |
 | `POST` | `/drawer/pin` | optional | Pin a message by id — pins its exchange partner too (v3.9) |
