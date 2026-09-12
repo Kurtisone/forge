@@ -110,6 +110,14 @@ NO_RESULTS_PREFIX = "[no results] "
 TARGET_MISSED_PREFIX = "[cible introuvable] "
 COLLECT_FAILED_PREFIX = "[collecte impossible] "
 
+# The one case where "these logs do not answer the question" needs no
+# judgement: there are no logs. Measured 2026-09-12 with
+# bench/sysadmin_verdict.py -- asked whether an EMPTY log block
+# contained what was needed to answer "pourquoi searxng a redémarré ?",
+# the model said yes. See the sysadmin graph's docstring for the other
+# seven fixtures and the three arms that failed the same way.
+NOTHING_COLLECTED_PREFIX = "[rien à lire] "
+
 # The delegation flow re-asking mid-job. These two are French
 # sentences rather than bracketed markers, which is a weaker test and
 # is accepted for the reason stated under `startswith` below: a chat
@@ -131,6 +139,7 @@ _PREFIXES = (
     NO_RESULTS_PREFIX,
     TARGET_MISSED_PREFIX,
     COLLECT_FAILED_PREFIX,
+    NOTHING_COLLECTED_PREFIX,
     DID_NOT_UNDERSTAND_PREFIX,
     NOT_YOUR_DECISION_PREFIX,
 )
