@@ -44,6 +44,7 @@ lived.
 | **v3.19** | done | Aggregation by subject, composed in code rather than written by a model — [detail](#v319--aggregation-by-subject) |
 | **v3.20** | done | Five faults found in anger, plus 3.20.1 and 3.20.2 — [detail](#v320--five-faults-found-in-anger) |
 | **v3.21** | done | Forge stops assuming which model it is talking to, and the trace stops assuming a run answered — [detail](#v321--forge-stops-assuming-which-model-answered) |
+| **v3.22** | done | One backend per capability, and three UI bugs a human found in ten minutes — [detail](#v322--one-backend-per-capability-and-what-a-human-pass-is-for) |
 | **Kernel L2** | done | Capability layer and a deterministic Policy Engine, both wired into the orchestrator, the API, the CLI and the graphs — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [The Kernel layer](architecture.md#the-kernel-layer). Sits on the architectural maturity axis, not this product roadmap |
 | **Kernel L3** | blocked | The Cognitive Scheduler, and the reason it is not started: every capability resolves to exactly one candidate, so there is nothing to arbitrate. `_dispatch` says so in code, and stops hard rather than picking silently. `CAPABILITY_PROVIDER` (v3.22) moves the choice from the process to the work without inventing the arbiter |
 
@@ -341,6 +342,59 @@ now, computed once on the single exit path -- once being structural,
 since `outcome.taken()` clears on read and a second caller would
 disagree with the first by construction. The web UI gained the third
 state it always needed.
+
+### v3.22 — one backend per capability, and what a human pass is for
+
+`CAPABILITY_PROVIDER` makes the backend a property of the WORK rather
+than of the process. `FORGE_PROVIDER` is one value for everything, so a
+routing decision, a research synthesis and a compaction summary all go
+to the same place whether or not that is a good idea -- and
+ARCHITECTURE.md's Niveau 2 is written against a world where they do not.
+Empty by default. It is not the Cognitive Scheduler and does not pretend
+to be: each capability still resolves to exactly ONE backend, from
+configuration, so `candidates()` is untouched and `_dispatch`'s hard
+stop on an ambiguous capability keeps meaning what it says. It carries
+no cost or quality scores either, for the reason `kernel/capability.py`
+already gives at length. A contextvar rather than a parameter, following
+`subtrace`, `metrics`, `outcome` and `turn`, which all made the same
+trade for the same reason; a context manager rather than set/clear,
+because what it must survive is a tool that raises. The grammar warning
+moved to the RESOLVED backend, which is the point of moving it.
+
+Then a human clicked around for ten minutes and found three bugs the
+suite could not reach. Emphasis written with underscores was arriving on
+screen with its punctuation showing, because the UI implements
+`**bold**` and `*em*` and nothing else -- the local-container footer had
+been wrong since the day it was written. Asterisks rather than a new
+rule in the renderer, because this product's answers are full of
+`file_path` and `RECALL_MAX_DISTANCE` and emphasis on underscore would
+eat identifiers. Switching WINDOW did not refresh the model name while
+switching tab did: `visibilitychange` fires on tab visibility, so
+alt-tabbing to a terminal to swap a model -- the exact case the listener
+was written for -- fired nothing. And a green step pill sat next to
+"answered nothing", two accurate facts rendered as one mixed signal.
+
+All three have the same shape: the source assertion was TRUE and the
+behaviour was wrong. An assertion can say a branch exists; it cannot say
+the branch is bound to the right browser event, or that a second place
+is not rendering the same fact differently.
+
+What closed that gap for the renderer is that the "no JS runtime" limit
+three test files state was never true of this machine, which has deno.
+`tests/test_ui_rendering.py` extracts `formatContent` and its helpers
+from `index.html` and executes them -- extracted, not copied, because a
+second copy of a renderer is a copy that drifts. It found the underscore
+bug on its first run, and it now proves by execution what
+`test_ui_security.py` could only assert: that escaping holds and that a
+`javascript:` URL never becomes a link.
+
+And `h02` was corrected from both of the confident things said about it.
+It is stable inside a llama-server process and different across a
+restart -- `review` all morning, `chat` twelve times out of twelve the
+same evening on the same GGUF, with the prompt verified byte-identical
+and the KV cache ruled out by the harness's own `--no-cache`. Neither
+intermittent nor deterministic. A tripwire across restarts, whose value
+is that it flips.
 
 ---
 
