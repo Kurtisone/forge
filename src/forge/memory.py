@@ -285,7 +285,7 @@ def add_exchange(user_content: str, assistant_content: str, index: bool = True) 
     rewrite the file twice for what is logically one turn).
 
     `index=False` records that this exchange must not reach the vector
-    store -- see orchestrator._indexable. The exchange is stored and
+    store -- see orchestrator._not_an_answer. The exchange is stored and
     displayed either way; only compaction reads the mark.
     """
     memory = load_memory()

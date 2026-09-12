@@ -433,6 +433,12 @@
     .trace-id { font-family: var(--mono); color: var(--accent); font-size: .78rem; }
     .trace-ok  { color: var(--green); }
     .trace-err { color: var(--red); }
+    /* A run that completed and answered nothing. Neither green nor
+       red on purpose: nothing broke, and nothing was answered. */
+    .trace-blank { color: var(--muted); }
+    .trace-blank-note {
+      color: var(--muted); font-size: .78rem; margin-top: 6px;
+    }
     .trace-time { color: var(--muted); font-size: .75rem; }
     .trace-input { color: var(--muted); font-style: italic; margin-bottom: 6px; }
     .trace-steps { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -1229,6 +1235,13 @@ async function loadTraces() {
     list.innerHTML = ''
     ;[...traces].reverse().forEach(t => {
       const ok = t.ok
+      // Three states, not two. A run can complete cleanly and answer
+      // nothing -- an invented hostname web_fetch could not resolve,
+      // a recall with nothing above the cutoff -- and `ok` says
+      // nothing about that: it is a rendering directive, set true on
+      // purpose so the failure reaches the user as a message instead
+      // of a crash. Drawing those green was the whole complaint.
+      const blank = ok && t.not_answered
       const card = document.createElement('div')
       card.className = 'trace-card'
 
@@ -1260,13 +1273,14 @@ async function loadTraces() {
       card.innerHTML = `
         <div class="trace-header">
           <span class="trace-id">#${t.run_id}</span>
-          <span class="${ok ? 'trace-ok' : 'trace-err'}">${ok ? '✓' : '✗'}</span>
+          <span class="${!ok ? 'trace-err' : blank ? 'trace-blank' : 'trace-ok'}" title="${blank ? escapeHtml(t.not_answered) : ''}">${!ok ? '✗' : blank ? '∅' : '✓'}</span>
           <span class="trace-time">${t.timestamp} · ${t.total_ms}ms</span>
         </div>
         <div class="trace-input">${escapeHtml(t.user_input_preview || '')}</div>
         <div class="trace-steps">${stepsHtml}</div>
         ${subStepsHtml}
         ${t.error ? `<div style="color:var(--red);font-size:.78rem;margin-top:6px">⚠ ${escapeHtml(t.error)}</div>` : ''}
+        ${blank ? `<div class="trace-blank-note">∅ n'a rien répondu — ${escapeHtml(t.not_answered)}</div>` : ''}
       `
       list.appendChild(card)
     })

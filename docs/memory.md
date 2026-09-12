@@ -736,12 +736,27 @@ GET /traces?n=5
 ```
 
 Each record contains: `run_id`, `timestamp`, `user_input_preview`, per-step tool + duration,
-`total_ms`, `ok`, `error`.
+`total_ms`, `ok`, `not_answered`, `error`, and `llm` (per-run inference totals, including
+which model actually answered).
+
+`ok` and `not_answered` are not the same question, and reading the first as the second is
+a bug this file exists to prevent a repeat of. **`ok` is a rendering directive**: it says
+the run should be surfaced as a message rather than as a crash, and graphs set it true on
+purpose when they fail — `graphs/recall.py`'s error node carries the comment. So a run can
+be `ok` and have answered nothing at all.
+
+**`not_answered`** is the verdict: the reason the run produced no answer, or `null` if it
+did. It is the *same* value that keeps the exchange out of the vector store, computed once
+on the single exit path — once being structural rather than tidy, since `outcome.taken()`
+clears on read and a second caller would get `null` and disagree with the first.
+
+Observed before it existed: the router invented a hostname, `web_fetch` returned
+`[error] could not resolve host` as its output string, the log recorded
+`memory.not_indexed reason='non-answer reply'` — and the same run was drawn with a green
+tick. The web UI now has three states for this: ✓ answered, ∅ ran and answered nothing,
+✗ failed.
 
 ---
 
 [← Documentation index](README.md) · [← Project README](../README.md)
 
----
-
-[← Documentation index](README.md) · [← Project README](../README.md)

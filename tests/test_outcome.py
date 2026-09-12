@@ -51,23 +51,27 @@ class TestChannel:
 
 
 class TestAnsweredDecision:
-    def test_a_plain_answer_is_indexable(self):
-        assert Orchestrator()._indexable("Tu as un Steam Deck.") is True
+    def test_a_plain_answer_reports_no_reason(self):
+        assert Orchestrator()._not_an_answer("Tu as un Steam Deck.") is None
 
     def test_reported_failure_wins_over_a_fluent_reply(self):
         # The point of the structural half: the text says nothing is
         # wrong, the run says otherwise.
         outcome.do_not_index("recall: no results above the distance cutoff")
-        assert Orchestrator()._indexable("Je vais regarder ça pour toi.") is False
+        assert (
+            Orchestrator()._not_an_answer("Je vais regarder ça pour toi.") is not None
+        )
 
     def test_non_answer_text_alone_is_enough(self):
-        assert Orchestrator()._indexable(non_answer.NOTHING_CLOSE_ENOUGH) is False
+        assert (
+            Orchestrator()._not_an_answer(non_answer.NOTHING_CLOSE_ENOUGH) is not None
+        )
 
     def test_verdict_is_consumed_so_the_next_turn_is_clean(self):
         outcome.do_not_index("recall: no results")
         agent = Orchestrator()
-        assert agent._indexable("peu importe") is False
-        assert agent._indexable("Le port est 8080.") is True
+        assert agent._not_an_answer("peu importe") is not None
+        assert agent._not_an_answer("Le port est 8080.") is None
 
 
 class TestPersistence:
@@ -146,7 +150,7 @@ class TestRecallReportsItself:
         # The rule is about recall, not about every turn. Anything
         # else keeps being indexed exactly as before.
         assert outcome.pending() is None
-        assert Orchestrator()._indexable("Le port est 8080.") is True
+        assert Orchestrator()._not_an_answer("Le port est 8080.") is None
 
 
 class TestAGraphThatEndsWithoutAnswering:

@@ -56,6 +56,14 @@ def _build_record(state) -> dict:
         "steps": steps,
         "final_tool": state.final_tool,
         "ok": state.ok,
+        # Why the run answered nothing, or None if it answered. `ok`
+        # alone drew a tick on a run whose entire reply was "[error]
+        # could not resolve host" -- because ok is a rendering
+        # directive ("surface as a message, not a crash"), not a
+        # verdict. Read off the state rather than recomputed:
+        # outcome.taken() clears on read, so there is one chance to
+        # ask and orchestrator._finish already took it.
+        "not_answered": getattr(state, "not_answered", None),
         "error": state.error,
         "total_ms": _elapsed_ms(state),
         # None when the run never opened a metrics scope (a Graph run
