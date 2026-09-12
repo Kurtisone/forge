@@ -2,6 +2,7 @@ import requests
 
 from forge import gbnf
 from forge.config import (
+    LLAMA_CPP_APPLY_TEMPLATE,
     LLAMA_CPP_CACHE_PROMPT,
     LLAMA_CPP_ID_SLOT,
     LLAMA_CPP_N_PREDICT,
@@ -12,6 +13,77 @@ from forge.errors import ProviderError
 from forge.logger import log
 from forge.providers import error_body
 from forge.types import Completion, Usage
+
+# The sentinel handed to /apply-template so the constant framing can be
+# split off it. Deliberately ugly and deliberately free of characters a
+# Jinja template escapes or a tokenizer splits on in an interesting way.
+_SENTINEL = "FORGEPROMPTSENTINEL"
+
+# (prefix, suffix) for the model currently loaded, or None for "not
+# asked yet". Cached for the life of the process because the answer is
+# a property of the loaded model and re-asking it every call would put
+# an HTTP round-trip in front of every routing decision. The cost of
+# that cache is that swapping the served model under a running Forge
+# leaves the old framing in place until it restarts -- the same
+# trade-off, and the same remedy, as any other process-lifetime cache.
+_template_framing: tuple[str, str] | None = None
+
+
+def _framing(url: str) -> tuple[str, str]:
+    """
+    What the loaded model wants around a user turn, asked rather than
+    assumed.
+
+    llama-server's /apply-template renders the model's OWN chat
+    template, so nothing here knows or cares whether that is ChatML,
+    Llama-3, or something that does not exist yet. Send a sentinel as
+    the only message, and whatever comes back on either side of it is
+    the framing.
+
+    Best-effort, like get_loaded_model: ("", "") on any failure -- an
+    older llama.cpp with no such endpoint, a server that is down, a
+    template that swallowed the sentinel -- so a provider that cannot
+    answer the question degrades to the raw prompt Forge sent before
+    this existed, rather than failing the turn over a wrapper.
+    """
+    global _template_framing
+    if _template_framing is not None:
+        return _template_framing
+
+    framing = ("", "")
+    try:
+        r = requests.post(
+            f"{url}/apply-template",
+            json={"messages": [{"role": "user", "content": _SENTINEL}]},
+            timeout=5,
+        )
+        r.raise_for_status()
+        rendered = r.json().get("prompt")
+    except (requests.RequestException, ValueError):
+        rendered = None
+
+    # Exactly once, or the split is meaningless: a template that drops
+    # the sentinel gives ("", whole thing) and one that repeats it in a
+    # system preamble would put half the framing in the wrong half.
+    if isinstance(rendered, str) and rendered.count(_SENTINEL) == 1:
+        prefix, suffix = rendered.split(_SENTINEL)
+        framing = (prefix, suffix)
+        log.info(
+            "chat template: %d chars before the prompt, %d after",
+            len(prefix),
+            len(suffix),
+        )
+    else:
+        log.warning("chat template unavailable at %s, sending the raw prompt", url)
+
+    _template_framing = framing
+    return framing
+
+
+def reset_template_cache() -> None:
+    """Forget the framing, so the next call asks again. For tests."""
+    global _template_framing
+    _template_framing = None
 
 
 def get_loaded_model(url: str) -> str | None:
@@ -138,6 +210,10 @@ def _grammar_for(grammar: str | None) -> str | None:
 
 
 def call(url: str, model: str, prompt: str, grammar: str | None = None) -> Completion:
+    if LLAMA_CPP_APPLY_TEMPLATE:
+        prefix, suffix = _framing(url)
+        prompt = f"{prefix}{prompt}{suffix}"
+
     payload = {
         "prompt": prompt,
         "temperature": 0.0,

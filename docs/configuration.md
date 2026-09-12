@@ -17,6 +17,7 @@ this page covers the ones you are likely to touch.
 | `LLAMA_CPP_USE_GRAMMAR` | GBNF grammar-constrained decoding for llama.cpp — forces output to match the router's JSON schema at the sampling level | `true` |
 | `LLAMA_CPP_ID_SLOT` | llama-server slot to pin every request to, so its KV cache can be reused across turns (v3.8) | `0` |
 | `LLAMA_CPP_CACHE_PROMPT` | Ask llama-server to reuse its KV cache from the previous call's matching prefix (v3.8) | `true` |
+| `LLAMA_CPP_APPLY_TEMPLATE` | Wrap the prompt in the **loaded model's own** chat template, asked once from llama-server's `/apply-template` rather than written down here. Forge posts a raw prompt, so without this a model sees plain text where its training saw role markers — worth nothing on the model Forge was tuned around, worth 4 malformed replies in 36 on one whose template is ChatML. Off because a constant suffix after the growing prompt breaks the pure-append property (v3.12) for ~8 tokens a turn: cheap, not free, and unmeasured on a single-model deployment | `false` |
 | `OPENROUTER_URL` | OpenRouter endpoint | `https://openrouter.ai/api/v1/chat/completions` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | *(empty)* |
 | `MAX_STEPS` | Hard ceiling on router→tool steps per run (multi-step only happens if the router sends `"done": false`) | `1` |
