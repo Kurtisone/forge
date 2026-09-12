@@ -153,7 +153,11 @@ def main() -> int:
             if item.get("invented"):
                 print(f"              words from nowhere: {item['invented']}")
         if item.get("folded"):
-            print(f"    FOLDED    {item['folded']} -> #{item['id']}")
+            # An absorbed subject folds into an entry that already
+            # existed, so the target is `into` and there is no `id`.
+            print(
+                f"    FOLDED    {item['folded']} -> #{item.get('id') or item['into']}"
+            )
         if item.get("folds"):
             print(f"    WOULD FOLD {item['folds']}")
         for source_id, missing in (item.get("held_back") or {}).items():

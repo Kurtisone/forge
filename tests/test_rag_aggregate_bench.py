@@ -43,7 +43,11 @@ def db(tmp_path, monkeypatch):
         "Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, 32 Go de RAM",
         "NiPoGi AM06PRO, Arch, 5500U, 32Go RAM, Ansible",
         "Le NiPoGi a 32 Go de RAM",
-        "Possède un Steam Deck sous SteamOS",
+        # An absorption pair: the second says everything the first
+        # does. Its report names `into` and carries no `id`, which is
+        # a different shape for the printer to survive.
+        "Possède un Steam Deck",
+        "Possède un Steam Deck sous SteamOS, fait tourner des conteneurs Podman",
     ):
         rag.remember(conn, kind="fact", content=content, project=None)
     conn.close()
@@ -80,7 +84,9 @@ def test_the_dry_run_shows_the_line_and_what_it_would_fold(db, monkeypatch, caps
 def test_it_writes_and_folds_under_apply(db, monkeypatch, capsys):
     assert _run(monkeypatch, ["--db", db, "--max-df", "0.5", "--apply"]) == 0
 
-    assert "FOLDED" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "FOLDED" in out
+    assert "ABSORBED" in out
     conn = rag.get_connection()
     try:
         assert (
@@ -98,7 +104,7 @@ def test_it_writes_nothing_without_apply(db, monkeypatch):
 
     conn = rag.get_connection()
     try:
-        assert len(rag.hot_entries(conn)) == 4
+        assert len(rag.hot_entries(conn)) == 5
         assert (
             conn.execute(
                 "SELECT count(*) FROM memory_entries WHERE superseded_by IS NOT NULL"

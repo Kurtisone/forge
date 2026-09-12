@@ -532,6 +532,36 @@ class Merged:
         return f"{self.head} : " + ", ".join(d.text for d in self.details) + "."
 
 
+def _head_source_first(details: list[Detail], head_source: int | None) -> list[Detail]:
+    """
+    The details of the entry that gave the head, before the others.
+
+    MEASURED, 2026-09-11, on the block the real store produces and the
+    two questions this tier exists for -- three passes, the arms
+    rotated between them because llama-server keeps one slot and a
+    prompt repeated back to back measures the KV cache rather than the
+    model:
+
+                            `lister mon matériel`   `tous les ordinateurs`
+      not folded            32 Go de RAM 3/3        3 machines 3/3
+      folded, source order  32 Go de RAM 0/3        3 machines 2/3
+      folded, this order    32 Go de RAM 3/3        3 machines 3/3
+
+    The line that lost the RAM opened `Matériel : Le NiPoGi a 32 Go de
+    RAM, NiPoGi AM06PRO, ...`, and what it lost is its own first item.
+    A label and the list under it were written in one line by one
+    person; putting another entry's detail between them leaves a
+    sentence where the user wrote their own list, and the model reads
+    that first item as part of the label rather than as an item.
+
+    Within each half the order is unchanged -- the order the details
+    were written in.
+    """
+    if head_source is None:
+        return details
+    return sorted(details, key=lambda d: d.source != head_source)
+
+
 def merge(entries: tuple[dict, ...], term: str) -> Merged:
     """
     One labelled list out of several overlapping notes, deterministically.
@@ -546,7 +576,9 @@ def merge(entries: tuple[dict, ...], term: str) -> Merged:
     gate can see it.
 
     THE ITEMS ARE THE SOURCES' OWN DETAILS, VERBATIM, deduplicated by
-    `distinct` and left in the order they were written. Every word of
+    `distinct` and ordered by `_head_source_first`, which is the one
+    place this module rearranges anything and has a measurement behind
+    it. Every word of
     the result was typed by the person it describes, which is the
     strongest form of the closure gate this tier ever had -- stronger
     than the grammar that used to enforce it, because a grammar
@@ -576,7 +608,7 @@ def merge(entries: tuple[dict, ...], term: str) -> Merged:
                 collected.append(Detail(label, entry["id"]))
         collected.extend(Detail(text, entry["id"]) for text in details)
 
-    survivors = tuple(distinct(collected))
+    survivors = tuple(_head_source_first(distinct(collected), head_source))
     written_by = {d.source for d in survivors}
     speaker = None
     if len(written_by) == 1 and head_source in (None, *written_by):

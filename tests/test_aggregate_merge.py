@@ -183,11 +183,28 @@ def test_a_second_label_becomes_a_detail_instead_of_disappearing():
     assert "Machines" in [d.text for d in merged.details]
 
 
+def test_the_label_and_its_own_list_are_not_split():
+    """
+    MEASURED on the block the real store produces, three passes with
+    the arms rotated: the line that opened `Matériel : Le NiPoGi a 32
+    Go de RAM, NiPoGi AM06PRO, ...` lost its own first item in every
+    answer, and the same details with the label's own list restored
+    behind it kept them 3/3. A label and the list under it were typed
+    in one line by one person; another entry's sentence between them
+    reads as part of the label.
+    """
+    merged = aggregate.merge(NIPOGI, "nipogi")
+
+    first = merged.details[0]
+    assert first.source == 307
+    assert first.text == "NiPoGi AM06PRO"
+
+
 def test_the_real_store_group_folds_into_one_line():
     merged = aggregate.merge(NIPOGI, "nipogi")
     assert merged.text == (
-        "Matériel : Le NiPoGi a 32 Go de RAM, NiPoGi AM06PRO, "
-        "processeur Ryzen 5500U, SSD 256 Go, Arch, Ansible, services Podman."
+        "Matériel : NiPoGi AM06PRO, processeur Ryzen 5500U, SSD 256 Go, "
+        "Le NiPoGi a 32 Go de RAM, Arch, Ansible, services Podman."
     )
 
 
@@ -243,7 +260,7 @@ def test_an_aggregate_can_be_read_back_as_a_note_and_merged_again():
     first = aggregate.merge(NIPOGI, "nipogi")
     label, details = aggregate.labelled(first.text)
     assert label == "Matériel"
-    assert details[0] == "Le NiPoGi a 32 Go de RAM"
+    assert details[0] == "NiPoGi AM06PRO"
 
 
 # --- When there is nothing to write ----------------------------------------
