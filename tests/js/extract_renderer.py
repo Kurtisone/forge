@@ -42,12 +42,12 @@ def renderer_module(index_html: Path) -> str:
     """An ES module exporting the UI's own formatContent."""
     src = index_html.read_text(encoding="utf-8")
 
-    scheme = re.search(r"^const _SAFE_LINK_SCHEME = .*$", src, re.M)
+    scheme = re.search(r"^const _SAFE_LINK_SCHEME = .*$", src, re.MULTILINE)
     assert scheme, "_SAFE_LINK_SCHEME vanished from index.html"
 
     parts = [scheme.group(0)]
     for name in WANTED:
-        m = re.search(rf"^(?:const|function) {name}\b", src, re.M)
+        m = re.search(rf"^(?:const|function) {name}\b", src, re.MULTILINE)
         assert m, f"{name} vanished from index.html"
         parts.append(_balanced(src, m.start()))
 

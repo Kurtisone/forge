@@ -58,6 +58,10 @@ def render(tmp_path_factory):
             capture_output=True,
             text=True,
             timeout=60,
+            # Explicit: the assertion below reports deno's own stderr,
+            # which says what is wrong with the extracted module. A
+            # CalledProcessError would say "exit 1".
+            check=False,
         )
         assert out.returncode == 0, out.stderr
         return out.stdout
