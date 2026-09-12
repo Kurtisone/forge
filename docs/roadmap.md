@@ -44,7 +44,8 @@ lived.
 | **v3.19** | done | Aggregation by subject, composed in code rather than written by a model — [detail](#v319--aggregation-by-subject) |
 | **v3.20** | done | Five faults found in anger, plus 3.20.1 and 3.20.2 — [detail](#v320--five-faults-found-in-anger) |
 | **v3.21** | done | Forge stops assuming which model it is talking to, and the trace stops assuming a run answered — [detail](#v321--forge-stops-assuming-which-model-answered) |
-| **Kernel L2** | this branch | Capability layer and a deterministic Policy Engine — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [The Kernel layer](architecture.md#the-kernel-layer). Sits on the architectural maturity axis, not this product roadmap |
+| **Kernel L2** | done | Capability layer and a deterministic Policy Engine, both wired into the orchestrator, the API, the CLI and the graphs — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [The Kernel layer](architecture.md#the-kernel-layer). Sits on the architectural maturity axis, not this product roadmap |
+| **Kernel L3** | blocked | The Cognitive Scheduler, and the reason it is not started: every capability resolves to exactly one candidate, so there is nothing to arbitrate. `_dispatch` says so in code, and stops hard rather than picking silently. `CAPABILITY_PROVIDER` (v3.22) moves the choice from the process to the work without inventing the arbiter |
 
 ---
 

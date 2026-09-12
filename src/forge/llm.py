@@ -14,7 +14,7 @@ upstream changes, and records the usage on the way through.
 
 import time
 
-from forge import metrics
+from forge import metrics, serving
 from forge.config import (
     FORGE_PROVIDER,
     LLAMA_CPP_URL,
@@ -41,26 +41,39 @@ def call_llm(prompt: str, grammar: str | None = None) -> str:
     thing that shows up later as an unexplained parse failure.
     """
     started = time.monotonic()
-    log.event("llm.call", provider=FORGE_PROVIDER, model=LLM_MODEL)
 
-    if grammar is not None and FORGE_PROVIDER != "llama_cpp":
+    # Which backend answers is a property of the WORK, not of the
+    # process, when CAPABILITY_PROVIDER says so -- see forge/serving.py.
+    # Empty by default, in which case this resolves to exactly the two
+    # module constants it always did.
+    capability = serving.current()
+    target = serving.target_for(capability)
+    provider = target.provider if target else FORGE_PROVIDER
+    model = (target.model if target and target.model else None) or LLM_MODEL
+
+    log.event("llm.call", provider=provider, model=model, capability=capability)
+
+    # Tested against the RESOLVED backend, which is the whole point of
+    # this check: a capability pointed at openrouter while the process
+    # default is llama.cpp would otherwise be told its grammar is
+    # honoured, and the caller's parse is unprotected from that moment.
+    if grammar is not None and provider != "llama_cpp":
         log.warning(
-            "grammar requested but provider %r cannot constrain sampling; "
-            "the call will run unconstrained",
-            FORGE_PROVIDER,
+            "grammar requested but provider %r cannot constrain sampling "
+            "(capability %r); the call will run unconstrained",
+            provider,
+            capability or "router",
         )
 
     try:
-        if FORGE_PROVIDER == "ollama":
-            result = ollama.call(OLLAMA_URL, LLM_MODEL, prompt)
-        elif FORGE_PROVIDER == "llama_cpp":
-            result = llama_cpp.call(LLAMA_CPP_URL, LLM_MODEL, prompt, grammar)
-        elif FORGE_PROVIDER == "openrouter":
-            result = openrouter.call(
-                OPENROUTER_URL, OPENROUTER_API_KEY, LLM_MODEL, prompt
-            )
+        if provider == "ollama":
+            result = ollama.call(OLLAMA_URL, model, prompt)
+        elif provider == "llama_cpp":
+            result = llama_cpp.call(LLAMA_CPP_URL, model, prompt, grammar)
+        elif provider == "openrouter":
+            result = openrouter.call(OPENROUTER_URL, OPENROUTER_API_KEY, model, prompt)
         else:
-            raise ProviderError(f"Unknown provider: {FORGE_PROVIDER!r}")
+            raise ProviderError(f"Unknown provider: {provider!r}")
     except ProviderError:
         raise
     except Exception as e:

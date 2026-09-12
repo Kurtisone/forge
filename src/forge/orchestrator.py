@@ -33,6 +33,7 @@ from forge import (
     metrics,
     non_answer,
     outcome,
+    serving,
     subtrace,
     trace,
     turn,
@@ -702,7 +703,14 @@ class Orchestrator:
         log.event("tool.dispatch", tool=tool, provider=capability.provider)
         subtrace.clear()  # start every dispatch on a clean slate -- see subtrace.clear()
         try:
-            output = capability.execute(content)
+            # The only place that knows which capability is running when
+            # a graph three frames down calls call_llm. A context
+            # manager rather than a set/clear pair because what it has
+            # to survive is the `except` below: a tool that raises
+            # would otherwise leave its name set, and this run's NEXT
+            # routing decision would be answered by that tool's backend.
+            with serving.serving(tool):
+                output = capability.execute(content)
             output = self._validate_tool_output(tool, output)
         except ToolExecutionError as e:
             log.error("tool %r violated its contract: %s", tool, e)
