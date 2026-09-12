@@ -175,17 +175,17 @@ COMPACTION_STRATEGY = os.getenv("COMPACTION_STRATEGY", "rag_pointer")
 # the computers run closed it. Overlapping entries are this pass's
 # work.
 #
-# OFF BY DEFAULT, like every mechanism on this path before it. It
-# spends one model call per subject on the turn that compacts, and
-# what it writes goes into the store, where a bad entry is
-# indistinguishable from a good one and stays. Earn it with
-# bench/in_container.sh rag_aggregate against a COPY of your store
-# before turning it on.
+# OFF BY DEFAULT, like every mechanism on this path before it. Not
+# for what it costs -- it stopped spending a model call on 2026-09-11,
+# when seven calls in two runs of the harness wrote zero aggregates --
+# but for what it writes: an entry in this store is read as something
+# the user said, and it stays. Earn it with bench/in_container.sh
+# rag_aggregate against a COPY of your store before turning it on.
 COMPACTION_AGGREGATE = _bool("COMPACTION_AGGREGATE", "false")
 
 # The share of the store above which a word identifies nothing, used
-# to decide which words can name a subject and which ones an aggregate
-# may use freely.
+# to decide which words can name a subject and which ones a gate reads
+# as carrying meaning.
 #
 # It starts at RECALL_LEXICAL_MAX_DF's value because it is the same
 # judgement about the same store, and it is a SEPARATE knob because
