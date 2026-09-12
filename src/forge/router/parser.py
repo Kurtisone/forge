@@ -46,7 +46,14 @@ _CODE_FENCE = re.compile(r"```(?:\w+)?\n(.*?)```", re.DOTALL)
 # Phrases that only appear in the prompt template, never in a real answer.
 # If the model echoes these, it has confused prompt with output.
 _PROMPT_LEAK_MARKERS = [
-    "No explanation or text outside the JSON",
+    # "No explanation or text outside the JSON" used to head this list
+    # and was DEAD: the prompt says "NEVER add text outside the JSON"
+    # and has for some time, so the marker could not fire on any output
+    # any model could produce. Nothing failed -- a leak marker that
+    # matches nothing is silent by nature. test_parser_leak_markers.py
+    # now asserts every marker here appears verbatim in a prompt this
+    # code actually builds, which is the only direction of this drift a
+    # test can close.
     "NEVER add text outside the JSON",
     'WHAT "content" MEANS PER TOOL',
     "Stop generating immediately after the closing brace",
@@ -59,6 +66,19 @@ _PROMPT_LEAK_MARKERS = [
     # cannot plausibly appear in a real answer.
     "you answered:",
     "is the new message you must answer now",
+    # The search-chaining instruction, added 2026-09-12 because it is
+    # the one that actually leaked. LFM2.5-8B-A1B answered fixture e02
+    # with this sentence and the two after it, verbatim, inside a valid
+    # JSON envelope -- so it passed the grammar, passed the cascade, and
+    # would have been spoken to the user as the answer to their
+    # question. It was in no version of this list.
+    #
+    # The other direction stays open and is worth naming rather than
+    # implying otherwise: this is a closed set with no way to discover
+    # its own members, the same shape of gap forge/non_answer.py
+    # measured at 22 refusals recognised out of 22 missed. Every
+    # sentence in the prompt is a candidate; six are registered.
+    "The search results above already contain titles",
 ]
 
 # Max chars shown to the user for a plain-text fallback.
