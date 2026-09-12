@@ -257,7 +257,14 @@ and warm, all six correct. The fixtures stay because a fixture is how an
 intermittent fault gets noticed when it becomes systematic, and because
 two failed probes on the way there established the rule they are there
 to serve: a probe that does not reproduce the prompt does not measure
-the routing.
+the routing. What they turned out to measure is narrower and more
+useful than either reading of them: `h02` is stable inside a
+llama-server process and different across a restart -- `review` all
+morning, `chat` twelve times out of twelve the same evening on the same
+GGUF, with the prompt verified byte-identical and the cache ruled out
+by the harness's own `--no-cache`. Not intermittent, not
+deterministic. A tripwire across restarts, whose value is that it
+flips.
 
 **3.20.2**: the router's sanity checks were running on the one path a
 model does not take. The repetition guard read the whole raw output, the
