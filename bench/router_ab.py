@@ -518,6 +518,17 @@ FIXTURES = [
     #    times here and the thirteenth is not special -- it is the same
     #    class of change as the rule it would be repairing. Recorded,
     #    measured, and left for a mechanism that cannot be ignored.
+    #
+    #    MODEL-SPECIFIC, measured the same day by swapping the served
+    #    model for LFM2.5-8B-A1B-Q4_K_M: all four h fixtures pass. That
+    #    is not a fix and reading it as one is the trap this harness
+    #    warns about in cmd_compare. The same model routes 42% of the
+    #    whole set to `chat` where the 9B routes 19%, so h01-h04 -- which
+    #    accept chat OR research -- pass by landing in the wider of the
+    #    two answers. h02's own reply is a `chat` envelope nested inside
+    #    the content of another, and h04's trails off into "... wait, I
+    #    forgot to mention". The transcription stopped; what replaced it
+    #    is not better.
     _fx(
         id="h01",
         user="Tu en penses quoi du LLM LFM2.5-8B-A1B-GGUF ?",
