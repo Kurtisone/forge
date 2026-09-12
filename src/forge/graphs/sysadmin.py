@@ -50,7 +50,7 @@ import difflib
 import json
 import subprocess
 
-from forge import lang, subtrace
+from forge import lang, non_answer, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     SYSADMIN_COLLECT_TIMEOUT,
@@ -448,7 +448,8 @@ def _collect_failed_node(state: AgentState) -> AgentState:
 
     subject = f"« {target} »" if target else "le système"
     state.final_output = (
-        f"[collecte impossible] Je n'ai pas pu lire les logs de {subject} : "
+        f"{non_answer.COLLECT_FAILED_PREFIX}Je n'ai pas pu lire les logs de "
+        f"{subject} : "
         f"la commande `{source}` a échoué.\n"
         f"{error}\n"
         "Tant que cette commande ne rend pas de logs, il n'y a rien à "
@@ -475,7 +476,8 @@ def _target_missed_node(state: AgentState) -> AgentState:
 
     lines = [
         (
-            f"[cible introuvable] « {target} » ne correspond à aucune unité "
+            f"{non_answer.TARGET_MISSED_PREFIX}« {target} » ne correspond à "
+            f"aucune unité "
             f"systemd ni à aucun conteneur parmi ce que la découverte a "
             f"remonté ({len(units)} unités, {len(containers)} conteneurs)."
         )

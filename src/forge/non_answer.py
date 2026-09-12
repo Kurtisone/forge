@@ -21,6 +21,26 @@ buried inside whole compacted blocks where they were diluted along
 with everything else; the granularity that fixed the dilution is what
 made them competitive.
 
+WHAT A CLOSED SET IS WORTH, MEASURED
+
+Read against the real store on 2026-09-12, 195 archived entries: 22 of
+them are the assistant refusing, and this module recognised **none**.
+Eight were Forge's own fixed strings, from four producers that had
+never been registered here -- the research graph's empty search, the
+two sysadmin nodes written in code, and the delegation flow re-asking
+mid-job. That is what a closed set with no way to discover its own
+members costs: it stays correct about what it knows and silently
+misses what nobody told it.
+
+The other fourteen are the model's own prose and none of them is
+catchable here. Four were recalls, which stopped being indexed at all
+on 2026-08-23; the rest are a chat turn declining, or a sysadmin or
+research synthesis reporting that the logs and the search results do
+not answer the question. That last family is the one worth naming as
+open: the run has the material to know -- it collected the logs -- and
+nothing in it reports the verdict, so the only trace is a sentence a
+model chose.
+
 WHAT THIS CATCHES, AND WHAT IT CANNOT
 
 Only the fixed strings Forge writes itself. `[error] ` is already the
@@ -72,6 +92,33 @@ TOOL_ERROR_PREFIX = "Tool error: "
 # testing it that way.
 SOMETHING_WENT_WRONG_PREFIX = "Something went wrong: "
 
+# Four producers that were writing their own refusal and were not in
+# this set, found by reading the real store rather than the code --
+# 22 of its 195 archived entries are refusals and this module caught
+# NONE of them (2026-09-12). Eight were these.
+#
+# `[no results] ` is the web's answer being empty, from the research
+# graph and the web_search tool. It is deliberately NOT what
+# web_search emits when no engine answered: that one is `[error] `,
+# because "the web has nothing" and "Forge did not get to look" are
+# the same HTTP response and opposite claims.
+NO_RESULTS_PREFIX = "[no results] "
+
+# The two sysadmin nodes written entirely in code, for the case where
+# a model asked to diagnose the wrong subsystem would have done it
+# fluently.
+TARGET_MISSED_PREFIX = "[cible introuvable] "
+COLLECT_FAILED_PREFIX = "[collecte impossible] "
+
+# The delegation flow re-asking mid-job. These two are French
+# sentences rather than bracketed markers, which is a weaker test and
+# is accepted for the reason stated under `startswith` below: a chat
+# turn opening with "Je n'ai pas compris." is not an answer the store
+# loses anything by dropping, while five copies of the job dialogue
+# are five near-copies of a question with no answer in them.
+DID_NOT_UNDERSTAND_PREFIX = "Je n'ai pas compris. Réponds"
+NOT_YOUR_DECISION_PREFIX = "Je ne peux pas répondre à la place"
+
 # Whole replies, emitted verbatim.
 BACKEND_UNAVAILABLE = "The model backend is unavailable."
 NOTHING_CLOSE_ENOUGH = "Je n'ai rien d'assez proche en mémoire pour répondre à ça."
@@ -81,6 +128,11 @@ _PREFIXES = (
     NO_MEMORY_PREFIX,
     TOOL_ERROR_PREFIX,
     SOMETHING_WENT_WRONG_PREFIX,
+    NO_RESULTS_PREFIX,
+    TARGET_MISSED_PREFIX,
+    COLLECT_FAILED_PREFIX,
+    DID_NOT_UNDERSTAND_PREFIX,
+    NOT_YOUR_DECISION_PREFIX,
 )
 _EXACT = (BACKEND_UNAVAILABLE, NOTHING_CLOSE_ENOUGH)
 

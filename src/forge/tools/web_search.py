@@ -34,6 +34,7 @@ import threading
 
 import requests
 
+from forge import non_answer
 from forge.config import SEARXNG_MAX_RESULTS, SEARXNG_TIMEOUT, SEARXNG_URL
 from forge.kernel.capability import Requirements
 from forge.logger import log
@@ -180,7 +181,7 @@ def _format_results(query: str, results: list[dict]) -> str:
     if not results:
         down = last_unresponsive()
         if down:
-            # Deliberately not "[no results]". The two are the same
+            # Deliberately not NO_RESULTS_PREFIX. The two are the same
             # HTTP response and mean opposite things: one says the web
             # has no answer, the other says Forge did not get to look.
             # Told the first, the model answers from its own weights
@@ -190,7 +191,7 @@ def _format_results(query: str, results: list[dict]) -> str:
                 f"no engine answered ({len(down)} down: {', '.join(down)}). "
                 "This is not an empty result -- the search did not run."
             )
-        return f"[no results] for query: {query!r}"
+        return f"{non_answer.NO_RESULTS_PREFIX}for query: {query!r}"
 
     lines = [f"Search results for {query!r}:"]
     for i, r in enumerate(results, 1):

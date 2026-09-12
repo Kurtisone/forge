@@ -22,7 +22,7 @@ throws away work they asked for.
 
 import unicodedata
 
-from forge import jobs, runner, spec
+from forge import jobs, non_answer, runner, spec
 from forge.logger import log
 
 #: pending_field value used while a completed spec waits for approval.
@@ -134,7 +134,7 @@ def intercept(user_input: str) -> str | None:
     if _looks_like_a_question(user_input):
         field = spec.field(job.pending_field)
         return (
-            f"Je ne peux pas répondre à la place : c'est toi qui décides. "
+            f"{non_answer.NOT_YOUR_DECISION_PREFIX} : c'est toi qui décides. "
             f"{field.question}\n"
             "(« annule » pour abandonner le job)"
         )
@@ -232,8 +232,8 @@ def _handle_confirmation(job: jobs.Job, user_input: str) -> str:
     """
     if not _is_keyword(user_input, _CONFIRM_WORDS):
         return (
-            "Je n'ai pas compris. Réponds « oui » pour lancer le job, "
-            "« annule » pour l'abandonner."
+            f"{non_answer.DID_NOT_UNDERSTAND_PREFIX} « oui » pour lancer le "
+            "job, « annule » pour l'abandonner."
         )
 
     jobs.transition(job.id, jobs.READY)
