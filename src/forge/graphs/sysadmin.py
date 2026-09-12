@@ -224,6 +224,28 @@ def _DISCOVER_CONTAINERS_CMD() -> list[str]:
     return base + ["ps", "--format", "{{.Names}}"]
 
 
+def running_containers() -> list[str]:
+    """
+    The container names podman reports, or [] if it cannot be asked.
+
+    Published rather than inlined in _discover_node because a second
+    caller needs the same list for a different reason:
+    graphs/research.py asks whether a question it just searched the web
+    for was about one of these. Two readings of `podman ps` would drift
+    the day the command grows a flag.
+
+    Empty on any failure, which is the only safe answer here -- a
+    caller cannot tell "no containers" from "the proxy is down" and
+    must not act as though it could.
+    """
+    raw = _run_fixed(_DISCOVER_CONTAINERS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
+    return [] if raw.startswith("[error]") else _container_names(raw)
+
+
+def _container_names(raw: str) -> list[str]:
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
 def _collect_cmd(kind: str, name: str) -> list[str]:
     """Build a collection command. {name} is substituted only after
     collect_node has verified it against discover_node's own output --
@@ -407,9 +429,7 @@ def _discover_node(state: AgentState) -> AgentState:
         containers: list[str] = []
         state.context["discover_containers_error"] = containers_raw
     else:
-        containers = [
-            line.strip() for line in containers_raw.splitlines() if line.strip()
-        ]
+        containers = _container_names(containers_raw)
 
     state.context["units"] = units
     state.context["containers"] = containers

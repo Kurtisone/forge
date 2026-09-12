@@ -46,7 +46,10 @@ Usage (Python):
   print(run("actualités jeu vidéo"))
 """
 
-from forge import lang, non_answer, subtrace
+import difflib
+import re
+
+from forge import lang, non_answer, subtrace, turn
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     RESEARCH_FETCH_CHARS_PER_RESULT,
@@ -55,6 +58,7 @@ from forge.config import (
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
+from forge.graphs import sysadmin
 from forge.llm import call_llm
 from forge.logger import log
 from forge.text_cleaning import strip_think_blocks, try_unwrap_router_json
@@ -269,6 +273,60 @@ def build() -> Graph:
     return g
 
 
+#: Appended when the question named something that is running here.
+#:
+#: Same shape and the same reason as sysadmin's _RUNNING_FOOTER: a
+#: fact established before the answer, held below it, where it cannot
+#: be reinterpreted by whatever the model decided to write.
+_LOCAL_FOOTER = (
+    "\n\n---\n_À noter : `{container}` est un conteneur qui tourne sur cette "
+    "machine. Cette réponse vient du web, qui n'en sait rien — demande-moi "
+    "ses logs si c'était la question._"
+)
+
+#: How close a word has to be to a container name to be called one.
+#:
+#: High, because the cost is asymmetric in an unusual direction here:
+#: this footer never changes an answer, it adds a line under one, so a
+#: near-miss costs a sentence and a miss costs nothing at all. 0.85
+#: catches `searxn` for `searxng` -- the real question from
+#: 2026-08-21 -- and not `qwen` for `forge`.
+_NEAR = 0.85
+
+
+def names_something_local(text: str, containers: list[str]) -> str | None:
+    """
+    The running container this question is about, if it is about one.
+
+    WHY THIS IS HERE AT ALL. Both router prompts already carry the
+    boundary, and research's carries it with this exact example:
+    "A question about one of the user's own services or containers
+    ('pourquoi searxng a redémarré') is 'sysadmin', never here."
+    Measured over every routing in traces.jsonl on 2026-09-12: 18
+    research calls, 2 of them local questions, and one of the two is
+    that sentence almost verbatim -- `Pourquoi searxng a redémarré ?`,
+    routed to the web. The other is `pourquoi searxn plante ?`, the
+    same question with a typo. No sysadmin routing went the other way.
+
+    WHAT THIS DOES NOT DO: it does not re-route. A question naming a
+    container is usually about the container, but `forge` is also a
+    French word and a project name, and hijacking a web question to
+    read a container's logs would answer something nobody asked. So
+    the correction is additive -- the web answer stands, with one line
+    under it naming what is running here.
+    """
+    if not containers:
+        return None
+    words = {w for w in re.split(r"[^\w.-]+", text.lower()) if len(w) > 3}
+    for container in containers:
+        if container.lower() in words:
+            return container
+    for container in containers:
+        if difflib.get_close_matches(container.lower(), words, n=1, cutoff=_NEAR):
+            return container
+    return None
+
+
 def run(query: str) -> str:
     """Search, fetch the top results, and synthesize one answer."""
     state = build().run(query, initial_context={"query": query})
@@ -286,4 +344,12 @@ def run(query: str) -> str:
             },
         )
     )
-    return state.final_output or ""
+    answer = state.final_output or ""
+    # The turn rather than the query: the router's restatement is what
+    # dropped the container name in the case this exists for.
+    asked = turn.get_input() or query
+    local = names_something_local(asked, sysadmin.running_containers())
+    if local and answer:
+        log.event("research.named_a_local_container", container=local)
+        answer += _LOCAL_FOOTER.format(container=local)
+    return answer
