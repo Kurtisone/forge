@@ -458,6 +458,50 @@ FIXTURES = [
         user="Merci pour ton aide",
         expect=["chat"],
     ),
+    # -- H. an opinion asked about a THING, which is the shape of the
+    #    review example in the prompt.
+    #
+    #    Observed live on 2026-09-12, twice in seven minutes: "Tu en
+    #    penses quoi du LLM LFM2.5-8B-A1B-GGUF ?" routed to `review`
+    #    with file_path "src/forge/graph.py" -- the prompt's own review
+    #    example, copied verbatim, path included. The grounding guard
+    #    refused it before dispatch, so the cost was one routing call
+    #    and a reply asking which file was meant; without the guard it
+    #    is 40 s to "file not found", and on a mutating tool it is a
+    #    file nobody asked for.
+    #
+    #    NOT REPRODUCED, and the fixtures stay anyway. Replayed the
+    #    same day with the same history and the same fourteen tools --
+    #    a prompt rebuilt to 14762 characters, the exact length the
+    #    live log reports -- both questions routed to `chat` six times
+    #    out of six, cold and warm. So this is intermittent, and the
+    #    first two attempts to reproduce it were worth more than the
+    #    result: one probe built a 3275-character prompt because
+    #    available_tools() returns [] outside a configured process, so
+    #    the model was choosing between no tools at all.
+    #
+    #    What is not explained away is WHICH path was invented.
+    #    `src/forge/graph.py` is this prompt's own review example, and
+    #    that example's question -- "Peux-tu relire src/forge/graph.py
+    #    et me donner ton avis ?" -- is the shape of "tu en penses quoi
+    #    de X". A copied example is a hypothesis here, not a finding.
+    #
+    #    The two fixtures separate the two candidate triggers if it
+    #    ever does reproduce: h01 carries a token shaped like a
+    #    filename (dots, dashes, an uppercase extension), h02 asks the
+    #    same question about something that could not be a file.
+    _fx(
+        id="h01",
+        user="Tu en penses quoi du LLM LFM2.5-8B-A1B-GGUF ?",
+        expect=["chat", "research"],
+        forbid=["review", "files", "test"],
+    ),
+    _fx(
+        id="h02",
+        user="Tu en penses quoi de Podman par rapport à Docker ?",
+        expect=["chat", "research"],
+        forbid=["review", "files", "test"],
+    ),
 ]
 
 
