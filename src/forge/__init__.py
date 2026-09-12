@@ -19,4 +19,4 @@ would break the build backend rather than the runtime, which is a much
 worse place to find out.
 """
 
-__version__ = "3.20.2"
+__version__ = "3.21.0"
