@@ -217,6 +217,25 @@ class AgentState:
     final_output: str | None = None
     final_tool: str | None = None
     ok: bool = True
+    # Why this run did not answer, or None if it did. NOT the same
+    # question as `ok`, which is a rendering directive and says so at
+    # every site that sets it -- graphs/recall.py's error node writes
+    # `ok = True  # surface as message, not crash`, and the path guard
+    # does the same, because the alternative is a turn the web UI
+    # cannot render (see 3.20.1: ok=False stopped the exchange being
+    # persisted and the user's own question vanished with it).
+    #
+    # So a run can be ok and have answered nothing, and until this
+    # existed the trace showed that run green. Reported from a real
+    # one: the router invented a hostname, web_fetch returned "[error]
+    # could not resolve host", the indexing path recognised it as a
+    # non-answer and skipped it -- and the trace, reading `ok`, drew a
+    # tick. Two verdicts on one string, in one function, disagreeing.
+    #
+    # Filled once, in orchestrator._finish, because outcome.taken()
+    # clears on read: a second caller gets None and would disagree
+    # with the first by construction.
+    not_answered: str | None = None
     error: str | None = None
     # Arbitrary key/value store for inter-node data passing in a graph.
     # Nodes can write results here (e.g. file content) and downstream

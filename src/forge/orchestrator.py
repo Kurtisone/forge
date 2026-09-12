@@ -545,7 +545,7 @@ class Orchestrator:
                 # is a combination it cannot render: the question
                 # disappears with the answer that never arrived.
                 #
-                # _indexable keeps it out of the vector store on its
+                # _not_an_answer keeps it out of the vector store on its
                 # own, now that both messages are registered in
                 # forge/non_answer.py -- persisted in the conversation,
                 # never indexed, which is the rule this project already
@@ -612,12 +612,23 @@ class Orchestrator:
         _recall/_route) stays a stable, cacheable prefix across turns
         instead of drifting every time a run takes more than one step.
         """
+        # Before trace.save, and unconditionally: the trace must carry
+        # this whether or not the turn is remembered, and outcome.taken()
+        # clears on read so there is exactly one chance to ask.
+        state.not_answered = self._not_an_answer(state.final_output or "")
         trace.save(state)
         if MEMORY_ENABLED and remember:
+            index = state.not_answered is None
+            if not index:
+                log.event(
+                    "memory.not_indexed",
+                    reason=state.not_answered,
+                    chars=len(state.final_output or ""),
+                )
             self._remember(
                 state.user_input,
                 state.final_output or "",
-                index=self._indexable(state.final_output or ""),
+                index=index,
             )
         # Snapshot taken here, on the way out but still inside the run:
         # see AgentState.to_result for why the caller cannot take it
@@ -734,10 +745,9 @@ class Orchestrator:
             log.warning("failed to load memory: %s", e)
             return []
 
-    def _indexable(self, output: str) -> bool:
+    def _not_an_answer(self, output: str) -> str | None:
         """
-        Whether this turn is worth putting in the vector store when
-        the exchange is eventually compacted.
+        Why this run answered nothing, or None if it did.
 
         Two sources, checked in this order because they fail in
         opposite ways. A run that reported itself is right even if the
@@ -749,22 +759,23 @@ class Orchestrator:
         deploy/rag_resplit.py has to use on blocks written down long
         before either existed.
 
-        The verdict is READ HERE AND NOWHERE ELSE, on the single exit
-        path, so a run that ends early cannot leave one behind for the
-        next turn.
+        CALLED ONCE, on the single exit path, and that is not a
+        convention: outcome.taken() reads and clears, so a second
+        caller gets None. Before this was one function, the vector
+        store asked and the trace did not, and a run whose whole reply
+        was "[error] could not resolve host" was skipped for indexing
+        and drawn with a green tick in the same breath.
 
         Note what this does NOT decide: whether the exchange is shown,
-        or kept in the rolling history. A failed turn is part of the
-        conversation and stays visible. This is only about what the
-        retrieval store is later allowed to hold.
+        or kept in the rolling history, or persisted at all. A failed
+        turn is part of the conversation and stays visible -- that is
+        `remember`, decided by the caller, and 3.20.1 is what happens
+        when the two are confused.
         """
         reason = outcome.taken()
         if reason is None and non_answer.is_non_answer(output):
             reason = "non-answer reply"
-        if reason is None:
-            return True
-        log.event("memory.not_indexed", reason=reason, chars=len(output))
-        return False
+        return reason
 
     def _remember(self, user_input: str, output: str, index: bool = True) -> None:
         # Content used to be hard-truncated to _MAX_MEMORY_CONTENT chars
