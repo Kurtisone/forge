@@ -278,6 +278,94 @@ def build() -> Graph:
 #: Same shape and the same reason as sysadmin's _RUNNING_FOOTER: a
 #: fact established before the answer, held below it, where it cannot
 #: be reinterpreted by whatever the model decided to write.
+#: Where the answer came from, appended in code.
+#:
+#: The synthesis prompt has always said "cite which source a specific
+#: claim comes from only if it matters", which is a rule asked of the
+#: model about a set this module can enumerate exactly -- the URLs it
+#: opened are sitting in state.context. Thirteen times on this codebase
+#: a rule written in a prompt has been followed most of the time and
+#: silently broken the rest, and a citation is worse than most: a
+#: plausible URL a model produced is indistinguishable from one it read,
+#: and checking it costs the reader the trip. So the model is not asked.
+#:
+#: The distinction between the two lists is the whole point of having
+#: two. RESEARCH_FETCH_TOP_N pages are actually opened and their text
+#: goes into the prompt; every other search result contributes one
+#: snippet and nothing else. Calling the second kind a source would
+#: overstate what was read, and that is exactly the overstatement a
+#: sources block is supposed to prevent.
+_SOURCES_READ = "\n\n---\n_Sources lues :_\n"
+_SOURCES_SNIPPET_ONLY = (
+    "\n\n---\n_Aucune page n'a pu être ouverte. Réponse fondée sur les "
+    "extraits de recherche renvoyés par :_\n"
+)
+_ALSO_SEEN = "\n_(+ {n} autre(s) résultat(s) vus en extrait seulement.)_"
+
+#: A title long enough to wrap twice is a page title, not a label.
+_MAX_TITLE_CHARS = 90
+
+
+def _link(title: str, url: str) -> str:
+    """
+    One source line, in a markdown the web UI will actually render.
+
+    inlineMarkdown parses a markdown link with a label that cannot
+    contain a closing bracket and a URL that cannot contain a closing
+    parenthesis, so a bracket in the title or a parenthesis in the URL
+    silently produces a broken link rather than an error. Both are
+    ordinary in the wild -- Wikipedia puts parentheses in paths -- so
+    the bare URL is the fallback, which stays readable everywhere
+    including the REPL and the CLI.
+    """
+    title = " ".join((title or "").split()).replace("[", "").replace("]", "")
+    if len(title) > _MAX_TITLE_CHARS:
+        title = title[:_MAX_TITLE_CHARS].rstrip() + "…"
+    if not title or ")" in url:
+        return url
+    return f"[{title}]({url})"
+
+
+def _sources_footer(results: list[dict], fetched: list[dict]) -> str:
+    """
+    The block naming what the answer was built from, or "" when there
+    is nothing honest to say.
+    """
+    titles = {(r.get("url") or "").strip(): r.get("title") or "" for r in results}
+
+    if fetched:
+        lines = [
+            f"{i}. {_link(titles.get(f['url'], ''), f['url'])}"
+            for i, f in enumerate(fetched, 1)
+        ]
+        block = _SOURCES_READ + "\n".join(lines)
+        # Counted against the pages READ, not against the ones the
+        # graph tried to read: a fetch that failed contributed exactly
+        # what an unvisited result did, which is its snippet.
+        others = len(results) - len(fetched)
+        if others > 0:
+            block += _ALSO_SEEN.format(n=others)
+        return block
+
+    if results:
+        shown = [
+            r for r in results[:RESEARCH_FETCH_TOP_N] if (r.get("url") or "").strip()
+        ]
+        if not shown:
+            return ""
+        lines = [
+            f"{i}. {_link(r.get('title') or '', r['url'].strip())}"
+            for i, r in enumerate(shown, 1)
+        ]
+        block = _SOURCES_SNIPPET_ONLY + "\n".join(lines)
+        others = len(results) - len(shown)
+        if others > 0:
+            block += _ALSO_SEEN.format(n=others)
+        return block
+
+    return ""
+
+
 _LOCAL_FOOTER = (
     "\n\n---\n_À noter : `{container}` est un conteneur qui tourne sur cette "
     "machine. Cette réponse vient du web, qui n'en sait rien — demande-moi "
@@ -352,4 +440,14 @@ def run(query: str) -> str:
     if local and answer:
         log.event("research.named_a_local_container", container=local)
         answer += _LOCAL_FOOTER.format(container=local)
+    # Last, and only on an answer: a sources block under an
+    # "[error] search failed" line would be citing sources for a
+    # sentence that cites nothing. state.ok is not enough on its own --
+    # _error_node sets it True on purpose, to surface the failure as a
+    # message rather than a crash.
+    if answer and not non_answer.is_non_answer(answer):
+        sources = _sources_footer(results, fetched)
+        if sources:
+            log.event("research.sources", read=len(fetched), results=len(results))
+            answer += sources
     return answer

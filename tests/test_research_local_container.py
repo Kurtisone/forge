@@ -98,11 +98,23 @@ def test_the_answer_gains_a_line_and_keeps_its_own(monkeypatch):
     turn.clear()
 
 
-def test_a_web_answer_is_untouched(monkeypatch):
+def test_a_web_answer_gets_no_local_note(monkeypatch):
+    """
+    Named for what it guards, which is this file's subject: no LOCAL
+    footer on a question about something that is not running here.
+
+    It asserted whole-string equality until research started appending
+    its sources, which made it fail for a reason that has nothing to do
+    with what it tests. The answer is still checked to arrive
+    unaltered -- startswith, not a substring, so a note pushed in FRONT
+    of it would still fail.
+    """
     _answers(monkeypatch, CONTAINERS, answer="Qwen3.5 est sorti en août.")
     turn.set_input("Quelles sont les nouveautés de Qwen3.5 ?")
 
-    assert research_run("Qwen3.5 nouveautés") == "Qwen3.5 est sorti en août."
+    answer = research_run("Qwen3.5 nouveautés")
+    assert answer.startswith("Qwen3.5 est sorti en août.")
+    assert "conteneur qui tourne sur cette machine" not in answer
     turn.clear()
 
 
