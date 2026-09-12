@@ -146,13 +146,49 @@ holds the hardware at `0.7891`.
 
 Two filters keep those out, and they are deliberately different in kind:
 
-- **the run says so.** A graph that ends without an answer reports it through
-  `forge/outcome.py`, and the exchange is written to `memory.json` with
-  `"answered": false`. Survives any change to the wording of the reply.
+- **the run says so.** A graph node whose whole purpose is to report that Forge
+  has nothing is declared `answers=False` where it is registered, and `Graph.run`
+  reports it through `forge/outcome.py`; the exchange is then written to
+  `memory.json` with `"answered": false`. Survives any change to the wording of
+  the reply.
 - **the text says so.** `forge/non_answer.py` holds the fixed strings Forge writes
   when it has nothing to say (`[error] `, `[no memory] `, `Tool error: `,
-  `Something went wrong: ` and the cutoff refusal). This is the only test available
-  to `rag_resplit`, whose input was written down long before any of this existed.
+  `Something went wrong: `, `[no results] `, sysadmin's `[cible introuvable] ` and
+  `[collecte impossible] `, the delegation flow re-asking, and the cutoff refusal).
+  This is the only test available to `rag_resplit`, whose input was written down
+  long before any of this existed.
+
+### Both filters were narrower than they read, measured 2026-09-12
+
+195 archived entries in the real store, **22 of them the assistant refusing**, and
+`non_answer` recognised **none**. The two filters are sound and neither covered
+what it appears to cover.
+
+The text filter is a closed set with no way to discover its own members: four
+producers had never been registered — the research graph and the `web_search`
+tool on an empty search, sysadmin's two nodes written entirely in code, and the
+delegation flow re-asking mid-job. Registering them (and making every producer
+import the constant, which is that module's stated anti-drift rule) recognises
+**13 of the 195**, every one of them a genuine refusal and no real answer among
+them. `deploy/rag_resplit.py` now lists those thirteen ids for `!forget`.
+
+The run filter had been wired into one graph. `recall` was told to report itself
+in August; `research`, `review`, `sysadmin` and the default fallback were not —
+and each of them sets `ok = True` in its refusal node for the same good reason,
+so the user reads a message rather than a crash, which is exactly what erases the
+fact the store needs. It is a declaration on the node now, not a call inside it.
+
+**What still gets through, and it is the interesting half.** Nine of the
+twenty-two are prose a model chose, and they split in two. Five are a chat turn
+declining ("Je ne peux pas analyser les logs de ton Steam Deck") — an answer like
+any other, and a phrase list aimed at it would start dropping real answers. Four
+are a `sysadmin` or `research` **synthesis** reporting that the logs it collected
+or the results it found do not answer the question. Those are different: the run
+has the material to know, it ran the collection, and nothing in it reports a
+verdict — the only trace is a sentence a model chose to write. Giving that
+synthesis a verdict the code can read, rather than a sentence it has to parse, is
+the next mechanism on this path and it needs its own campaign. (The other four of
+the twenty-two were recalls, which stopped being indexed at all on 2026-08-23.)
 
 A recall answer is never indexed, good or bad. It was rebuilt from entries the
 store already holds, so writing it back gives the store a second, worse copy —
@@ -172,6 +208,12 @@ Neither catches a refusal the *model* phrased itself ("je n'ai pas cette
 information") — that is prose like any other, and a phrase list aimed at it would
 start dropping real answers. Failed turns stay in the conversation and on screen
 either way; this only decides what the vector store is allowed to hold.
+
+And both arrive late, always. The mark is applied when the exchange is persisted
+and read when compaction fires, so **any rule about what compaction may index has
+a latency equal to the lifetime of the rolling history** — a filter merged today
+protects nothing already sitting unmarked in `memory.json`, and nothing at all
+already in the store. That is what `!forget` and `rag_resplit`'s report are for.
 
 ### The query instruction
 
