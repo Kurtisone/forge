@@ -45,18 +45,39 @@ def test_health_is_rechecked_after_a_turn():
 
 
 def test_health_is_rechecked_when_the_tab_comes_back():
-    """
-    Swapping a model means leaving this page for a terminal and coming
-    back, which is the reported case exactly.
-    """
     src = _source()
     assert "visibilitychange" in src
-    listener = src[src.index("visibilitychange") :][:200]
-    assert "checkHealth()" in listener
+    listener = src[src.index("document.addEventListener('visibilitychange'") :][:200]
+    assert "refreshHealthOnReturn()" in listener
     assert "document.hidden" in listener, (
         "visibilitychange fires on hide as well as show; refreshing on "
         "the way out is a request nobody reads"
     )
+
+
+def test_health_is_rechecked_when_the_window_regains_focus():
+    """
+    The half the first version missed, reported by someone using it:
+    "switching WINDOW doesn't update it; switching tab does".
+
+    visibilitychange fires on TAB visibility. Alt-tabbing to a terminal
+    leaves the tab visible inside its own window, so the one way of
+    leaving this page that actually matches how a model gets swapped
+    fired nothing. It had been tested by switching tabs.
+    """
+    src = _source()
+    assert "window.addEventListener('focus', refreshHealthOnReturn)" in src
+
+
+def test_the_two_events_cannot_double_fire_a_request():
+    """
+    Switch application, then switch tab before coming back, and both
+    fire. /health is rate-limited like every other route.
+    """
+    src = _source()
+    body = src[src.index("function refreshHealthOnReturn") :][:400]
+    assert "_lastHealthCheck" in body
+    assert "return" in body, "a guard that never returns early is not a guard"
 
 
 def test_health_is_not_polled_on_a_timer():

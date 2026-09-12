@@ -571,18 +571,37 @@ refreshContext()
 // life of the tab, and the only way to find out was to reload. Reported
 // after an actual swap: "I had to refresh to see the change".
 //
-// Re-read on the two occasions it can have changed without this page
+// Re-read on the occasions it can have changed without this page
 // knowing, and on no others. After a turn, because that answer came
-// from whatever is loaded now. And on coming back to the tab, because
-// swapping a model means leaving this page for a terminal and
-// returning -- which is the reported case exactly.
+// from whatever is loaded now. And on coming back to this page, because
+// swapping a model means leaving it for a terminal and returning.
+//
+// TWO events, and the first one alone was wrong. visibilitychange fires
+// on TAB visibility: switching to another APPLICATION leaves the tab
+// visible inside its own window, so alt-tabbing to a terminal, swapping
+// the model, and alt-tabbing back fires nothing at all. That is the
+// reported case, and the exact case this was written for -- it was
+// tested by switching tabs, which is the one way of leaving a page that
+// does not resemble how anyone swaps a model. window's focus covers it.
 //
 // Deliberately NOT a setInterval: a tab left open overnight would poll
-// a llama-server it has nothing to ask, and the two events above are
-// the only ones that carry information.
+// a llama-server it has nothing to ask, and the events above are the
+// only ones that carry information.
+let _lastHealthCheck = 0
+function refreshHealthOnReturn() {
+  // Both events fire on some paths -- switch application, then switch
+  // tab before coming back -- and /health is rate-limited like every
+  // other route. Two seconds is far below how fast anyone alt-tabs on
+  // purpose and far above a double-fire.
+  const now = Date.now()
+  if (now - _lastHealthCheck < 2000) return
+  _lastHealthCheck = now
+  checkHealth()
+}
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) checkHealth()
+  if (!document.hidden) refreshHealthOnReturn()
 })
+window.addEventListener('focus', refreshHealthOnReturn)
 
 // ── Health check ──────────────────────────────────────────────────
 // ── Context gauge ─────────────────────────────────────────────────
