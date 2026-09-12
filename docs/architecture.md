@@ -5,7 +5,7 @@ boundary is where it is. For the long-term direction -- the micro-kernel
 reading of all this -- see [ARCHITECTURE.md](../ARCHITECTURE.md), which
 moves at a different speed than the code.
 
-## Architecture
+## How a turn flows
 
 Forge enforces a strict separation between three layers: the **LLM**
 (router prompt + providers), **tools** (dispatch + handlers), and **logs**

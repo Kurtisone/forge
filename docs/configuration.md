@@ -4,7 +4,7 @@ Every setting lives in the environment. [`.env.example`](../.env.example)
 is the exhaustive reference and carries the reasoning behind each value;
 this page covers the ones you are likely to touch.
 
-## Configuration
+## The settings you are likely to touch
 
 | Variable | Description | Default |
 |---|---|---|

@@ -4,7 +4,7 @@ What each tool does, what it refuses to do, and what it costs. A tool
 needs both a `run()` handler and an `ENABLED_TOOLS` opt-in -- code
 existing is never enough to make it reachable.
 
-## Tools
+## What each tool does, and what it refuses
 
 | Tool | Activated by | Description |
 |---|---|---|

@@ -2,7 +2,7 @@
 
 Running Forge: the REPL, the web UI, the CLI, and the container.
 
-## Usage
+## Getting it running
 
 ```bash
 cp .env.example .env.local   # then edit if you need to override any default
