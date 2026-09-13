@@ -124,12 +124,24 @@ python -m forge.cli capabilities
 
 ## Pairing a phone
 
-`!pair` draws a QR code that points the Android app at this Forge. It is the
-one command that works in both interfaces and is not in `main.py`'s dispatch
-alone: typed in the web UI it is intercepted before the router, next to
-delegation's interception and for the same reason — an intercepted turn costs
-no LLM call at all. In the REPL it prints the same payload drawn with
-characters, since a terminal cannot show a PNG.
+`!pair` draws a QR code that points the Android app at this Forge, and it is
+the one command that reaches every interface — which costs three branches,
+because Forge has three separate dispatchers for `!`:
+
+| Interface | Who answers | Note |
+|---|---|---|
+| Web UI | `UI_COMMANDS` in the browser, which forwards to `POST /chat` | Every `!` message is handled in the browser and never leaves it unless a command sends it |
+| HTTP API | `orchestrator.run`, above the router | Intercepted before `_recall()`, so the turn costs no LLM call at all |
+| REPL | `_handle_command` in `main.py` | Never reaches the orchestrator for a line starting with `!` |
+
+The web UI's entry is the thin one: it posts `!pair` to `/chat` and shows the
+answer verbatim, so the markdown, the refusals and the TTL wording exist once,
+server-side. It was also the branch `!pair` shipped without — intercepted in
+the orchestrator, tested there and through the REPL, and answering "Commande
+inconnue dans l'interface web" in the one interface it was written for.
+
+In the REPL the same payload is drawn with characters, since a terminal cannot
+show a PNG.
 
 It needs `FORGE_PUBLIC_URL`: the address the **phone** uses, which over
 WireGuard is not the address you use. That value goes into the QR verbatim and
