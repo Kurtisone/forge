@@ -33,6 +33,7 @@ from forge import (
     metrics,
     non_answer,
     outcome,
+    pairing,
     serving,
     subtrace,
     trace,
@@ -312,6 +313,28 @@ class Orchestrator:
         # The raw message, for the one tool that needs it rather than
         # the router's restatement of it. See turn.py.
         turn.set_input(user_input)
+
+        # `!pair` is intercepted here too, and BEFORE delegation:
+        # a job waiting on a field would otherwise take the command as
+        # the answer to its question, and someone asking to pair a
+        # phone is not naming a folder.
+        #
+        # remember=False, which is the only place in run() that says
+        # so, and it is not an optimisation. The reply holds a QR code
+        # -- a kilobyte of base64 and a live credential -- and
+        # everything _finish persists goes three places that all make
+        # that wrong: memory.json, which GET /history renders back on
+        # every page load; the rolling history, which is prefix to
+        # every router prompt from then on; and the vector store, where
+        # a recall could surface it months later. A pairing code is
+        # worth five minutes. Nothing about it should outlive the
+        # screen it was drawn on.
+        reply = pairing.intercept(user_input)
+        if reply is not None:
+            paired = AgentState(user_input=user_input, max_steps=self.max_steps)
+            paired.final_output = reply
+            paired.final_tool = "pair"
+            return self._finish(paired, remember=False)
 
         # Delegation traffic never reaches the router. When a job is
         # waiting on an answer, the next message belongs to it because
