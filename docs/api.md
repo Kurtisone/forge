@@ -1,7 +1,8 @@
 # HTTP API
 
-Every route is behind the bearer token and the rate limiter. The web UI
-is a client of this API and has no privileged path of its own.
+Every route is behind the bearer token and the rate limiter, except the
+three marked open below. The web UI is a client of this API and has no
+privileged path of its own.
 
 ## API Endpoints
 
@@ -25,13 +26,20 @@ is a client of this API and has no privileged path of its own.
 | `POST` | `/compact` | optional | Force a context compaction pass now (v3.9) |
 | `GET` | `/context` | optional | What the next prompt will weigh — the gauge behind the header readout (v3.12) |
 | `GET` | `/jobs` | optional | Every delegation job and its state (v3.13). Deliberately not the day-to-day way to read one: the conversation thread is, per the zero-tab rule. This exists so a job can be inspected without reading `data/jobs.json` over SSH |
+| `POST` | `/pair/claim` | open | Exchange a single-use `!pair` token for the bearer token. Open because it is where a device **gets** its credential — requiring one would make pairing impossible |
 | `GET` | `/docs` | open | Interactive API docs (Swagger) |
 
 **Auth:** set `API_TOKEN` in the environment to require
 `Authorization: Bearer <token>` on every "optional" route above. Unset (the
 default), the API is exactly as open as before this existed — nothing changes
-unless you opt in. `/` and `/health` always stay open, for the UI shell and
-monitoring probes. The web UI has a 🔑 **Token** button in the header that
+unless you opt in. `/`, `/health` and `/pair/claim` always stay open — the UI
+shell, monitoring probes, and the one endpoint a device with no credential yet
+has to be able to call. What guards `/pair/claim` is the token it is handed
+rather than the one it does not ask for: 256 bits, single use, five minutes,
+and the rate limiter, which is what makes guessing it pointless rather than
+merely improbable. Unknown, already-claimed and expired tokens all answer with
+the same `401` and the same sentence, because naming which one it was would
+confirm to a prober that a token existed. The web UI has a 🔑 **Token** button in the header that
 prompts for the token and remembers it (localStorage) for subsequent requests.
 
 **Rate limiting:** the same "optional" routes are also behind an in-memory

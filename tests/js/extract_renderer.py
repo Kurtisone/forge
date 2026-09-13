@@ -22,6 +22,12 @@ from pathlib import Path
 
 WANTED = ("escapeHtml", "formatContent", "inlineMarkdown", "renderDiff")
 
+#: Module-level allowlists the functions above close over. Named
+#: rather than pattern-matched: a missing one is a ReferenceError
+#: at render time, which reads as a broken test rather than as a
+#: constant that moved.
+CONSTANTS = ("_SAFE_LINK_SCHEME", "_SAFE_IMAGE_SRC")
+
 
 def _balanced(src: str, start: int) -> str:
     """From `start` to the brace that closes the first one opened."""
@@ -42,10 +48,12 @@ def renderer_module(index_html: Path) -> str:
     """An ES module exporting the UI's own formatContent."""
     src = index_html.read_text(encoding="utf-8")
 
-    scheme = re.search(r"^const _SAFE_LINK_SCHEME = .*$", src, re.MULTILINE)
-    assert scheme, "_SAFE_LINK_SCHEME vanished from index.html"
+    parts = []
+    for name in CONSTANTS:
+        m = re.search(rf"^const {name} = .*$", src, re.MULTILINE)
+        assert m, f"{name} vanished from index.html"
+        parts.append(m.group(0))
 
-    parts = [scheme.group(0)]
     for name in WANTED:
         m = re.search(rf"^(?:const|function) {name}\b", src, re.MULTILINE)
         assert m, f"{name} vanished from index.html"

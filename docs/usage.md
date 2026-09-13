@@ -83,7 +83,8 @@ podman run -it --rm \
 ```
 
 REPL commands: `!help`, `!clear`, `!compact`, `!memory [kind]`, `!forget <id>`,
-`!trace`, `!capabilities`, `!remember <kind> <project|-> <content>`, `!recall <query>`.
+`!trace`, `!capabilities`, `!remember <kind> <project|-> <content>`, `!recall <query>`,
+`!pair`.
 Multi-line paste: type your question then append ` ``` ` or paste question + code in
 one go (auto-detected via `select()`).
 
@@ -120,3 +121,39 @@ python -m forge.cli capabilities
 ---
 
 [← Documentation index](README.md) · [← Project README](../README.md)
+
+## Pairing a phone
+
+`!pair` draws a QR code that points the Android app at this Forge. It is the
+one command that works in both interfaces and is not in `main.py`'s dispatch
+alone: typed in the web UI it is intercepted before the router, next to
+delegation's interception and for the same reason — an intercepted turn costs
+no LLM call at all. In the REPL it prints the same payload drawn with
+characters, since a terminal cannot show a PNG.
+
+It needs `FORGE_PUBLIC_URL`: the address the **phone** uses, which over
+WireGuard is not the address you use. That value goes into the QR verbatim and
+becomes the app's base URL, so `!pair` refuses a loopback one rather than hand
+out a code that builds a client calling the phone itself. It also refuses when
+`API_TOKEN` is unset — pairing an open instance would publish it onto the
+WireGuard network.
+
+**What the QR carries is not the bearer token.** It holds a single-use token,
+valid `PAIRING_TTL_SECONDS` (five minutes by default), which the app exchanges
+once at `POST /pair/claim` for the durable one. That distinction is the whole
+design: the QR is rendered into a conversation, and everything in the
+conversation is written down — `memory.json`, the rolling history that prefixes
+every later router prompt, and the vector store. A bearer token drawn there
+would be permanently readable by anyone who opens the UI and retrievable by a
+recall months later.
+
+So the `!pair` turn is the one turn `run()` does not remember. Reloading the
+page makes the QR disappear; `!pair` draws a new one. A photographed code is
+worth nothing once the phone has scanned it, and nothing at all after five
+minutes.
+
+Revoking a device today means changing `API_TOKEN` and restarting, which
+revokes every client at once. There is one user and one token; per-device
+tokens would earn their keep the day losing one device must not invalidate the
+others. `pairing.claim()` already returns *the token this device should use*
+rather than a constant, which is where one would be minted.

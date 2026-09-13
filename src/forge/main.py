@@ -30,6 +30,7 @@ Special commands (prefix with !):
   !remember <decision|todo|fact> <project|-> <content>
                                        store a decision/todo/fact in vector memory (v3.7)
   !recall <query>                     semantic search over remembered entries
+  !pair                               pair a phone: prints a QR code to scan
   !help                                show this message
 """
 
@@ -230,6 +231,36 @@ def _handle_recall(arg: str) -> None:
     print("\n".join(lines) + "\n")
 
 
+def _handle_pair() -> None:
+    """
+    The same pairing payload the web UI draws, drawn with characters.
+
+    A terminal cannot show a PNG, and printing the token as text would
+    leave a live credential in the scrollback for the sake of
+    something nobody can scan anyway. So the QR is rendered as text and
+    is scannable exactly like the image is.
+
+    This REPL never reaches Orchestrator.run() for a line starting with
+    `!` -- _handle_command takes it first -- so the interception in
+    orchestrator.py does not cover this path, and without this branch
+    `!pair` would answer "unknown command" in the one interface where
+    the command was typed by someone reading the help text above.
+    """
+    from forge import pairing
+
+    try:
+        payload = pairing.payload()
+    except pairing.PairingNotConfigured as e:
+        print(f"[pairing] {e}\n")
+        return
+
+    print(pairing.qr_ascii(payload))
+    print(
+        f"À scanner avec l'app Forge. Serveur : {payload['url']}\n"
+        f"Code à usage unique, valable {pairing.PAIRING_TTL_SECONDS} secondes.\n"
+    )
+
+
 def _handle_command(raw: str) -> None:
     # Only the command keyword is case-insensitive -- lowercasing the
     # whole line here would also lowercase !remember/!recall content,
@@ -314,6 +345,8 @@ def _handle_command(raw: str) -> None:
         _handle_remember(arg)
     elif cmd == "!recall":
         _handle_recall(arg)
+    elif cmd == "!pair":
+        _handle_pair()
     elif cmd == "!help":
         print(__doc__)
     else:

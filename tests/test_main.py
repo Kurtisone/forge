@@ -125,3 +125,51 @@ def test_command_keyword_is_case_insensitive(_rag_conn, capsys):
     main_mod._handle_command("!REMEMBER decision forge Some Content")
     out = capsys.readouterr().out
     assert "remembered #1" in out
+
+
+class TestThePairCommandInTheRepl:
+    """
+    The REPL never reaches Orchestrator.run() for a line starting with
+    `!` -- _handle_command takes it first -- so the interception in
+    orchestrator.py does not cover this path. Without its own branch,
+    `!pair` would answer "unknown command" in the one interface whose
+    help text lists it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        from forge import pairing
+
+        monkeypatch.setattr(pairing, "FORGE_PUBLIC_URL", "http://10.8.0.1:8000")
+        monkeypatch.setattr(pairing, "API_TOKEN", "durable-bearer")
+        pairing.reset()
+        yield
+        pairing.reset()
+
+    def test_it_prints_a_scannable_code_and_not_the_token(self, capsys):
+        """
+        A terminal cannot show a PNG, and printing the token as text
+        would leave a live credential in the scrollback for something
+        nobody can scan.
+        """
+        main_mod._handle_command("!pair")
+        out = capsys.readouterr().out
+
+        assert "durable-bearer" not in out
+        assert out.count("\n") > 10, "a QR drawn with characters has rows"
+        assert "10.8.0.1:8000" in out
+
+    def test_it_is_not_reported_as_unknown(self, capsys):
+        main_mod._handle_command("!pair")
+        assert "unknown command" not in capsys.readouterr().out
+
+    def test_a_missing_configuration_says_what_to_set(self, capsys, monkeypatch):
+        from forge import pairing
+
+        monkeypatch.setattr(pairing, "FORGE_PUBLIC_URL", "")
+        main_mod._handle_command("!pair")
+
+        assert "FORGE_PUBLIC_URL" in capsys.readouterr().out
+
+    def test_the_help_text_lists_it(self):
+        assert "!pair" in main_mod.__doc__

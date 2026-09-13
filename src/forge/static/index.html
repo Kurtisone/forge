@@ -238,6 +238,21 @@
     }
     .msg li { margin: 2px 0; }
     .msg a { color: var(--accent); }
+    /* Inline images are QR codes and nothing else -- see the
+       allowlist in inlineMarkdown. White-backed deliberately: a QR
+       that inherits this dark bubble stops being scannable, and
+       `pixelated` keeps its modules square if the bubble scales it
+       down, where smoothing would blur them into each other. */
+    .msg img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 10px 0;
+      padding: 8px;
+      border-radius: 6px;
+      background: #fff;
+      image-rendering: pixelated;
+    }
     /* ```diff blocks -- colored like `git diff` output */
     .msg pre.diff span { display: block; }
     .msg pre.diff .diff-add { color: var(--green); }
@@ -827,8 +842,29 @@ function formatContent(text) {
 // legitimate-but-unusual URL is still readable instead of vanishing.
 const _SAFE_LINK_SCHEME = /^(https?:\/\/|mailto:|\/|#)/i
 
+// One entry wide, and narrower than the link allowlist above on
+// purpose. The text reaching this renderer includes tool output
+// (web_fetch, research, files:read, sysadmin logs), so a remote <img>
+// would be a beacon: rendering an answer would tell a hostile page it
+// had been read, with no click required. A base64 PNG fetches nothing
+// from anywhere. The character class is the second half of that -- it
+// admits no quote, so the attribute this lands in cannot be broken
+// out of even before escapeHtml is taken into account.
+const _SAFE_IMAGE_SRC = /^data:image\/png;base64,[A-Za-z0-9+/=]+$/
+
 function inlineMarkdown(s) {
   return s
+    // Images first, and that ordering is the whole rule: an image is
+    // a link with a `!` in front, so letting the link rule match
+    // first leaves the bang stranded and renders a QR code as a
+    // screenful of base64 -- which is what `!pair` produced before
+    // this existed. Anything not on the allowlist is left exactly as
+    // it was, to be downgraded to text by the rules below.
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (whole, alt, url) => {
+      const src = url.trim()
+      if (!_SAFE_IMAGE_SRC.test(src)) return whole
+      return `<img src="${src}" alt="${alt}">`
+    })
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {

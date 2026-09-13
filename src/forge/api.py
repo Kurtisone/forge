@@ -15,12 +15,19 @@ Endpoints:
   POST /history/clear → wipe the history, pinned included
   GET  /memory      → list the vector store as stored (no query)
   DELETE /memory/{id} → remove one entry and its vector
+  POST /pair/claim  → exchange a !pair token for the bearer token
 
 Auth: set API_TOKEN in the environment to require
-`Authorization: Bearer <token>` on every endpoint except / and
-/health. Leaving it unset no longer silently opens the API -- the app
-refuses to start unless API_ALLOW_UNAUTHENTICATED=true says the open
-posture is intentional. See check_auth_configuration() below.
+`Authorization: Bearer <token>` on every endpoint except /, /health
+and /pair/claim. Leaving it unset no longer silently opens the API --
+the app refuses to start unless API_ALLOW_UNAUTHENTICATED=true says the
+open posture is intentional. See check_auth_configuration() below.
+
+/pair/claim is open because it is the endpoint that HANDS OUT the
+bearer token: requiring one would make pairing impossible. What guards
+it is not auth but the token it is given -- 256 bits, single use, five
+minutes -- plus the rate limit, which is what makes guessing one
+uninteresting rather than merely improbable.
 
 Rate limiting: in-memory sliding window, per client IP, on every
 endpoint except /. RATE_LIMIT_REQUESTS per RATE_LIMIT_WINDOW_SECONDS
@@ -234,6 +241,14 @@ class ChatResponse(BaseModel):
     usage: dict | None = None
 
 
+class PairClaimRequest(BaseModel):
+    token: str
+
+
+class PairClaimResponse(BaseModel):
+    token: str
+
+
 class ReviewResponse(BaseModel):
     output: str
     ok: bool
@@ -340,6 +355,30 @@ async def health():
         "provider": FORGE_PROVIDER,
         "model": model,
     }
+
+
+# Deliberately unauthenticated, and the only endpoint where that is not
+# a concession: this is where a device GETS the bearer token, so
+# requiring one would make pairing impossible. Rate-limited like
+# everything else, which here is the actual control -- it turns
+# guessing a 256-bit single-use token from improbable into pointless.
+#
+# The failure is one 401 with one message for unknown, already-claimed
+# and expired alike. Telling a prober which of the three it hit would
+# confirm that a token existed, and "expired" is a different sentence
+# from "never existed".
+@app.post(
+    "/pair/claim",
+    response_model=PairClaimResponse,
+    dependencies=[Depends(rate_limit)],
+)
+async def pair_claim(req: PairClaimRequest):
+    from forge import pairing
+
+    token = pairing.claim(req.token.strip())
+    if token is None:
+        raise HTTPException(status_code=401, detail="invalid or expired pairing token")
+    return PairClaimResponse(token=token)
 
 
 async def _context_limit() -> int | None:
