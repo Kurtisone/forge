@@ -1,5 +1,5 @@
 """
-Pull the web UI's renderer out of index.html so it can be executed.
+Pull pieces of the web UI out of index.html so they can be executed.
 
 Three test files in this suite open with the same caveat -- "this suite
 has no JS runtime, so these are assertions on the source; a tripwire,
@@ -61,3 +61,29 @@ def renderer_module(index_html: Path) -> str:
 
     parts.append("export { formatContent, inlineMarkdown, escapeHtml };")
     return "\n\n".join(parts) + "\n"
+
+
+def commands_module(index_html: Path) -> str:
+    """
+    An ES module exporting the UI's own `!` command table.
+
+    Every message starting with `!` is handled in the browser and never
+    reaches the server, so this table is the whole of what those
+    commands do -- and a command missing from it is not a degraded
+    command, it is an error message. That was `!pair`: intercepted
+    server-side, unreachable from the one interface it was written for.
+
+    `apiFetch` is left undeclared on purpose. The test injects its own,
+    which is what makes it possible to assert on the request a command
+    actually sends rather than on the source that composes it.
+    """
+    src = index_html.read_text(encoding="utf-8")
+
+    m = re.search(r"^const UI_COMMANDS\b", src, re.MULTILINE)
+    assert m, "UI_COMMANDS vanished from index.html"
+
+    return (
+        "export function commands(apiFetch, confirm) {\n"
+        + _balanced(src, m.start())
+        + "\n  return UI_COMMANDS;\n}\n"
+    )

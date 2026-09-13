@@ -1057,6 +1057,36 @@ const UI_COMMANDS = {
       }
     }
   },
+  '!pair': {
+    help: 'affiche un QR code pour appairer le téléphone',
+    // The only entry here that forwards to /chat rather than calling a
+    // purpose-built endpoint, and the reason is that the server ALREADY
+    // answers this one: orchestrator.run intercepts `!pair` above the
+    // router, so the turn costs no LLM call and is never written to
+    // memory. Reimplementing it here would be a second copy of the
+    // refusal messages and the TTL wording, drifting from the first.
+    //
+    // This dispatcher is why the command appeared broken in the web UI
+    // while working everywhere else: every `!` message is handled in
+    // the browser and never leaves it, so the server-side interception
+    // was unreachable from the one interface it was written for.
+    run: async () => {
+      const r = await apiFetch('/chat', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: '!pair'})
+      })
+      if (!r.ok) {
+        return { reply: `Appairage impossible : le serveur a répondu ${r.status}.`, changed: false }
+      }
+      const data = await r.json()
+      // changed:false, always. The turn is deliberately not persisted
+      // server-side, so reloading the history here would erase the QR
+      // code it just drew -- the bug this dispatcher's own comment
+      // describes, with the one reply that cannot be fetched again.
+      return { reply: data.output, changed: false }
+    }
+  },
   '!compact': {
     help: 'force une passe de compaction (bouton « Compacter » aussi)',
     run: async () => {
