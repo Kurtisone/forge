@@ -236,6 +236,11 @@ class AgentState:
     # clears on read: a second caller gets None and would disagree
     # with the first by construction.
     not_answered: str | None = None
+    # The delegation job this turn was about, or None. Filled once in
+    # orchestrator._finish from current_job, which is the only channel
+    # the interception path has -- delegation.intercept() returns a
+    # string and its caller never sees a job.
+    job_id: int | None = None
     error: str | None = None
     # Arbitrary key/value store for inter-node data passing in a graph.
     # Nodes can write results here (e.g. file content) and downstream
@@ -275,6 +280,7 @@ class AgentState:
             error=self.error,
             trace=self.trace,
             usage=usage,
+            job_id=self.job_id,
         )
 
 
@@ -293,3 +299,10 @@ class AgentResult:
     # convention the trace's "llm" block already uses: a caller must be
     # able to tell "not reported" from "reported as nothing".
     usage: dict | None = field(default=None, compare=False)
+    # The delegation job this turn created, advanced, launched or
+    # cancelled. Absent rather than zeroed when there is none, the same
+    # convention as `usage` above: a client must be able to tell "no
+    # job" from "job number 0". Before this, the id existed only inside
+    # the French sentence the turn answered with, and the Android
+    # client read it back out with a regex.
+    job_id: int | None = field(default=None, compare=False)

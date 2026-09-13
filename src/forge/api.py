@@ -239,6 +239,18 @@ class ChatResponse(BaseModel):
     # here because the header gauge has to decide between showing a
     # number and showing nothing at all.
     usage: dict | None = None
+    # Set when the turn created, advanced, launched or cancelled a
+    # delegation job. Absent rather than zeroed, the same convention as
+    # `usage` above -- a client must be able to tell "no job" from "job
+    # number 0".
+    #
+    # It exists because a delegation is long-running work the caller
+    # has to follow after the response: poll GET /jobs for this id, and
+    # tell the user when it finishes. Until this field, the id was only
+    # in the answer's prose ("Job 12 lancé."), so the Android client
+    # recovered it with a regex over French text that would break the
+    # day any of those five strings is reworded.
+    job_id: int | None = None
 
 
 class PairClaimRequest(BaseModel):
@@ -464,6 +476,7 @@ async def chat(req: ChatRequest):
         steps=result.steps,
         error=result.error,
         usage=await _context_usage(result.usage),
+        job_id=result.job_id,
     )
 
 

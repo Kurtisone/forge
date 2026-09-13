@@ -55,6 +55,32 @@ e.g. behind a proxy that already rate-limits.
 { "graph": "review", "input": "src/forge/main.py", "context": {"question": "Security issues?"} }
 ```
 
+### `POST /chat` response
+
+| Field | Type | Note |
+|---|---|---|
+| `output` | `str` | The answer |
+| `tool` | `str` | Capability that produced it |
+| `ok` | `bool` | A rendering directive, not a verdict — see `not_answered` in the trace |
+| `steps` | `int` | Steps taken |
+| `error` | `str \| null` | |
+| `usage` | `object \| null` | Absent when no accounting scope was open |
+| `job_id` | `int \| null` | The delegation job this turn created, advanced, launched or cancelled |
+
+`job_id` is **absent rather than zeroed** when the turn was about no job —
+the same convention as `usage`, so a client can tell "no job" from "job
+number 0". It is set by every delegation turn that names one job: the
+`delegate` graph creating it, and the interception in `delegation.py`
+answering its questions, approving, launching or cancelling it. The one
+delegation turn that reports nothing is `jobs`, the listing, which is
+about all of them.
+
+It exists because a delegation is long-running work the caller has to
+follow after the response: poll `GET /jobs` for this id and notify when
+it finishes. Before it, the id was only inside the answer's prose (`"Job
+12 lancé."`), so a client recovered it with a regex over French text that
+would break the day any of those sentences is reworded.
+
 ## Delegation Jobs
 
 `GET /jobs` lists every delegation job and its state. Like every other
