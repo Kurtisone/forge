@@ -76,6 +76,13 @@ at a larger one -- which would mean the ceiling is not what is being
 measured, and is worth knowing before a number from here is used to set
 a default.
 
+Every row costs one completion, ten to thirty seconds of it, so the
+table is printed as it is produced rather than at the end -- stdout is
+reconfigured line-buffered below. Left block-buffered, a run that is
+working is indistinguishable from one that has hung for five minutes.
+That is not hypothetical: it happened on this file's first run against
+a second model.
+
 READING IT
 
   PASS     the user sees prose. What you want.
@@ -134,6 +141,12 @@ import statistics
 import sys
 import time
 from pathlib import Path
+
+# Line-buffered, because every row of the table below costs one
+# completion and this is routinely run redirected to a file or through
+# in_container.sh. Block-buffered, a run that is working is
+# indistinguishable from one that has hung for five minutes.
+sys.stdout.reconfigure(line_buffering=True)
 
 _HERE = Path(__file__).resolve().parent
 for _candidate in (_HERE / "src", _HERE.parent / "src", Path("src")):
