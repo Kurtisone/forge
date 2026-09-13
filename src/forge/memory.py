@@ -12,6 +12,7 @@ at that point, not before.
 """
 
 import json
+import time
 from pathlib import Path
 
 from forge import compaction, tokens
@@ -191,6 +192,13 @@ def _new_entry(memory: dict, role: str, content: str, index: bool = True) -> dic
         "role": role,
         "content": safe_text(content),
         "pinned": False,
+        # Epoch seconds. Written so a client can group a thread by day:
+        # ids are monotonic but say nothing about elapsed time, and a
+        # phone that reloads the history has no other way to tell this
+        # morning's turns from last week's. Entries already on disk have
+        # no `ts` and cannot be given a truthful one, so it reads as
+        # absent rather than as a date that was never recorded.
+        "ts": time.time(),
     }
     if not index:
         entry["index"] = False
