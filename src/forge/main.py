@@ -255,10 +255,10 @@ def _handle_pair() -> None:
         return
 
     print(pairing.qr_ascii(payload))
-    print(
-        f"À scanner avec l'app Forge. Serveur : {payload['url']}\n"
-        f"Code à usage unique, valable {pairing.PAIRING_TTL_SECONDS} secondes.\n"
-    )
+    print("À scanner avec l'app Forge. Adresses encodées :")
+    for url in payload["urls"]:
+        print(f"  - {url}")
+    print(f"Code à usage unique, valable {pairing.PAIRING_TTL_SECONDS} secondes.\n")
 
 
 def _handle_command(raw: str) -> None:

@@ -64,16 +64,88 @@ class TestWhatReachesTheConversation:
         colours = {c for _, c in img.convert("L").getcolors()}
         assert len(colours) > 1, "an all-white image is not a QR code"
 
-    def test_the_advertised_url_is_shown_so_it_can_be_checked(self):
+    def test_the_advertised_address_is_shown_so_it_can_be_checked(self):
         """The one part of the payload a human can verify by reading."""
         assert _URL in pairing.intercept("!pair")
 
-    def test_the_payload_is_the_url_and_a_fresh_token(self):
+    def test_the_payload_is_the_urls_and_a_fresh_token(self):
         first, second = pairing.payload(), pairing.payload()
 
-        assert first["url"] == _URL
+        assert first["urls"] == [_URL]
         assert first["token"] and first["token"] != second["token"]
         assert first["token"] != _BEARER
+
+
+class TestOneQrCodeForEveryWayIn:
+    """
+    The phone reaches Forge over WireGuard from outside and over the
+    LAN when it is in the room, and the QR is drawn before anyone
+    knows which. The server cannot pick for it: the request that draws
+    the QR comes from the browser on the machine itself, never from
+    the phone that will scan it. So all of them are encoded and the
+    client tries them in order.
+    """
+
+    _WG = "http://10.8.0.1:8000"
+    _LAN = "http://192.168.1.20:8000"
+
+    @pytest.fixture(autouse=True)
+    def _two_addresses(self, monkeypatch):
+        monkeypatch.setattr(pairing, "FORGE_PUBLIC_URL", f"{self._WG},{self._LAN}")
+
+    def test_every_address_is_encoded(self):
+        assert pairing.payload()["urls"] == [self._WG, self._LAN]
+
+    def test_the_order_written_is_the_order_kept(self, monkeypatch):
+        """
+        Order is the client's try order, so it is preserved as written
+        rather than sorted into something tidier: the first entry is
+        the one meant to work from anywhere.
+        """
+        monkeypatch.setattr(pairing, "FORGE_PUBLIC_URL", f"{self._LAN},{self._WG}")
+        assert pairing.payload()["urls"] == [self._LAN, self._WG]
+
+    def test_spacing_around_the_commas_is_forgiven(self, monkeypatch):
+        monkeypatch.setattr(
+            pairing, "FORGE_PUBLIC_URL", f"  {self._WG} ,  {self._LAN}  "
+        )
+        assert pairing.payload()["urls"] == [self._WG, self._LAN]
+
+    def test_a_trailing_comma_does_not_add_an_empty_address(self, monkeypatch):
+        """
+        An empty entry reaches the client as an address to try, which
+        it cannot, so it costs a timeout before the real one.
+        """
+        monkeypatch.setattr(pairing, "FORGE_PUBLIC_URL", f"{self._WG},")
+        assert pairing.payload()["urls"] == [self._WG]
+
+    def test_a_loopback_anywhere_in_the_list_is_refused(self, monkeypatch):
+        """
+        Checked on every entry, not just the first. An unreachable
+        address later in the list is a client hanging on a timeout
+        before it falls through to one that works.
+        """
+        monkeypatch.setattr(
+            pairing, "FORGE_PUBLIC_URL", f"{self._WG},http://127.0.0.1:8000"
+        )
+        reply = pairing.intercept("!pair")
+
+        assert "FORGE_PUBLIC_URL" in reply
+        assert "data:image" not in reply
+
+    def test_the_addresses_are_readable_in_the_reply(self):
+        """
+        The one part of the payload a human can verify by reading. A
+        QR pointing somewhere unexpected is otherwise
+        indistinguishable from one that does not.
+        """
+        reply = pairing.intercept("!pair")
+
+        assert self._WG in reply and self._LAN in reply
+
+    def test_a_single_address_still_works(self, monkeypatch):
+        monkeypatch.setattr(pairing, "FORGE_PUBLIC_URL", self._WG)
+        assert pairing.payload()["urls"] == [self._WG]
 
 
 class TestTheTokenIsWorthNothingForLong:
