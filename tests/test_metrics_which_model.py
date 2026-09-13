@@ -109,3 +109,62 @@ class TestTheProvidersReadItBack:
         things.
         """
         assert Completion(text="x").model == ""
+
+
+class TestItReachesSomewhereAPersonLooks:
+    """
+    The gap between recording a fact and surfacing it.
+
+    RunMetrics.models went into the trace record, the roadmap said "which
+    model answered", and nothing anywhere rendered it. Reported as "I
+    can't see the model used for the answers", which was correct: the
+    header names the model loaded NOW -- a different question, and one
+    a trace from before a swap answers wrongly.
+
+    Source assertions, same precedent and caveat as test_ui_security.py.
+    """
+
+    def _source(self):
+        from pathlib import Path
+
+        import forge.api as api_mod
+
+        return (Path(api_mod.__file__).parent / "static" / "index.html").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_trace_card_reads_the_models_list(self):
+        assert "t.llm && t.llm.models" in self._source()
+
+    def test_it_renders_nothing_rather_than_a_guess(self):
+        """
+        An empty list means no backend said, which is not the same fact
+        as "it was the configured one".
+        """
+        src = self._source()
+        assert '${models ? `<div class="trace-model"' in src
+
+    def test_the_header_trims_the_extension(self):
+        src = self._source()
+        assert "function shortModel" in src
+        assert "shortModel(data.model)" in src
+
+    def test_the_recorded_name_keeps_it(self, monkeypatch):
+        """
+        The trim is display only. What goes in the trace has to be the
+        exact string the backend reported -- two deployments serving
+        `foo.gguf` and `foo.Q4.gguf` are not the same model, and a
+        record that cannot tell them apart is a record that cannot
+        attribute anything.
+        """
+        import forge.providers.llama_cpp as prov
+
+        class R:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"content": "ok", "model": "/models/Qwen3.5-9B.Q4_K_M.gguf"}
+
+        monkeypatch.setattr(prov.requests, "post", lambda *a, **k: R())
+        assert prov.call("http://x", "label", "p").model.endswith(".gguf")

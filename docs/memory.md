@@ -745,6 +745,11 @@ the run should be surfaced as a message rather than as a crash, and graphs set i
 purpose when they fail — `graphs/recall.py`'s error node carries the comment. So a run can
 be `ok` and have answered nothing at all.
 
+The `llm` block carries `models`: what actually answered, as each backend names it.
+The web UI shows it on the trace card, which is a different question from the one the
+header answers — the header names the model loaded **now**, and a trace can be from
+before a swap.
+
 **`not_answered`** is the verdict: the reason the run produced no answer, or `null` if it
 did. It is the *same* value that keeps the exchange out of the vector store, computed once
 on the single exit path — once being structural rather than tidy, since `outcome.taken()`
