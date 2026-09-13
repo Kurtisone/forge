@@ -4,7 +4,7 @@ nothing, and why.
 
 WHERE THIS DEPARTS FROM THE DESIGN DOCUMENT, AND WHY IT HAS TO
 
-forge-kernel-harnais.md section 5 gives the Collector protocol as:
+docs/harnais.md section 5 gives the Collector protocol as:
 
     def collect(self) -> list[Fact]: ...
 
