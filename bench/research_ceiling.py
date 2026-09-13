@@ -127,10 +127,26 @@ RESEARCH_FETCH_CHARS_PER_RESULT is the answer here, because the
 smallest setting fails too: a 4B is not doing this task under this
 graph's prompt and this grammar.
 
-WHAT THIS DOES NOT SAY. Nothing about Qwen3.5-9B, which was not
-loaded. Run the same command with it to get the number this file was
-written to produce -- the cache makes the two runs differ only by the
-model.
+THE CONTROL, same day, Qwen3.8-9B-Q4_K_M, same cached pages
+-----------------------------------------------------------
+PASS on every point reached, and the contrast is not narrow:
+
+    subject      CloudSurf-4B (deployed)   Qwen3.8-9B
+    bourguignon  RAW at 866 tokens         PASS, ceiling 3952
+    wireguard    RAW at 846                PASS, ceiling 2822
+    sqlite       SHORT at 853              PASS through 1397
+    podman       PASS, ceiling 2569        not reached
+
+So the graph is fine and the prompt is fine. A 9B synthesizes at every
+size this graph can produce, including 3952 tokens -- past anything
+RESEARCH_FETCH_TOP_N=3 can build. The 4B does not synthesize at the
+smallest. That is a verdict on the model, which is what a control arm
+is for.
+
+Incomplete on purpose: llama-server died nine calls in, taking the
+whole pass with it, and podman was never reached. That failure is why
+this file now records DOWN, stops after three in a row, and writes a
+partial table instead of losing the nine calls that did work.
 """
 
 from __future__ import annotations
@@ -157,6 +173,7 @@ for _candidate in (_HERE / "src", _HERE.parent / "src", Path("src")):
 from forge import lang
 from forge.config import LLAMA_CPP_URL, LLM_MODEL
 from forge.context_info import today_line
+from forge.errors import ProviderError
 from forge.graphs import research
 from forge.providers import llama_cpp
 from forge.router.grammar import build_router_grammar
@@ -222,6 +239,18 @@ TOP_N_AXIS = (1, 2, 3)
 CHARS_AXIS = (1000, 1500, 2500, 4000)
 
 PASS, RAW, SHORT, ERROR = "PASS", "RAW", "SHORT", "ERROR"
+
+#: Not a verdict on the model: the backend never answered. Kept apart
+#: from ERROR, which is Forge's cleaner catching a bad answer, because
+#: averaging a dead server into a model's score is how a table says
+#: something false with confidence.
+DOWN = "DOWN"
+
+#: Consecutive DOWNs after which the run stops. llama-server dropping
+#: one request is a blip; dropping three in a row means it is restarting
+#: and every later row would be DOWN too -- measured on 2026-09-13, when
+#: it died nine calls into a 9B pass and took the whole run with it.
+_MAX_CONSECUTIVE_DOWN = 3
 
 #: Below this, an unwrapped answer is an answer in shape only. Same
 #: number research's own cleaner treats as substantive.
@@ -336,6 +365,37 @@ def ceiling_for(rows: list[dict]) -> int | None:
     return ceiling
 
 
+def write_out(args, tools, grammar, results, ceilings) -> None:
+    """
+    Persist the table, including a partial one.
+
+    Called on the way out of a completed pass AND from the handler for
+    an interrupted one. A run here is twenty-four calls of ten to sixty
+    seconds; when llama-server died nine calls into the first 9B pass,
+    every one of those nine was lost because the only write was at the
+    end of a path the exception never reached.
+    """
+    Path(args.out).write_text(
+        json.dumps(
+            {
+                "model": LLM_MODEL,
+                "tools": tools,
+                "grammar_chars": len(grammar),
+                "repeat": args.repeat,
+                "cache_prompt": not args.no_cache,
+                "complete": len(results) == len(SUBJECTS),
+                "subjects": results,
+                "ceilings": ceilings,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    kind = "" if len(results) == len(SUBJECTS) else " (PARTIAL)"
+    print(f"\nwritten to {args.out}{kind}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--capture", action="store_true", help="fetch the pages, then stop")
@@ -396,6 +456,7 @@ def main() -> int:
     print(f"cache_prompt: {not args.no_cache}   repeat: {args.repeat}\n")
 
     results = {}
+    consecutive_down = 0
     for name, data in store.items():
         if args.only and name != args.only:
             continue
@@ -434,14 +495,25 @@ def main() -> int:
                 continue
 
             seen = []
-            for _ in range(args.repeat):
-                raw, gen, ms = ask(prompt, grammar)
-                v, head = verdict(raw)
-                seen.append((v, head, gen, ms))
+            try:
+                for _ in range(args.repeat):
+                    raw, gen, ms = ask(prompt, grammar)
+                    v, head = verdict(raw)
+                    seen.append((v, head, gen, ms))
+            except ProviderError as e:
+                # The backend, not the model. Recorded and skipped
+                # rather than raised: this run is twenty-four calls of
+                # ten to sixty seconds each, and losing all of them to
+                # one dropped connection is what happened the first
+                # time a 9B was measured here.
+                seen.append((DOWN, str(e)[:54], 0, 0.0))
+                consecutive_down += 1
+            else:
+                consecutive_down = 0
 
             # Worst verdict of the repeats: one RAW in three is still a
             # size this model cannot be trusted at.
-            order = {PASS: 0, SHORT: 1, ERROR: 2, RAW: 3}
+            order = {PASS: 0, SHORT: 1, ERROR: 2, RAW: 3, DOWN: 4}
             v, head, gen, ms = max(seen, key=lambda s: order[s[0]])
             print(
                 f"  {top_n:>5} {chars:>5} {tokens:>7}  "
@@ -460,6 +532,15 @@ def main() -> int:
             )
 
         results[name] = rows
+        if consecutive_down >= _MAX_CONSECUTIVE_DOWN:
+            print(
+                f"\n  STOPPING: {consecutive_down} calls in a row went "
+                "unanswered.\n  llama-server is down or restarting -- every "
+                "later row would say\n  the same thing about it rather than "
+                "about the model. What was\n  measured before it went is "
+                "written out below."
+            )
+            break
         if not args.dry:
             c = ceiling_for(rows)
             print(f"  ceiling: {c if c else 'FAILED AT THE SMALLEST SIZE'}\n")
@@ -506,8 +587,6 @@ def main() -> int:
         print("  cause is something this harness holds fixed (the fetched")
         print("  pages themselves, or the search snippets above them).")
 
-    ceilings = {n: ceiling_for(r) for n, r in results.items()}
-    found = [c for c in ceilings.values() if c]
     print("\n" + "-" * 66)
     print("LARGEST PROMPT THAT PASSED, per subject (tokens)")
     for name, c in ceilings.items():
@@ -530,23 +609,7 @@ def main() -> int:
         )
 
     if args.out:
-        Path(args.out).write_text(
-            json.dumps(
-                {
-                    "model": LLM_MODEL,
-                    "tools": tools,
-                    "grammar_chars": len(grammar),
-                    "repeat": args.repeat,
-                    "cache_prompt": not args.no_cache,
-                    "subjects": results,
-                    "ceilings": ceilings,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        print(f"\nwritten to {args.out}")
+        write_out(args, tools, grammar, results, ceilings)
 
     return 0
 
