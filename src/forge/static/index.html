@@ -436,6 +436,10 @@
     /* A run that completed and answered nothing. Neither green nor
        red on purpose: nothing broke, and nothing was answered. */
     .trace-blank { color: var(--muted); }
+    .trace-model {
+      color: var(--muted); font-size: .72rem; margin-bottom: 6px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
     .trace-blank-note {
       color: var(--muted); font-size: .78rem; margin-top: 6px;
     }
@@ -684,12 +688,20 @@ async function refreshContext() {
   }
 }
 
+function shortModel(name) {
+  return String(name || '').replace(/\.gguf$/i, '')
+}
+
 async function checkHealth() {
   try {
     const r = await fetch('/health')
     const data = await r.json()
     document.getElementById('status-dot').className = 'dot ok'
-    const text = `${data.provider} · ${data.model}`
+    // .gguf is noise in a 220px box that already ellipsises: the
+  // extension is the same for every model this ever serves, and it
+  // costs five of the ~25 characters that actually fit. Display only
+  // -- the trace record keeps the exact name the backend reported.
+  const text = `${data.provider} · ${shortModel(data.model)}`
     const el = document.getElementById('status-text')
     el.textContent = text
     el.title = text
@@ -1265,6 +1277,15 @@ async function loadTraces() {
       // purpose so the failure reaches the user as a message instead
       // of a crash. Drawing those green was the whole complaint.
       const blank = ok && t.not_answered
+      // What actually answered this run, which is not what the header
+      // says: the header names the model loaded NOW, and a trace can be
+      // from before a swap. A list because one run is several calls and
+      // CAPABILITY_PROVIDER can send them to different backends --
+      // metrics.models is de-duplicated in first-seen order. Absent
+      // when no backend reported one, which is a different fact from
+      // "it was the configured one" and is shown as nothing rather
+      // than as a guess.
+      const models = ((t.llm && t.llm.models) || []).map(shortModel).join(' · ')
       const card = document.createElement('div')
       card.className = 'trace-card'
 
@@ -1311,6 +1332,7 @@ async function loadTraces() {
           <span class="trace-time">${t.timestamp} · ${t.total_ms}ms</span>
         </div>
         <div class="trace-input">${escapeHtml(t.user_input_preview || '')}</div>
+        ${models ? `<div class="trace-model" title="le modèle qui a répondu, tel que le backend le nomme">${escapeHtml(models)}</div>` : ''}
         <div class="trace-steps">${stepsHtml}</div>
         ${subStepsHtml}
         ${t.error ? `<div style="color:var(--red);font-size:.78rem;margin-top:6px">⚠ ${escapeHtml(t.error)}</div>` : ''}
