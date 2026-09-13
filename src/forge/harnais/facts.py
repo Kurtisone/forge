@@ -1,7 +1,7 @@
 """
 The three things this system is allowed to believe, kept apart by type.
 
-ARCHITECTURE of the distinction (forge-kernel-harnais.md, section 1):
+ARCHITECTURE of the distinction (docs/harnais.md, section 1):
 
     FACT        observed directly by the Harnais, timestamped, with a
                 traceable source

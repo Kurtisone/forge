@@ -30,6 +30,7 @@ page drifts by taking on a neighbour's job, not by getting long.
 | [HTTP API](api.md) | You are calling Forge from something other than the UI |
 | [Development](development.md) | You are running the tests, CI, or a measurement harness |
 | [Version history and roadmap](roadmap.md) | You want to know what landed when, and why |
+| [Kernel + Harnais](harnais.md) | You are working on observation, the World Model, or the Context Builder |
 
 Three documents stay at the root because they are not "docs about the
 code" -- they are commitments:
