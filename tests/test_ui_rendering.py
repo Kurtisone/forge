@@ -115,6 +115,73 @@ class TestTheFootersResearchAppends:
         assert url in html
 
 
+class TestTheQrCodeThePairCommandDraws:
+    """
+    `!pair` answers with an inline PNG. Before this renderer knew what
+    an image was, that reached the screen as `!QR code (data:image/
+    png;base64,` followed by nine hundred characters of base64 -- the
+    link rule matched, the bang did not, and the bubble filled with
+    the payload. Run rather than read, because that is precisely the
+    bug reading the source did not catch.
+    """
+
+    _PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+
+    def test_an_inline_png_becomes_an_image(self, render):
+        html = render(f"![QR code]({self._PNG})")
+
+        assert f'<img src="{self._PNG}"' in html
+        assert "base64" not in html.replace(self._PNG, ""), (
+            "the payload reached the screen as text as well as as an image"
+        )
+
+    def test_the_bang_does_not_survive_as_punctuation(self, render):
+        assert "!<" not in render(f"![QR code]({self._PNG})")
+
+    def test_the_real_pair_reply_renders_as_an_image(self, monkeypatch, render):
+        """
+        The actual output of the command, not a hand-written sample:
+        the two halves are only correct together.
+        """
+        from forge import pairing
+
+        monkeypatch.setattr(pairing, "FORGE_PUBLIC_URL", "http://10.8.0.1:8000")
+        monkeypatch.setattr(pairing, "API_TOKEN", "bearer")
+        html = render(pairing.build_reply())
+
+        assert '<img src="data:image/png;base64,' in html
+        assert "<strong>Appairage</strong>" in html
+
+    def test_a_remote_image_is_not_fetched(self, render):
+        """
+        Tool output (web_fetch, research, files:read) reaches this
+        renderer, so a remote <img> would be a beacon: rendering the
+        answer would tell a hostile page it had been read. Downgraded
+        to text, the way an unsafe link scheme already is.
+        """
+        html = render("![pixel](https://tracker.example/p.png)")
+
+        assert "<img" not in html
+        assert "tracker.example" in html, "downgraded, not silently dropped"
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+            "data:text/html;base64,PGgxPmhpPC9oMT4=",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_only_png_data_uris_become_images(self, render, src):
+        assert "<img" not in render(f"![x]({src})")
+
+    def test_an_image_url_cannot_break_out_of_the_attribute(self, render):
+        html = render('![x](data:image/png;base64,AAA" onerror="alert(1))')
+
+        assert "onerror" not in html or "&quot;" in html
+        assert "<img" not in html
+
+
 class TestTheRulesThisUiDeliberatelyLacks:
     def test_underscores_stay_underscores(self, render):
         """
