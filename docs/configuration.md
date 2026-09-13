@@ -82,6 +82,8 @@ this page covers the ones you are likely to touch.
 | `JOB_TIMEOUT` | Seconds before a running job is considered stuck | `1800` |
 | `API_ALLOW_UNAUTHENTICATED` | Opt in to starting without an `API_TOKEN`. Refuses by default — the API dispatches tools on your machine | `false` |
 | `API_DOCS_ENABLED` | Mount `/docs` and `/redoc`. Off by default | `false` |
+| `FORGE_PUBLIC_URL` | Address the **phone** uses to reach Forge, usually over WireGuard. Travels verbatim inside the `!pair` QR code and becomes the Android client's base URL, so a loopback address here builds a client that calls the phone itself — `!pair` refuses one. Unset, `!pair` refuses and says so | *(empty)* |
+| `PAIRING_TTL_SECONDS` | How long a `!pair` code stays claimable. Also how long a photograph of the screen is worth anything | `300` |
 | `ALLOW_MUTATION_AFTER_EXTERNAL_DATA` | Allow `shell`/`test`/`files:write` in the same run **after** external data was fetched. Off by default: the escalation guard is deterministic rather than asked of the model. `files:read` is deliberately non-tainting, to preserve the read-then-write flow | `false` |
 | `POLICY_ALLOW_NETWORK` | Policy Engine: allow capabilities that reach the Internet (`research`, `web_fetch`, `web_search`, `shell`). A deny gate — it only subtracts from what `ENABLED_TOOLS` already permits, and a denied capability is not offered to the router at all | `true` |
 | `POLICY_ALLOW_WORKSPACE_WRITES` | Policy Engine: allow capabilities that can write under `WORKSPACE_DIR` | `true` |
