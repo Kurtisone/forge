@@ -40,7 +40,7 @@ Usage (Python):
   print(run("répare le cache KV dans src/forge"))
 """
 
-from forge import delegation, jobs, spec, subtrace, turn
+from forge import current_job, delegation, jobs, spec, subtrace, turn
 from forge.config import DELEGATE_DRAFT
 from forge.errors import ForgeError, ProviderError
 from forge.graph import Graph
@@ -125,6 +125,7 @@ def open_node(state: AgentState) -> AgentState:
         # right to: the next message has to belong to exactly one of
         # them. Refusing here turns that invariant into a sentence
         # instead of a stack trace.
+        current_job.report(existing.id)
         state.final_output = (
             f"Le job {existing.id} attend déjà une réponse. "
             "Réponds-lui ou annule-le avant d'en ouvrir un autre."
@@ -133,6 +134,10 @@ def open_node(state: AgentState) -> AgentState:
         return state
 
     job = jobs.create(drafted.to_dict())
+    # The turn that creates the job is the one a client has no other
+    # way to learn the id from: it is not in GET /jobs yet when the
+    # request was sent, and the answer below only says it in prose.
+    current_job.report(job.id)
     question = spec.next_question(drafted)
 
     if question is not None:

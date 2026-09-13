@@ -22,7 +22,7 @@ throws away work they asked for.
 
 import unicodedata
 
-from forge import jobs, non_answer, runner, spec, turn
+from forge import current_job, jobs, non_answer, runner, spec, turn
 from forge.logger import log
 
 #: pending_field value used while a completed spec waits for approval.
@@ -104,6 +104,12 @@ def intercept(user_input: str) -> str | None:
     if job is None:
         return _maybe_cancel_running(user_input)
 
+    # Reported once here rather than at each of the four returns
+    # below: every one of them is about THIS job, including the branch
+    # that only re-asks a question. A fifth site added later would be
+    # about it too, and would have had to remember.
+    current_job.report(job.id)
+
     if _is_keyword(user_input, _CANCEL_WORDS):
         jobs.transition(job.id, jobs.CANCELLED)
         return f"Job {job.id} annulé."
@@ -148,6 +154,7 @@ def _maybe_cancel_running(user_input: str) -> str | None:
         return f"Plusieurs jobs en cours ({listing}). Lequel annuler ?"
 
     job = live[0]
+    current_job.report(job.id)
     runner.get_runner().cancel(job.id)
     log.info("job %d cancelled from the thread", job.id)
     return f"Job {job.id} annulé."

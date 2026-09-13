@@ -28,6 +28,7 @@ import shlex
 from pathlib import Path
 
 from forge import (
+    current_job,
     delegation,
     memory,
     metrics,
@@ -310,6 +311,10 @@ class Orchestrator:
         # Same reason as start_run above: a verdict left behind by the
         # previous run in this context would mark this turn unanswered.
         outcome.clear()
+        # And the same again for the job id: inherited, it would tag
+        # every answer after a delegation with a job it has nothing to
+        # do with.
+        current_job.clear()
         # The raw message, for the one tool that needs it rather than
         # the router's restatement of it. See turn.py.
         turn.set_input(user_input)
@@ -640,6 +645,10 @@ class Orchestrator:
         # this whether or not the turn is remembered, and outcome.taken()
         # clears on read so there is exactly one chance to ask.
         state.not_answered = self._not_an_answer(state.final_output or "")
+        # Read once, here, for the reason not_answered is: taken()
+        # clears, so a second caller would get None and disagree with
+        # the first by construction.
+        state.job_id = current_job.taken()
         trace.save(state)
         if MEMORY_ENABLED and remember:
             index = state.not_answered is None
