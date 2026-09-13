@@ -432,6 +432,21 @@ API_ALLOW_UNAUTHENTICATED = _bool("API_ALLOW_UNAUTHENTICATED", "false")
 # API_DOCS_ENABLED=true while developing against the API.
 API_DOCS_ENABLED = _bool("API_DOCS_ENABLED", "false")
 
+# --- Pairing (!pair) --------------------------------------------------
+# The address the PHONE uses to reach Forge, typically over WireGuard
+# (e.g. http://10.8.0.1:8000). It travels verbatim inside the QR code
+# and becomes the Android client's base URL, so a loopback address
+# here produces a client that talks to the phone itself. Empty by
+# default: `!pair` then refuses and says what to set, rather than
+# handing out a QR that cannot work.
+FORGE_PUBLIC_URL = os.getenv("FORGE_PUBLIC_URL", "")
+# How long a pairing token stays claimable. Short on purpose -- the QR
+# is rendered into a conversation, so the window during which a
+# photograph of the screen is worth anything is this number. Five
+# minutes is the time it takes to pick up a phone; raise it if pairing
+# happens away from the machine.
+PAIRING_TTL_SECONDS = int(os.getenv("PAIRING_TTL_SECONDS", "300"))
+
 # --- API rate limiting ----------------------------------------------------
 # In-memory sliding window, per client IP, single-process only (see
 # forge/ratelimit.py). Defaults are generous for interactive/UI use
