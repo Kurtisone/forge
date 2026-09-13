@@ -236,7 +236,14 @@ src/forge/
 ├── kernel/              # Capability layer — see ARCHITECTURE.md
 │   ├── capability.py    # Capability interface, Requirements, ToolCapability
 │   ├── registry.py      # Capability Registry — lists candidates, never chooses
-│   └── policy.py        # Policy Engine — deterministic deny gate, explained verdicts
+│   ├── policy.py        # Policy Engine — deterministic deny gate, explained verdicts
+│   ├── world_model.py   # current state + bounded event window + what could NOT be read
+│   └── context_builder.py  # the text the model may read — fact / unobserved / hypothesis
+│
+├── harnais/             # the only layer that touches the real machine — observation only
+│   ├── facts.py         # Fact (always observed), Hypothesis, Correlation
+│   ├── collector.py     # Observation — facts, or the reason there are none
+│   └── collectors/      # cpu_ram (/proc), containers (podman proxy), logs (journalctl -k)
 │
 └── providers/
     ├── llama_cpp.py
