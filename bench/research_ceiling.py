@@ -76,6 +76,13 @@ at a larger one -- which would mean the ceiling is not what is being
 measured, and is worth knowing before a number from here is used to set
 a default.
 
+Every row costs one completion, ten to thirty seconds of it, so the
+table is printed as it is produced rather than at the end -- stdout is
+reconfigured line-buffered below. Left block-buffered, a run that is
+working is indistinguishable from one that has hung for five minutes.
+That is not hypothetical: it happened on this file's first run against
+a second model.
+
 READING IT
 
   PASS     the user sees prose. What you want.
@@ -83,6 +90,18 @@ READING IT
   SHORT    unwrapped, but under 200 chars -- an answer in shape only.
   ERROR    the cleaner replaced it with [error]..., i.e. Forge caught it.
            Better than RAW, still not an answer.
+  CAP      generation hit LLAMA_CPP_N_PREDICT and stopped mid-object, so
+           the JSON never closed. The user sees raw JSON, so it is a
+           failure -- of the token budget, not of the model, and the fix
+           is to raise it rather than lower the fetch settings.
+  DOWN     the backend did not answer. Says nothing about the model, and
+           is excluded from every count for that reason.
+
+CAP and DOWN are SKIPPED when computing a ceiling, not treated as the
+boundary: neither says the size was too big. One capped point at 1452
+tokens otherwise reported a ceiling of 1367 for a subject that answered
+correctly at 1868, 2702 and 3952. A ceiling computed over skipped
+points is marked as such in the summary.
 
 The ceiling for a subject is the largest size that passed with nothing
 failing below it. `--out` writes the whole table as JSON, same
@@ -120,10 +139,28 @@ RESEARCH_FETCH_CHARS_PER_RESULT is the answer here, because the
 smallest setting fails too: a 4B is not doing this task under this
 graph's prompt and this grammar.
 
-WHAT THIS DOES NOT SAY. Nothing about Qwen3.5-9B, which was not
-loaded. Run the same command with it to get the number this file was
-written to produce -- the cache makes the two runs differ only by the
-model.
+THE CONTROL, same day, Qwen3.8-9B-Q4_K_M, same cached pages
+-----------------------------------------------------------
+PASS on every point reached, and the contrast is not narrow:
+
+    subject      CloudSurf-4B (deployed)   Qwen3.8-9B
+    bourguignon  RAW at 866 tokens         PASS, ceiling 3952
+    wireguard    RAW at 846                PASS, ceiling 2822
+    sqlite       SHORT at 853              PASS through 1397
+    podman       PASS, ceiling 2569        not reached
+
+So the graph is fine and the prompt is fine. A 9B synthesizes at every
+size this graph can produce, including 3952 tokens -- past anything
+RESEARCH_FETCH_TOP_N=3 can build. The 4B does not synthesize at the
+smallest. That is a verdict on the model, which is what a control arm
+is for.
+
+llama-server died during both 9B passes -- nine calls into the first,
+and through the whole of podman on the second. Everything this file
+does about failure came from those two runs: DOWN, the stop after three
+in a row, the partial write, and not counting a dead backend as a
+failing subject (the second run recommended lowering a fetch setting
+because the server had restarted).
 """
 
 from __future__ import annotations
@@ -135,6 +172,12 @@ import sys
 import time
 from pathlib import Path
 
+# Line-buffered, because every row of the table below costs one
+# completion and this is routinely run redirected to a file or through
+# in_container.sh. Block-buffered, a run that is working is
+# indistinguishable from one that has hung for five minutes.
+sys.stdout.reconfigure(line_buffering=True)
+
 _HERE = Path(__file__).resolve().parent
 for _candidate in (_HERE / "src", _HERE.parent / "src", Path("src")):
     if (_candidate / "forge").is_dir():
@@ -142,8 +185,9 @@ for _candidate in (_HERE / "src", _HERE.parent / "src", Path("src")):
         break
 
 from forge import lang
-from forge.config import LLAMA_CPP_URL, LLM_MODEL
+from forge.config import LLAMA_CPP_N_PREDICT, LLAMA_CPP_URL, LLM_MODEL
 from forge.context_info import today_line
+from forge.errors import ProviderError
 from forge.graphs import research
 from forge.providers import llama_cpp
 from forge.router.grammar import build_router_grammar
@@ -209,6 +253,26 @@ TOP_N_AXIS = (1, 2, 3)
 CHARS_AXIS = (1000, 1500, 2500, 4000)
 
 PASS, RAW, SHORT, ERROR = "PASS", "RAW", "SHORT", "ERROR"
+
+#: Generation hit LLAMA_CPP_N_PREDICT and stopped mid-object, so the
+#: JSON never closed and the unwrap could not parse it. The user sees
+#: raw JSON, so it IS a failure -- but of the token budget, not of the
+#: model, and the fix is the opposite one. Observed on 2026-09-13:
+#: Qwen3.8-9B answering well at 1536 tokens and being cut off, scored
+#: RAW, which dropped a subject's ceiling from 3952 to 1367.
+CAP = "CAP"
+
+#: Not a verdict on the model: the backend never answered. Kept apart
+#: from ERROR, which is Forge's cleaner catching a bad answer, because
+#: averaging a dead server into a model's score is how a table says
+#: something false with confidence.
+DOWN = "DOWN"
+
+#: Consecutive DOWNs after which the run stops. llama-server dropping
+#: one request is a blip; dropping three in a row means it is restarting
+#: and every later row would be DOWN too -- measured on 2026-09-13, when
+#: it died nine calls into a 9B pass and took the whole run with it.
+_MAX_CONSECUTIVE_DOWN = 3
 
 #: Below this, an unwrapped answer is an answer in shape only. Same
 #: number research's own cleaner treats as substantive.
@@ -276,10 +340,16 @@ def build_prompt(query: str, pages: list[dict], top_n: int, chars: int) -> str:
     return prompt + lang.line_for(query)
 
 
-def verdict(raw: str) -> tuple[str, str]:
+def verdict(raw: str, gen: int) -> tuple[str, str]:
     """What the user would see, and a fragment of it for the report."""
     shown = research._clean_synthesis_response(raw)
     head = " ".join(shown.split())[:54]
+
+    # Checked before the shape checks: a capped answer is malformed
+    # BECAUSE it was cut, and calling that RAW blames the model for a
+    # budget the operator set.
+    if gen >= LLAMA_CPP_N_PREDICT and shown.lstrip().startswith("{"):
+        return CAP, head
 
     if shown.startswith("[error]"):
         return ERROR, head
@@ -317,10 +387,55 @@ def ceiling_for(rows: list[dict]) -> int | None:
     """
     ceiling = None
     for row in sorted(rows, key=lambda r: r["tokens"]):
+        if row["verdict"] in (DOWN, CAP):
+            # Skipped, not stopped on, and not counted as a pass
+            # either. The backend was gone, or the answer was good and
+            # got cut at the token budget -- neither says this size is
+            # too big for the model, so treating it as the boundary
+            # understates the ceiling. Measured: one capped point at
+            # 1452 tokens reported a ceiling of 1367 for a subject that
+            # answered correctly at 1868, 2702 AND 3952.
+            continue
         if row["verdict"] != PASS:
             break
         ceiling = row["tokens"]
     return ceiling
+
+
+def has_gaps(rows: list[dict]) -> bool:
+    """Whether a ceiling was computed over inconclusive points."""
+    return any(r["verdict"] in (DOWN, CAP) for r in rows)
+
+
+def write_out(args, tools, grammar, results, ceilings) -> None:
+    """
+    Persist the table, including a partial one.
+
+    Called on the way out of a completed pass AND from the handler for
+    an interrupted one. A run here is twenty-four calls of ten to sixty
+    seconds; when llama-server died nine calls into the first 9B pass,
+    every one of those nine was lost because the only write was at the
+    end of a path the exception never reached.
+    """
+    Path(args.out).write_text(
+        json.dumps(
+            {
+                "model": LLM_MODEL,
+                "tools": tools,
+                "grammar_chars": len(grammar),
+                "repeat": args.repeat,
+                "cache_prompt": not args.no_cache,
+                "complete": len(results) == len(SUBJECTS),
+                "subjects": results,
+                "ceilings": ceilings,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    kind = "" if len(results) == len(SUBJECTS) else " (PARTIAL)"
+    print(f"\nwritten to {args.out}{kind}")
 
 
 def main() -> int:
@@ -383,6 +498,8 @@ def main() -> int:
     print(f"cache_prompt: {not args.no_cache}   repeat: {args.repeat}\n")
 
     results = {}
+    consecutive_down = 0
+    stop_early = False
     for name, data in store.items():
         if args.only and name != args.only:
             continue
@@ -421,14 +538,33 @@ def main() -> int:
                 continue
 
             seen = []
-            for _ in range(args.repeat):
-                raw, gen, ms = ask(prompt, grammar)
-                v, head = verdict(raw)
-                seen.append((v, head, gen, ms))
+            try:
+                for _ in range(args.repeat):
+                    raw, gen, ms = ask(prompt, grammar)
+                    v, head = verdict(raw, gen)
+                    seen.append((v, head, gen, ms))
+            except ProviderError as e:
+                # The backend, not the model. Recorded and skipped
+                # rather than raised: this run is twenty-four calls of
+                # ten to sixty seconds each, and losing all of them to
+                # one dropped connection is what happened the first
+                # time a 9B was measured here.
+                seen.append((DOWN, str(e)[:54], 0, 0.0))
+                consecutive_down += 1
+            else:
+                consecutive_down = 0
+
+            # Checked HERE, between points, not between subjects. Left
+            # at the subject boundary it let eight dead calls through
+            # on 2026-09-13 before noticing -- a whole subject's grid
+            # plus the tail of the previous one.
+            if consecutive_down >= _MAX_CONSECUTIVE_DOWN:
+                stop_early = True
+                break
 
             # Worst verdict of the repeats: one RAW in three is still a
             # size this model cannot be trusted at.
-            order = {PASS: 0, SHORT: 1, ERROR: 2, RAW: 3}
+            order = {PASS: 0, CAP: 1, SHORT: 2, ERROR: 3, RAW: 4, DOWN: 5}
             v, head, gen, ms = max(seen, key=lambda s: order[s[0]])
             print(
                 f"  {top_n:>5} {chars:>5} {tokens:>7}  "
@@ -447,6 +583,15 @@ def main() -> int:
             )
 
         results[name] = rows
+        if stop_early:
+            print(
+                f"\n  STOPPING: {consecutive_down} calls in a row went "
+                "unanswered.\n  llama-server is down or restarting -- every "
+                "later row would say\n  the same thing about it rather than "
+                "about the model. What was\n  measured before it went is "
+                "written out below."
+            )
+            break
         if not args.dry:
             c = ceiling_for(rows)
             print(f"  ceiling: {c if c else 'FAILED AT THE SMALLEST SIZE'}\n")
@@ -475,7 +620,31 @@ def main() -> int:
         deployed[name] = row["verdict"]
         print(f"  {name:14} {row['verdict']:8} at {row['tokens']} tokens")
 
-    bad = [n for n, v in deployed.items() if v != PASS]
+    # DOWN is excluded here, and that exclusion is the reason DOWN
+    # exists. Counting a dead server as a failing subject makes this
+    # recommend lowering a fetch setting because llama-server
+    # restarted -- which it did, on this file's own second run,
+    # before this line was written.
+    down = [n for n, v in deployed.items() if v == DOWN]
+    capped = [n for n, v in deployed.items() if v == CAP]
+    bad = [n for n, v in deployed.items() if v not in (PASS, DOWN, CAP)]
+
+    if down:
+        print(
+            f"\n  {len(down)} subject(s) unmeasured, backend did not answer: "
+            f"{', '.join(down)}"
+        )
+        print("  Nothing about the model can be read from those rows.")
+
+    if capped:
+        print(f"\n  {len(capped)} subject(s) hit the token budget: {', '.join(capped)}")
+        print(
+            f"  The answer was being written well and was cut at "
+            f"LLAMA_CPP_N_PREDICT={LLAMA_CPP_N_PREDICT}, which leaves the JSON"
+        )
+        print("  unclosed and sends it to the screen raw. RAISE that; the fetch")
+        print("  settings are not the cause and lowering them would not help.")
+
     if bad:
         print(
             f"\n  {len(bad)} of {len(deployed)} subjects fail as deployed: "
@@ -487,18 +656,18 @@ def main() -> int:
         print("      RESEARCH_FETCH_CHARS_PER_RESULT")
         print("    - if it fails at every point, the synthesis is not working")
         print("      here at all and neither setting is the answer.")
-    elif deployed:
+    elif deployed and not down and not capped:
         print("\n  Every subject passes as deployed. Nothing to change --")
         print("  and note what that means if a real turn still fails: the")
         print("  cause is something this harness holds fixed (the fetched")
         print("  pages themselves, or the search snippets above them).")
 
-    ceilings = {n: ceiling_for(r) for n, r in results.items()}
-    found = [c for c in ceilings.values() if c]
     print("\n" + "-" * 66)
     print("LARGEST PROMPT THAT PASSED, per subject (tokens)")
     for name, c in ceilings.items():
-        print(f"  {name:14} {c if c else 'none -- failed at the smallest point'}")
+        gap = "  (skipped inconclusive points)" if has_gaps(results[name]) else ""
+        shown = c if c else "none -- failed at the smallest point"
+        print(f"  {name:14} {shown}{gap}")
 
     if len(found) >= 2:
         lo, hi = min(found), max(found)
@@ -517,23 +686,7 @@ def main() -> int:
         )
 
     if args.out:
-        Path(args.out).write_text(
-            json.dumps(
-                {
-                    "model": LLM_MODEL,
-                    "tools": tools,
-                    "grammar_chars": len(grammar),
-                    "repeat": args.repeat,
-                    "cache_prompt": not args.no_cache,
-                    "subjects": results,
-                    "ceilings": ceilings,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        print(f"\nwritten to {args.out}")
+        write_out(args, tools, grammar, results, ceilings)
 
     return 0
 
