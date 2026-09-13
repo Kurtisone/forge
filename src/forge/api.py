@@ -300,6 +300,11 @@ class PinnedMessage(BaseModel):
     role: str
     content: str
     pinned: bool
+    # Epoch seconds, absent for entries written before the field existed
+    # -- the same convention as `usage` and `job_id` above. A client
+    # groups the thread by day with it; nothing is backfilled, since a
+    # date that was never recorded cannot be invented.
+    ts: float | None = None
 
 
 class ClearResponse(BaseModel):
