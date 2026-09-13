@@ -433,12 +433,21 @@ API_ALLOW_UNAUTHENTICATED = _bool("API_ALLOW_UNAUTHENTICATED", "false")
 API_DOCS_ENABLED = _bool("API_DOCS_ENABLED", "false")
 
 # --- Pairing (!pair) --------------------------------------------------
-# The address the PHONE uses to reach Forge, typically over WireGuard
-# (e.g. http://10.8.0.1:8000). It travels verbatim inside the QR code
-# and becomes the Android client's base URL, so a loopback address
-# here produces a client that talks to the phone itself. Empty by
-# default: `!pair` then refuses and says what to set, rather than
-# handing out a QR that cannot work.
+# The addresses the PHONE uses to reach Forge, comma-separated, in the
+# order the client should try them (e.g. the WireGuard address, then
+# the LAN one for when the phone is in the room). They travel verbatim
+# inside the QR code and become the Android client's base URLs, so a
+# loopback address here produces a client that talks to the phone
+# itself -- `!pair` refuses one anywhere in the list.
+#
+# A list rather than one address because the server cannot choose:
+# the request that draws the QR comes from the browser on this
+# machine, never from the phone that will scan it, so nothing here
+# knows where that phone will be. The client tries each and keeps the
+# first whose /health answers.
+#
+# Empty by default: `!pair` then refuses and says what to set, rather
+# than handing out a QR that cannot work.
 FORGE_PUBLIC_URL = os.getenv("FORGE_PUBLIC_URL", "")
 # How long a pairing token stays claimable. Short on purpose -- the QR
 # is rendered into a conversation, so the window during which a

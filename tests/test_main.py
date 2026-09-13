@@ -146,6 +146,24 @@ class TestThePairCommandInTheRepl:
         yield
         pairing.reset()
 
+    def test_it_lists_every_address_it_encoded(self, monkeypatch, capsys):
+        """
+        The REPL prints the addresses under the code for the same
+        reason the web UI lists them: they are the one part a human
+        can check by reading.
+        """
+        from forge import pairing
+
+        monkeypatch.setattr(
+            pairing,
+            "FORGE_PUBLIC_URL",
+            "http://10.8.0.1:8000,http://192.168.1.20:8000",
+        )
+        main_mod._handle_command("!pair")
+        out = capsys.readouterr().out
+
+        assert "10.8.0.1:8000" in out and "192.168.1.20:8000" in out
+
     def test_it_prints_a_scannable_code_and_not_the_token(self, capsys):
         """
         A terminal cannot show a PNG, and printing the token as text

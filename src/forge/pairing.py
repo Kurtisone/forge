@@ -90,24 +90,40 @@ class PairingNotConfigured(Exception):
     """FORGE_PUBLIC_URL or API_TOKEN is missing or unusable."""
 
 
-def _check_config() -> str:
-    """The URL to advertise, or raise saying exactly what to set."""
-    url = (FORGE_PUBLIC_URL or "").strip()
-    if not url:
+def _check_config() -> list[str]:
+    """
+    The addresses to advertise, in order, or raise saying what to set.
+
+    Order is the client's try order, so it is preserved exactly as
+    written rather than sorted or deduplicated into something tidier:
+    the first entry is the one that should work from anywhere, the
+    later ones are the shortcuts that only work somewhere.
+    """
+    raw = [part.strip() for part in (FORGE_PUBLIC_URL or "").split(",")]
+    urls = [part for part in raw if part]
+
+    if not urls:
         raise PairingNotConfigured(
-            "FORGE_PUBLIC_URL n'est pas configuré. C'est l'adresse à "
-            "laquelle le téléphone joint Forge (via WireGuard), par "
-            "exemple FORGE_PUBLIC_URL=http://10.8.0.1:8000"
+            "FORGE_PUBLIC_URL n'est pas configuré. Ce sont les adresses "
+            "auxquelles le téléphone joint Forge, séparées par des "
+            "virgules — par exemple "
+            "FORGE_PUBLIC_URL=http://10.8.0.1:8000,http://192.168.1.20:8000"
         )
 
-    host = (urlparse(url).hostname or "").lower()
-    if host in _LOOPBACK:
-        raise PairingNotConfigured(
-            f"FORGE_PUBLIC_URL vaut {url!r}, que le téléphone ne peut pas "
-            "joindre : cette valeur part telle quelle dans le QR et devient "
-            "l'URL de base du client. Mets l'adresse WireGuard de cette "
-            "machine, pas une adresse de bouclage."
-        )
+    # Every one of them, not just the first: an unreachable address
+    # later in the list is a client that hangs on a timeout before
+    # falling through, and the whole point of the list is that one of
+    # them works from where the phone happens to be.
+    for url in urls:
+        host = (urlparse(url).hostname or "").lower()
+        if host in _LOOPBACK:
+            raise PairingNotConfigured(
+                f"FORGE_PUBLIC_URL contient {url!r}, que le téléphone ne "
+                "peut pas joindre : ces valeurs partent telles quelles dans "
+                "le QR et deviennent les URL de base du client. Mets "
+                "l'adresse WireGuard et/ou l'adresse locale de cette "
+                "machine, pas une adresse de bouclage."
+            )
 
     if not API_TOKEN:
         raise PairingNotConfigured(
@@ -117,7 +133,7 @@ def _check_config() -> str:
             "WireGuard."
         )
 
-    return url
+    return urls
 
 
 def _purge(now: float) -> None:
@@ -234,10 +250,18 @@ def payload() -> dict:
     """
     What the phone needs to reach this Forge, with a fresh token.
 
+    `urls` is a LIST even when there is one address, and there is no
+    singular `url` beside it. A field that is sometimes a string and
+    sometimes a list is two shapes a client has to handle; a scalar
+    kept "for compatibility" next to the list is a second source of
+    truth that drifts the first time someone edits one of them. The
+    client tries each in order and keeps the first whose /health
+    answers -- which is how one QR code works both over WireGuard and
+    on the LAN without the server knowing where the phone is.
+
     Raises PairingNotConfigured if it cannot be built.
     """
-    url = _check_config()
-    return {"url": url, "token": issue()}
+    return {"urls": _check_config(), "token": issue()}
 
 
 def _minutes(seconds: int) -> str:
@@ -253,15 +277,26 @@ def build_reply() -> str:
         log.warning("pairing refused: %s", e)
         return f"Appairage impossible : {e}"
 
+    # The addresses are listed in the text as well as encoded in the
+    # image, because they are the one part of the payload a human can
+    # check by reading. A QR that points somewhere unexpected is
+    # otherwise indistinguishable from one that does not.
+    addresses = "\n".join(f"- `{url}`" for url in data["urls"])
+    tried = (
+        "L'app essaie ces adresses dans l'ordre et garde la première qui répond."
+        if len(data["urls"]) > 1
+        else ""
+    )
+
     return (
         "**Appairage**\n\n"
-        f"Scanne ce QR code avec l'app Forge pour connecter ce téléphone à "
-        f"`{data['url']}`.\n\n"
+        "Scanne ce QR code avec l'app Forge pour connecter ce téléphone.\n\n"
+        f"{addresses}\n\n"
         f"![QR code d'appairage]({_qr_png_data_uri(data)})\n\n"
-        f"Le code vaut pour **un seul appareil** et expire dans "
-        f"**{_minutes(PAIRING_TTL_SECONDS)}**. Il n'est pas conservé dans "
-        "l'historique : recharger la page le fait disparaître, `!pair` en "
-        "affiche un nouveau."
+        f"{tried}{' ' if tried else ''}Le code vaut pour **un seul appareil** "
+        f"et expire dans **{_minutes(PAIRING_TTL_SECONDS)}**. Il n'est pas "
+        "conservé dans l'historique : recharger la page le fait disparaître, "
+        "`!pair` en affiche un nouveau."
     )
 
 

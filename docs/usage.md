@@ -143,12 +143,33 @@ inconnue dans l'interface web" in the one interface it was written for.
 In the REPL the same payload is drawn with characters, since a terminal cannot
 show a PNG.
 
-It needs `FORGE_PUBLIC_URL`: the address the **phone** uses, which over
-WireGuard is not the address you use. That value goes into the QR verbatim and
-becomes the app's base URL, so `!pair` refuses a loopback one rather than hand
-out a code that builds a client calling the phone itself. It also refuses when
+It needs `FORGE_PUBLIC_URL`: the addresses the **phone** uses, which over
+WireGuard are not the address you use. Comma-separated, in the order the app
+should try them:
+
+```bash
+FORGE_PUBLIC_URL=http://10.8.0.1:8000,http://192.168.1.20:8000
+```
+
+One QR code then works from anywhere — the app tries each address and keeps
+the first whose `/health` answers, so the WireGuard route serves when you are
+out and the LAN address when you are in the room. The server cannot make that
+choice for it: the request that draws the QR comes from the browser on this
+machine, never from the phone that will scan it, so nothing server-side knows
+where that phone will be.
+
+Those values go into the QR verbatim and become the app's base URLs, so `!pair`
+refuses a loopback address **anywhere in the list** rather than hand out a code
+that builds a client calling the phone itself — or one that hangs on a timeout
+before falling through to the address that works. It also refuses when
 `API_TOKEN` is unset — pairing an open instance would publish it onto the
 WireGuard network.
+
+The payload is `{"urls": [...], "token": "..."}` — `urls` is a list even with
+one address, and there is no singular `url` beside it. A field that is
+sometimes a string and sometimes a list is two shapes the client has to
+handle, and a scalar kept for compatibility next to the list is a second
+source of truth that drifts the first time someone edits one of them.
 
 **What the QR carries is not the bearer token.** It holds a single-use token,
 valid `PAIRING_TTL_SECONDS` (five minutes by default), which the app exchanges
