@@ -92,6 +92,7 @@ Usage (Python):
 import difflib
 import json
 import subprocess
+from datetime import datetime
 
 from forge import harnais, lang, non_answer, subtrace
 from forge.config import (
@@ -109,6 +110,8 @@ from forge.config import (
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
+from forge.harnais.collector import Observation
+from forge.harnais.facts import Fact
 from forge.kernel.context_builder import MVP_DOMAINS, ContextBuilder
 from forge.kernel.world_model import InMemoryWorldModel
 from forge.llm import call_llm
@@ -121,6 +124,13 @@ from forge.text_cleaning import (
 from forge.types import AgentState
 
 _MAX_SYNTHESIS_OUTPUT_CHARS = 4000
+
+#: What _run_fixed returns when a command SUCCEEDED and printed nothing.
+#: Public because forge/harnais/collectors/ imports it: it was copied
+#: into two of them as a literal, and a third place -- the edge
+#: condition below -- spelled the same idea as `not text.strip()` and
+#: was therefore wrong. See _collected_nothing.
+NO_OUTPUT = "[no output]"
 
 # Same reasoning as graphs/review.py and graphs/research.py: this
 # model needs the exact shape it must NOT produce shown explicitly.
@@ -382,7 +392,7 @@ def _run_fixed(cmd: list[str], timeout: int) -> str:
 
     output = (result.stdout or result.stderr or "").strip()
     lines = output.splitlines()[:SYSADMIN_MAX_LOG_LINES]
-    joined = "\n".join(lines) if lines else "[no output]"
+    joined = "\n".join(lines) if lines else NO_OUTPUT
 
     if result.returncode != 0:
         # The command RAN (no Python-level exception above) but the
@@ -819,6 +829,30 @@ your answer. Same plain format as GOOD ANSWER. Be concise.
 """
 
 
+def _collected_nothing(state: AgentState) -> bool:
+    """
+    Whether the collection returned no log lines at all.
+
+    This was `not collected.strip()`, and it never fired. _run_fixed
+    returns the literal NO_OUTPUT for a command that succeeded and
+    printed nothing -- it cannot return "" -- so nothing_collected has
+    been unreachable for as long as it has existed, and the empty
+    journal it was written for went to the model instead, as a log
+    block containing the words "[no output]".
+
+    That node is not decoration. Measured 2026-09-12 with
+    bench/sysadmin_verdict.py: asked whether an EMPTY log block
+    contained what was needed to answer "pourquoi searxng a redémarré ?",
+    this model said yes. The one case where "these logs do not answer"
+    needs no judgement was being judged anyway.
+
+    Found by a route C test written to check the refusals still fire
+    before the Harnais observes. It fired the wrong one.
+    """
+    collected = (state.context.get("collected_logs") or "").strip()
+    return not collected or collected == NO_OUTPUT
+
+
 def _harnais_path(state: AgentState) -> bool:
     """
     Whether this run takes route A: the Harnais instead of a log block.
@@ -837,9 +871,64 @@ def _harnais_path(state: AgentState) -> bool:
     return SYSADMIN_USE_HARNAIS and not state.context.get("target_hint")
 
 
+def _target_logs_observation(state: AgentState) -> Observation | None:
+    """
+    The validated per-unit collection, as a Harnais Observation.
+
+    collectors/logs.py takes no target and says why: a
+    LogsCollector(unit=...) would be a path from router-chosen text to
+    `journalctl --unit=<name>`, defended only by a docstring asking
+    callers to validate first. It ends with "per-unit logs arrive with
+    the validator that makes them safe, not before".
+
+    This is that arrival. The validator is _collect_node, unchanged and
+    one node upstream: a name reaches a command only after appearing
+    verbatim in this run's own discovery output, and the three refusals
+    still fire before anything gets here. What is new is only that the
+    result is recorded as a Fact rather than pasted into a prompt, so
+    the target's logs are rendered by the same code, under the same
+    markers, as everything else observed about the machine.
+
+    Returns None on the no-target path, where there is nothing to
+    record and the kernel collector answers for the logs domain.
+    """
+    collected = (state.context.get("collected_logs") or "").strip()
+    if not collected:
+        return None
+
+    at = datetime.now()  # noqa: DTZ005 -- local time, same as context_info
+    source = state.context["log_source"]
+
+    # Truncated HERE, before the Fact exists, and not left to the
+    # context budget. ContextBuilder._fit drops whole facts: a log tail
+    # over budget would vanish entirely rather than lose its oldest
+    # lines, which is the opposite of what SYSADMIN_LOG_CHARS_BUDGET was
+    # measured to do. _truncate_log_block keeps the END -- the recent
+    # events -- and says in the text that it cut, so the truncation
+    # stays visible to whoever reads the fact.
+    collected = _truncate_log_block(collected, SYSADMIN_LOG_CHARS_BUDGET)
+    lines = collected.splitlines()
+    return Observation.of(
+        "collect",
+        ("logs",),
+        [
+            Fact("logs", f"{source}.lines", len(lines), "lines", at, "collect"),
+            Fact("logs", f"{source}.tail", collected, None, at, "collect"),
+        ],
+        at,
+    )
+
+
 def _observe_node(state: AgentState) -> AgentState:
     """
     Ask every Harnais collector what it can see, and record it.
+
+    On the TARGETED path the kernel collector is dropped and the
+    validated per-unit collection answers for the logs domain instead.
+    `journalctl -k` is not the subject of "pourquoi searxng redémarre ?"
+    -- carrying both would spend budget on the block that cannot answer
+    and leave the one that can competing with it. That is also the
+    shape the bench measured, so what ships is what was tested.
 
     This runs a second `podman ps` -- _discover_node has already run
     one. Left as it is rather than threaded through: the collectors own
@@ -849,8 +938,17 @@ def _observe_node(state: AgentState) -> AgentState:
     matters, the fix is to drop discover from this path, not to share
     its output.
     """
+    target_logs = _target_logs_observation(state)
+    collectors = [
+        c
+        for c in harnais.default_collectors()
+        if not (target_logs and "logs" in c.domains)
+    ]
+
     world = InMemoryWorldModel()
-    observations = harnais.observe(harnais.default_collectors())
+    observations = harnais.observe(collectors)
+    if target_logs:
+        observations.append(target_logs)
     for observation in observations:
         world.record_observation(observation)
 
@@ -861,6 +959,7 @@ def _observe_node(state: AgentState) -> AgentState:
         collectors=len(observations),
         failed=failed,
         facts=sum(len(o.facts) for o in observations),
+        target_logs=bool(target_logs),
     )
     return state
 
@@ -946,9 +1045,34 @@ def _context_synthesize_node(state: AgentState) -> AgentState:
         state.final_output = f"[error] LLM unavailable: {e}"
         return state
 
+    # The footer survives route C, and it had to be noticed to survive:
+    # the first version of this node dropped it silently and a test
+    # caught it. _RUNNING_FOOTER is not a prompt instruction, it is a
+    # sentence written in code that holds whatever the model decided to
+    # say -- the half of run #be385d16's fix that does not depend on the
+    # model reading anything. Keyed off the observed Fact now rather
+    # than discovery's list, which is the same evidence one layer more
+    # honest: a status of "Up 3 hours" IS the container running.
+    target = state.context.get("target_hint")
+    running = (
+        bool(target)
+        and bool(state.context["world"].current_state("container"))
+        and any(
+            fact.key == f"{target}.status"
+            for fact in state.context["world"].current_state("container")
+        )
+    )
+    if running and not answer.startswith("[error]"):
+        answer += _RUNNING_FOOTER.format(target=target)
+
     state.final_output = answer
     state.final_tool = "sysadmin"
-    log.event("sysadmin.done", chars=len(state.final_output), source="harnais")
+    log.event(
+        "sysadmin.done",
+        chars=len(state.final_output),
+        source="harnais",
+        target_running=running,
+    )
     return state
 
 
@@ -990,8 +1114,17 @@ def build() -> Graph:
     g.add_edge(
         "collect",
         "nothing_collected",
-        condition=lambda s: not (s.context.get("collected_logs") or "").strip(),
+        condition=_collected_nothing,
     )
+    # Route C: the targeted path joins the same observe/context nodes.
+    # Reached only after the three refusals above have not fired, which
+    # means the target was found, its logs were collected and they are
+    # not empty -- the subject is observed by construction, which is why
+    # the `blind` failure cannot occur here. Measured 2026-09-14 rather
+    # than assumed: bench/context_builder_ab.py's `unit_blind` fixture
+    # puts the podman error in the context beside a question about a
+    # systemd unit, and the model reads the log it was given.
+    g.add_edge("collect", "observe", condition=lambda s: SYSADMIN_USE_HARNAIS)
     g.add_edge("collect", "synthesize")
 
     return g

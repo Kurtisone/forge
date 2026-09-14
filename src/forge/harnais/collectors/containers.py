@@ -56,15 +56,17 @@ from forge.config import (
     SYSADMIN_MAX_LOG_LINES,
     SYSADMIN_PODMAN_URL,
 )
+from forge.graphs.sysadmin import NO_OUTPUT as _NO_OUTPUT
 from forge.graphs.sysadmin import _run_fixed
 from forge.harnais.collector import CostHint, Observation
 from forge.harnais.facts import Fact
 
-#: `_run_fixed` returns this literal when a command succeeded and
-#: printed nothing. It must never be parsed as a container named
-#: "[no output]" -- the same class of mistake as the systemctl failure
-#: text that once became two fake units called "System" and "Failed".
-_NO_OUTPUT = "[no output]"
+#: Imported rather than repeated. This literal was copied here and
+#: into logs.py, and a third place spelled the same idea differently
+#: and was wrong for it -- see graphs/sysadmin._collected_nothing.
+#: It must never be parsed as a container named "[no output]", the same
+#: class of mistake as the systemctl failure text that once became two
+#: fake units called "System" and "Failed".
 
 _ERROR_PREFIX = "[error]"
 

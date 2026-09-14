@@ -365,3 +365,194 @@ def test_a_collector_that_raises_does_not_take_the_run_down(
 
     assert state.final_output == "diagnostic"
     assert "[unobserved] container:" in state.context["harnais_context"]
+
+
+# --- route C: the NAMED-target path -----------------------------------------
+#
+# The claim that held this back was mine and it was wrong, which is
+# worth saying plainly. `blind` -- the model answering "forge-llm plante
+# CAR le socket de Podman n'existe pas" -- needs the SUBJECT to be
+# unobserved, and on this path that cannot happen: synthesis is reached
+# only after the target was found in this run's own discovery, its logs
+# were collected, and they are not empty.
+#
+# What can still happen is a DIFFERENT domain being dark. Measured
+# 2026-09-14 (bench/context_builder_ab.py, `unit_blind`): podman error
+# in the context, question about a systemd unit whose log says OOM, and
+# the model read the log it was given -- no podman, no socket, no proxy
+# in the answer. The block was an assumption, not a measurement.
+
+
+@pytest.fixture
+def targeted_machine(monkeypatch):
+    """A named unit whose logs are collectable, on a live machine."""
+
+    def discover_or_collect(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return (
+                '{"type":"a","data":[[["searxng.service","","","","","","",0,"","/"]]]}'
+            )
+        if cmd[0] == "podman":
+            return "searxng"
+        return "Out of memory: Killed process 4412 (searxng-run)"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", discover_or_collect)
+    monkeypatch.setattr(containers_mod, "_run_fixed", lambda cmd, t: _ps(searxng=10800))
+    monkeypatch.setattr(
+        cpu_ram_mod,
+        "_read",
+        lambda path: MEMINFO if path == cpu_ram_mod._MEMINFO else LOADAVG,
+    )
+    monkeypatch.setattr(
+        logs_mod, "_run_fixed", lambda cmd, t: "kernel: MUST NOT APPEAR"
+    )
+
+
+def test_a_named_target_is_diagnosed_from_the_context(targeted_machine, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        sysadmin_mod,
+        "call_llm",
+        lambda p, grammar=None: seen.setdefault("prompt", p) and "diagnostic",
+    )
+
+    state = _run(question="pourquoi searxng redémarre ?", target="searxng.service")
+
+    assert _nodes(state) == ["discover", "collect", "observe", "context_synthesize"]
+    assert "journalctl -u searxng.service" in seen["prompt"]
+    assert "Out of memory" in seen["prompt"]
+
+
+def test_the_kernel_log_is_dropped_when_a_target_was_named(
+    targeted_machine, monkeypatch
+):
+    """
+    `journalctl -k` is not the subject of "pourquoi searxng redémarre ?".
+    Carrying both spends budget on the block that cannot answer and
+    leaves the one that can competing with it -- and it is also what the
+    bench measured, so what ships is what was tested.
+    """
+    seen = {}
+    monkeypatch.setattr(
+        sysadmin_mod,
+        "call_llm",
+        lambda p, grammar=None: seen.setdefault("prompt", p) and "diagnostic",
+    )
+
+    _run(question="pourquoi searxng redémarre ?", target="searxng.service")
+
+    assert "MUST NOT APPEAR" not in seen["prompt"]
+    assert "journalctl -k" not in seen["prompt"]
+
+
+def test_the_machine_corroborates_the_unit_s_own_logs(targeted_machine, monkeypatch):
+    """
+    The value case, measured: `unit_quiet`. A unit whose own logs are
+    routine startup notices cannot explain slowness, and the logs arm
+    read one of those notices as the cause -- run #be385d16's shape
+    exactly. The context arm has the machine to answer with.
+    """
+    seen = {}
+    monkeypatch.setattr(
+        sysadmin_mod,
+        "call_llm",
+        lambda p, grammar=None: seen.setdefault("prompt", p) and "diagnostic",
+    )
+
+    _run(question="pourquoi searxng redémarre ?", target="searxng.service")
+
+    assert "ram.used_pct" in seen["prompt"]
+    assert "container.searxng.uptime_s" in seen["prompt"]
+
+
+def test_the_running_footer_survives_route_c(targeted_machine, monkeypatch):
+    """
+    Not a prompt instruction: a sentence written in code that holds
+    whatever the model decided to say. The first version of this node
+    dropped it silently and a test in test_sysadmin.py caught it.
+    """
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnostic")
+
+    output = _run(question="pourquoi ?", target="searxng").final_output
+
+    assert "État observé" in output
+    assert "searxng" in output
+
+
+def test_the_flag_off_keeps_the_old_targeted_path(targeted_machine, monkeypatch):
+    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_USE_HARNAIS", False)
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnostic")
+
+    state = _run(question="pourquoi ?", target="searxng.service")
+
+    assert _nodes(state) == ["discover", "collect", "synthesize"]
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("nginx.service", "target_missed"),
+        ("searxng.service", "collect_failed"),
+    ],
+)
+def test_the_three_refusals_still_fire_before_any_observation(
+    monkeypatch, target, expected
+):
+    """
+    Route C must not become a way around the refusals. They are what
+    keeps a model from being handed evidence about a different subject
+    than the question -- each written in code because a model given
+    exactly that answered fluently anyway.
+    """
+
+    def discover_then_fail(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return (
+                '{"type":"a","data":[[["searxng.service","","","","","","",0,"","/"]]]}'
+            )
+        if cmd[0] == "podman":
+            return "searxng"
+        return "[error] journalctl: permission denied"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", discover_then_fail)
+
+    def no_observe():  # pragma: no cover - must not be reached
+        raise AssertionError("the Harnais ran after a refusal should have fired")
+
+    monkeypatch.setattr(harnais, "default_collectors", no_observe)
+
+    def no_call(prompt, grammar=None):  # pragma: no cover - must not run
+        raise AssertionError("the model was called after a refusal")
+
+    monkeypatch.setattr(sysadmin_mod, "call_llm", no_call)
+
+    state = _run(question="pourquoi ?", target=target)
+
+    assert _nodes(state)[-1] == expected
+    assert non_answer.is_non_answer(state.final_output)
+
+
+def test_an_empty_collection_still_refuses_before_observing(monkeypatch):
+    """The third refusal: the command ran and returned nothing. An empty
+    log file is not a quiet system, and a diagnosis of zero lines is
+    invention with extra steps."""
+
+    def discover_then_empty(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return (
+                '{"type":"a","data":[[["searxng.service","","","","","","",0,"","/"]]]}'
+            )
+        if cmd[0] == "podman":
+            return "searxng"
+        return "[no output]"
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", discover_then_empty)
+
+    def no_observe():  # pragma: no cover - must not be reached
+        raise AssertionError("the Harnais ran after nothing_collected")
+
+    monkeypatch.setattr(harnais, "default_collectors", no_observe)
+
+    state = _run(question="pourquoi ?", target="searxng.service")
+
+    assert _nodes(state)[-1] == "nothing_collected"
