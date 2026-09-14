@@ -19,6 +19,7 @@ import pytest
 import forge.graphs.sysadmin as sysadmin_mod
 from forge import non_answer
 from forge.graphs.sysadmin import build as build_sysadmin
+from forge.harnais import host_exec
 
 
 def _fake_busctl_units_json(names: list[str]) -> str:
@@ -424,7 +425,7 @@ def test_run_fixed_prefixes_error_on_nonzero_exit(monkeypatch):
         stderr = ""
 
     monkeypatch.setattr(
-        sysadmin_mod.subprocess, "run", lambda *a, **kw: FakeCompletedProcess()
+        host_exec.subprocess, "run", lambda *a, **kw: FakeCompletedProcess()
     )
 
     result = sysadmin_mod._run_fixed(["busctl", "call"], 10)
@@ -554,7 +555,7 @@ def test_sysadmin_uses_configured_journal_dir(monkeypatch):
     """SYSADMIN_JOURNAL_DIR (deploy/README.md: host's /var/log/journal
     bind-mounted read-only) must add -D <dir> to every journalctl
     call, not just kernel logs."""
-    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_JOURNAL_DIR", "/host-journal")
+    monkeypatch.setattr(host_exec, "SYSADMIN_JOURNAL_DIR", "/host-journal")
     calls = []
 
     def fake_run_fixed(cmd, timeout):
@@ -581,7 +582,7 @@ def test_sysadmin_uses_configured_podman_url(monkeypatch):
     socket, never the raw host socket) must add --url <value> to
     every podman call."""
     monkeypatch.setattr(
-        sysadmin_mod, "SYSADMIN_PODMAN_URL", "unix:///run/forge-podman-ro-proxy/sock"
+        host_exec, "SYSADMIN_PODMAN_URL", "unix:///run/forge-podman-ro-proxy/sock"
     )
     calls = []
 
@@ -610,10 +611,10 @@ def test_sysadmin_passes_configured_dbus_address_to_subprocess_env(monkeypatch):
     via DBUS_SYSTEM_BUS_ADDRESS in the subprocess env, and the minimal
     env posture (no host env leaking through) must be preserved."""
     monkeypatch.setattr(
-        sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus"
+        host_exec, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus"
     )
 
-    env = sysadmin_mod._subprocess_env()
+    env = host_exec.subprocess_env()
     assert env["DBUS_SYSTEM_BUS_ADDRESS"] == "unix:path=/run/forge-dbus-proxy/bus"
     assert env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
     assert "HOME" not in env or env.get("SECRET") is None  # no unexpected leakage
@@ -643,9 +644,9 @@ def test_sysadmin_no_proxy_configured_leaves_commands_unchanged(monkeypatch):
         "-k",
         "--no-pager",
         "-n",
-        str(sysadmin_mod.SYSADMIN_MAX_LOG_LINES),
+        str(host_exec.SYSADMIN_MAX_LOG_LINES),
     ]
-    assert "DBUS_SYSTEM_BUS_ADDRESS" not in sysadmin_mod._subprocess_env()
+    assert "DBUS_SYSTEM_BUS_ADDRESS" not in host_exec.subprocess_env()
 
 
 def test_sysadmin_discover_units_cmd_includes_address_when_configured(monkeypatch):
@@ -654,7 +655,7 @@ def test_sysadmin_discover_units_cmd_includes_address_when_configured(monkeypatc
     proxy address as an explicit CLI flag, confirmed against real
     production output to actually work."""
     monkeypatch.setattr(
-        sysadmin_mod, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus"
+        host_exec, "SYSADMIN_DBUS_ADDRESS", "unix:path=/run/forge-dbus-proxy/bus"
     )
     cmd = sysadmin_mod._DISCOVER_UNITS_CMD()
     assert "--address=unix:path=/run/forge-dbus-proxy/bus" in cmd

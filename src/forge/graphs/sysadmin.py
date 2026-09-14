@@ -91,7 +91,6 @@ Usage (Python):
 
 import difflib
 import json
-import subprocess
 from datetime import datetime
 
 from forge import harnais, lang, non_answer, subtrace
@@ -99,12 +98,8 @@ from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     SYSADMIN_COLLECT_TIMEOUT,
     SYSADMIN_CONTEXT_BUDGET_TOKENS,
-    SYSADMIN_DBUS_ADDRESS,
     SYSADMIN_DISCOVERY_TIMEOUT,
-    SYSADMIN_JOURNAL_DIR,
     SYSADMIN_LOG_CHARS_BUDGET,
-    SYSADMIN_MAX_LOG_LINES,
-    SYSADMIN_PODMAN_URL,
     SYSADMIN_USE_HARNAIS,
 )
 from forge.context_info import today_line
@@ -112,6 +107,25 @@ from forge.errors import ProviderError
 from forge.graph import Graph
 from forge.harnais.collector import Observation
 from forge.harnais.facts import Fact
+
+# Imported back under the names this module has always used, so that
+# _discover_node and the tests patching sysadmin._run_fixed see no
+# difference. See forge/harnais/host_exec.py for why they moved.
+from forge.harnais.host_exec import (
+    NO_OUTPUT,
+)
+from forge.harnais.host_exec import (
+    collect_cmd as _collect_cmd,
+)
+from forge.harnais.host_exec import (
+    discover_containers_cmd as _DISCOVER_CONTAINERS_CMD,
+)
+from forge.harnais.host_exec import (
+    discover_units_cmd as _DISCOVER_UNITS_CMD,
+)
+from forge.harnais.host_exec import (
+    run_fixed as _run_fixed,
+)
 from forge.kernel.context_builder import MVP_DOMAINS, ContextBuilder
 from forge.kernel.world_model import InMemoryWorldModel
 from forge.llm import call_llm
@@ -125,12 +139,6 @@ from forge.types import AgentState
 
 _MAX_SYNTHESIS_OUTPUT_CHARS = 4000
 
-#: What _run_fixed returns when a command SUCCEEDED and printed nothing.
-#: Public because forge/harnais/collectors/ imports it: it was copied
-#: into two of them as a literal, and a third place -- the edge
-#: condition below -- spelled the same idea as `not text.strip()` and
-#: was therefore wrong. See _collected_nothing.
-NO_OUTPUT = "[no output]"
 
 # Same reasoning as graphs/review.py and graphs/research.py: this
 # model needs the exact shape it must NOT produce shown explicitly.
@@ -154,39 +162,6 @@ _EXAMPLE_LEAK_FRAGMENTS = [
     "exemple-service.service",
     "manquant.conf",
 ]
-
-
-# Fixed, parameter-free discovery commands. Functions, not static
-# lists: SYSADMIN_DBUS_ADDRESS/SYSADMIN_PODMAN_URL let these target a
-# filtered proxy instead of the raw host bus/socket -- see config.py's
-# comment above these three env vars, and deploy/README.md for the
-# proxies themselves. Empty (default, incl. every test in this file)
-# means "unchanged": no proxy configured, no extra flag added, exact
-# same command as before this was made configurable.
-def _DISCOVER_UNITS_CMD() -> list[str]:
-    # `systemctl list-units` was the original approach but had to be
-    # abandoned: confirmed in production (SYSTEMD_LOG_LEVEL=debug)
-    # that systemctl hardcodes a connection attempt at
-    # /run/systemd/private first -- a systemd-specific shortcut
-    # protocol, NOT standard D-Bus -- and never falls back to
-    # DBUS_SYSTEM_BUS_ADDRESS (or any other address) if that exact
-    # path is unavailable, which it always is inside a container whose
-    # PID 1 isn't systemd. `busctl` has no such quirk: it speaks
-    # standard D-Bus and honors --address correctly, confirmed
-    # repeatedly against the same filtered proxy that systemctl
-    # refused to use. --json=short gives a real parseable structure
-    # (see _parse_busctl_units) instead of the columnar text
-    # `systemctl list-units` produces.
-    cmd = ["busctl", "--json=short"]
-    if SYSADMIN_DBUS_ADDRESS:
-        cmd.append(f"--address={SYSADMIN_DBUS_ADDRESS}")
-    return cmd + [
-        "call",
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager",
-        "ListUnits",
-    ]
 
 
 #: The one unit type discovery drops, and the reason it is a suffix
@@ -231,13 +206,6 @@ def _parse_busctl_units(raw: str) -> list[str]:
     return [row[0] for row in rows if row]
 
 
-def _DISCOVER_CONTAINERS_CMD() -> list[str]:
-    base = ["podman"]
-    if SYSADMIN_PODMAN_URL:
-        base += ["--url", SYSADMIN_PODMAN_URL]
-    return base + ["ps", "--format", "{{.Names}}"]
-
-
 def running_containers() -> list[str]:
     """
     The container names podman reports, or [] if it cannot be asked.
@@ -258,60 +226,6 @@ def running_containers() -> list[str]:
 
 def _container_names(raw: str) -> list[str]:
     return [line.strip() for line in raw.splitlines() if line.strip()]
-
-
-def _collect_cmd(kind: str, name: str) -> list[str]:
-    """Build a collection command. {name} is substituted only after
-    collect_node has verified it against discover_node's own output --
-    see collect_node's docstring. `kind` selects journalctl-by-unit,
-    podman-logs, or journalctl-kernel; the journal dir / podman URL
-    flags are added only when the matching proxy is configured.
-
-    The name is passed as `--unit=<name>` and after a `--` separator
-    respectively (audit M-4), never as a bare argument following a
-    short flag. `-u foo` and `foo` are both positions where a value
-    starting with `-` is read as an option instead: `-u --output=cat`
-    or a container literally named `--help` would be interpreted by
-    journalctl/podman rather than treated as a name. The attached form
-    and the end-of-options marker remove that reading entirely.
-
-    This is the second lock on a door that collect_node already
-    bolted: a name only reaches here if it appeared verbatim in
-    discovery output, and unit/container names don't normally start
-    with a dash. What it defends is the case where discovery output is
-    no longer trustworthy -- a hostile container name, or a proxy
-    returning something the host didn't say -- which is exactly the
-    assumption the validation rests on and therefore the one worth not
-    resting the whole thing on.
-    """
-    if kind == "unit":
-        cmd = ["journalctl"]
-        if SYSADMIN_JOURNAL_DIR:
-            cmd += ["-D", SYSADMIN_JOURNAL_DIR]
-        return cmd + [f"--unit={name}", "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)]
-    if kind == "container":
-        cmd = ["podman"]
-        if SYSADMIN_PODMAN_URL:
-            cmd += ["--url", SYSADMIN_PODMAN_URL]
-        return cmd + ["logs", "--tail", str(SYSADMIN_MAX_LOG_LINES), "--", name]
-    if kind == "kernel":
-        cmd = ["journalctl"]
-        if SYSADMIN_JOURNAL_DIR:
-            cmd += ["-D", SYSADMIN_JOURNAL_DIR]
-        return cmd + ["-k", "--no-pager", "-n", str(SYSADMIN_MAX_LOG_LINES)]
-    raise ValueError(f"unknown collect kind: {kind!r}")
-
-
-def _subprocess_env() -> dict[str, str]:
-    """Same minimal-env posture as tools/shell.py: no host env
-    variables reach the subprocess except what's explicitly listed.
-    DBUS_SYSTEM_BUS_ADDRESS is added only when SYSADMIN_DBUS_ADDRESS
-    is configured, pointing busctl at the filtered proxy socket
-    from deploy/forge-dbus-proxy.sh -- never the real system bus."""
-    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "TERM": "dumb"}
-    if SYSADMIN_DBUS_ADDRESS:
-        env["DBUS_SYSTEM_BUS_ADDRESS"] = SYSADMIN_DBUS_ADDRESS
-    return env
 
 
 # The "/no_think" prefix below is NOT dead, however dead it looks.
@@ -365,53 +279,6 @@ collected logs above -- the words "exemple-service" and
 placeholder example only, never to a real one. Same plain format as
 GOOD ANSWER, not the NEVER DO THIS shape. Be concise.
 """
-
-
-def _run_fixed(cmd: list[str], timeout: int) -> str:
-    """Run a command whose every element is either a fixed literal or
-    a name already verified against discover_node's own output.
-    Never shell=True, never a hand-built string -- same posture as
-    tools/shell.py's allowlisted subprocess.run(parts, ...). Uses
-    _subprocess_env() so DBUS_SYSTEM_BUS_ADDRESS (when configured)
-    points busctl at the filtered proxy, not the host bus."""
-    try:
-        result = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=_subprocess_env(),
-        )
-    except FileNotFoundError:
-        return f"[error] executable not found: {cmd[0]!r}"
-    except subprocess.TimeoutExpired:
-        return f"[error] command timed out after {timeout}s"
-    except OSError as e:
-        return f"[error] OS error: {e}"
-
-    output = (result.stdout or result.stderr or "").strip()
-    lines = output.splitlines()[:SYSADMIN_MAX_LOG_LINES]
-    joined = "\n".join(lines) if lines else NO_OUTPUT
-
-    if result.returncode != 0:
-        # The command RAN (no Python-level exception above) but the
-        # target itself failed -- e.g. busctl unable to reach the bus,
-        # podman unable to reach its socket. This must carry the same
-        # "[error]" prefix as the exception-based cases above:
-        # without it, a real production case slipped straight through
-        # as if it were valid data. The case that taught this was
-        # systemctl, back when discovery still used it: its two-line
-        # failure message ("System has not been booted with
-        # systemd...\nFailed to connect to bus...") got parsed as two
-        # fake unit names ("System", "Failed") by _discover_node, and
-        # podman's connection-refused text got parsed as a fake
-        # container name the same way. Caught in production on
-        # 2026-08-11. The systemctl path is gone; the failure mode it
-        # exposed is not, which is why the guard stays.
-        return f"[error] {cmd[0]} exited {result.returncode}: {joined}"
-
-    return joined
 
 
 def _discover_node(state: AgentState) -> AgentState:
