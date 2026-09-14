@@ -50,6 +50,25 @@ lisibles séparément.
    `field(init=False)`, donc `Fact(..., confidence="high")` lève
    `TypeError` au lieu d'être seulement déconseillé.
 
+### Ce que le collector conteneurs a gagné depuis (14/09)
+
+Il lit désormais l'heure de démarrage en plus du nom
+(`podman ps --format "{{.Names}}\t{{.StartedAt}}\t{{.Status}}"`, endpoint
+déjà autorisé par le proxy read-only), et publie un fait `uptime_s` par
+conteneur. Raison : la seule panne qu'on sache récurrente ici est
+llama-server qui tombe et que `restart: unless-stopped` relève **en
+silence** — le 13/09, deux fois, au milieu de mesures. Un `uptime_s` de
+247 secondes en face d'une question sur la dernière heure, c'est cette
+panne rendue visible, sans historique à consulter et sans arithmétique
+que le modèle puisse rater.
+
+Pas de JSON : `_run_fixed` tronque à `SYSADMIN_MAX_LOG_LINES` (100 en
+production) et `--format json` indente une vingtaine de lignes par
+conteneur, donc cinq conteneurs suffisent à couper le JSON en plein
+objet. Un template rend une ligne par conteneur ; et une sortie qui
+touche exactement le plafond est refusée, parce que `running_count`
+énoncerait sinon le plafond comme un nombre observé.
+
 ### Un trou connu du MVP
 
 Le collector de logs ne prend **aucune cible** et n'a aucun emplacement

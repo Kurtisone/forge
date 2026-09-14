@@ -134,18 +134,96 @@ def test_cpu_ram_fails_rather_than_guessing_a_missing_field(monkeypatch):
 # --- containers -------------------------------------------------------------
 
 
+def _ps_line(name: str, started_at: int, status: str = "Up 6 minutes") -> str:
+    """One row in the shape `podman ps --format` is asked for."""
+    return f"{name}\t{started_at}\t{status}"
+
+
 def test_containers_reports_what_is_running(monkeypatch):
+    now = int(datetime.now().timestamp())  # noqa: DTZ005
     monkeypatch.setattr(
-        containers_mod, "_run_fixed", lambda cmd, timeout: "forge\nforge-llm"
+        containers_mod,
+        "_run_fixed",
+        lambda cmd, timeout: "\n".join(
+            [
+                _ps_line("forge", now - 3600, "Up About an hour"),
+                _ps_line("forge-llm", now - 247),
+            ]
+        ),
+    )
+    observation = ContainersCollector().collect()
+    facts = _facts(observation)
+
+    assert not observation.failed
+    assert facts["container.running_count"] == 2
+    assert facts["container.forge.status"] == "Up About an hour"
+    assert facts["container.forge-llm.status"] == "Up 6 minutes"
+    # Uptime is computed against the wall clock, so it is asserted as a
+    # window rather than a value -- pinning the exact second would make
+    # this test fail on a slow machine for a reason it does not check.
+    assert 3595 <= facts["container.forge.uptime_s"] <= 3605
+    assert 245 <= facts["container.forge-llm.uptime_s"] <= 255
+
+
+def test_a_silent_restart_is_visible_without_any_history(monkeypatch):
+    """
+    The fault this collector was widened for. llama-server fell over
+    twice on 2026-09-13 and `restart: unless-stopped` revived it with
+    nothing saying so -- a series of measurements crossed a restart in
+    silence.
+
+    No history is needed to see it, and that matters because the World
+    Model is in-memory and starts empty on every process: a single
+    observation carries the uptime, so a question about the last hour
+    meets a container that has been up four minutes.
+    """
+    now = int(datetime.now().timestamp())  # noqa: DTZ005
+    monkeypatch.setattr(
+        containers_mod,
+        "_run_fixed",
+        lambda cmd, timeout: _ps_line("forge-llm", now - 247, "Up 4 minutes"),
+    )
+    facts = _facts(ContainersCollector().collect())
+
+    assert facts["container.forge-llm.uptime_s"] < 300
+
+
+def test_a_row_this_module_cannot_read_fails_loudly(monkeypatch):
+    """
+    `{{.Names}}` is the only one of the three fields this repo already
+    runs in production. If podman renders either of the others
+    differently, the observation must fail naming the line -- never
+    report a container with a missing uptime, which reads exactly like
+    one that has been up forever.
+    """
+    monkeypatch.setattr(
+        containers_mod, "_run_fixed", lambda cmd, timeout: "forge-llm\tUp 6 minutes"
     )
     observation = ContainersCollector().collect()
 
-    assert not observation.failed
-    assert _facts(observation) == {
-        "container.running_count": 2,
-        "container.forge.status": "running",
-        "container.forge-llm.status": "running",
-    }
+    assert observation.failed
+    assert observation.facts == ()
+    assert "tab-separated" in observation.error
+    assert "forge-llm" in observation.error
+
+
+def test_a_non_numeric_started_at_fails_rather_than_guessing(monkeypatch):
+    monkeypatch.setattr(
+        containers_mod,
+        "_run_fixed",
+        lambda cmd, timeout: "forge-llm\t2026-09-14T09:12:03Z\tUp 6 minutes",
+    )
+    observation = ContainersCollector().collect()
+
+    assert observation.failed
+    assert "unix timestamp" in observation.error
+
+
+def test_uptime_never_goes_negative_on_clock_skew():
+    """podman reports the host's clock. A few seconds of skew must read
+    as "just now", not as a container that starts in the future."""
+    now = datetime.now()  # noqa: DTZ005
+    assert containers_mod._uptime_s(int(now.timestamp()) + 30, now) == 0
 
 
 def test_an_empty_podman_ps_is_an_observation_not_a_silence(monkeypatch):
@@ -210,14 +288,15 @@ def test_containers_asks_podman_through_the_proxy(monkeypatch):
         seen["cmd"] = cmd
         return "[no output]"
 
-    import forge.graphs.sysadmin as sysadmin_mod
-
     monkeypatch.setattr(containers_mod, "_run_fixed", capture)
-    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_PODMAN_URL", "tcp://127.0.0.1:9999")
+    monkeypatch.setattr(containers_mod, "SYSADMIN_PODMAN_URL", "tcp://127.0.0.1:9999")
 
     ContainersCollector().collect()
 
     assert seen["cmd"][:4] == ["podman", "--url", "tcp://127.0.0.1:9999", "ps"]
+    # The format is asserted too: it is what keeps the reply one line
+    # per container, under _run_fixed's line cap.
+    assert seen["cmd"][-1] == containers_mod._PS_FORMAT
 
 
 # --- logs -------------------------------------------------------------------
@@ -327,3 +406,40 @@ def test_an_unavailable_collector_is_reported_not_skipped():
 def test_the_default_collectors_cover_the_mvp_domains():
     covered = {d for c in harnais.default_collectors() for d in c.domains}
     assert covered == {"cpu", "ram", "container", "logs"}
+
+
+def test_a_container_list_on_the_line_cap_is_refused(monkeypatch):
+    """
+    `_run_fixed` truncates at SYSADMIN_MAX_LOG_LINES without saying so,
+    so a reply sitting exactly on the cap may or may not be complete --
+    and `running_count` would state the cap as an observed number. An
+    under-count presented as a fact is the same fault as an empty list
+    presented as an idle machine.
+    """
+    now = int(datetime.now().timestamp())  # noqa: DTZ005
+    monkeypatch.setattr(containers_mod, "SYSADMIN_MAX_LOG_LINES", 3)
+    monkeypatch.setattr(
+        containers_mod,
+        "_run_fixed",
+        lambda cmd, timeout: "\n".join(_ps_line(f"c{n}", now - 60) for n in range(3)),
+    )
+    observation = ContainersCollector().collect()
+
+    assert observation.failed
+    assert "truncated" in observation.error
+    assert observation.facts == ()
+
+
+def test_a_list_below_the_cap_is_reported_normally(monkeypatch):
+    """The guard must not fire on an ordinary machine."""
+    now = int(datetime.now().timestamp())  # noqa: DTZ005
+    monkeypatch.setattr(containers_mod, "SYSADMIN_MAX_LOG_LINES", 3)
+    monkeypatch.setattr(
+        containers_mod,
+        "_run_fixed",
+        lambda cmd, timeout: "\n".join(_ps_line(f"c{n}", now - 60) for n in range(2)),
+    )
+    observation = ContainersCollector().collect()
+
+    assert not observation.failed
+    assert _facts(observation)["container.running_count"] == 2
