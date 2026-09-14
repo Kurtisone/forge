@@ -43,6 +43,38 @@ def _fake_busctl_units_json(names: list[str]) -> str:
     return json.dumps({"type": "a(ssssssouso)", "data": [rows]})
 
 
+def _patch_harnais_collectors(monkeypatch, containers="test-container"):
+    """
+    Give the Harnais collectors something to see.
+
+    _fake_run_fixed patches `sysadmin_mod._run_fixed`, the boundary
+    discover_node and collect_node go through. The collectors hold their
+    OWN reference to that same function (they import it), so patching
+    one does not patch the other -- and a route C test that forgot this
+    would quietly measure a machine where nothing could be observed,
+    which is a different test than the one it claims to be.
+    """
+    from datetime import datetime
+
+    from forge.harnais.collectors import containers as containers_mod
+    from forge.harnais.collectors import cpu_ram as cpu_ram_mod
+
+    now = int(datetime.now().timestamp())  # noqa: DTZ005
+    rows = "\n".join(
+        f"{name}\t{now - 10800}\tUp 3 hours" for name in containers.split()
+    )
+    monkeypatch.setattr(containers_mod, "_run_fixed", lambda cmd, t: rows)
+    monkeypatch.setattr(
+        cpu_ram_mod,
+        "_read",
+        lambda path: (
+            "MemTotal: 15160368 kB\nMemAvailable: 9059480 kB\n"
+            if path == cpu_ram_mod._MEMINFO
+            else "0.90 0.72 0.54 1/1594 2759\n"
+        ),
+    )
+
+
 def _fake_run_fixed(cmd, timeout):
     """Canned output keyed off which fixed command was requested --
     same mocking level as research's web_search.search/web_fetch.run,
@@ -349,25 +381,25 @@ def test_sysadmin_truncates_oversized_log_block(monkeypatch):
         "", initial_context={"target_hint": "forge.service", "question": None}
     )
 
-    # The prompt is a fixed template plus a log block capped at
-    # SYSADMIN_LOG_CHARS_BUDGET. Asserting that relation rather than a
-    # round number: the old `< 4000` was a proxy for it and had to be
-    # revisited the first time the template gained a paragraph, which
-    # tells you nothing about whether the cap still holds.
-    empty_template = sysadmin_mod._SYNTHESIS_PROMPT.format(
-        today_line="Today's date is 2026-08-21.",
-        question="Diagnostique le problème et propose une solution.",
-        source="journalctl -u forge.service",
-        log_block="",
-        running_fact="",
-    )
-    assert len(captured["prompt"]) <= (
-        len(empty_template) + sysadmin_mod.SYSADMIN_LOG_CHARS_BUDGET + 200
-    )
-    # the tail of the log (most recent lines) must be preserved
-    assert "line 1999" in captured["prompt"]
-    # the head must have been dropped
-    assert "line 0 of a very long journalctl dump" not in captured["prompt"]
+    # The cap is asserted on the LOG BLOCK, not on the whole prompt. It
+    # used to be "template length + budget + slack", which worked while
+    # the prompt was a template with one hole in it; the context carries
+    # CPU, RAM and container facts too, so that relation stopped
+    # measuring the thing it was named after.
+    #
+    # What has to hold is unchanged, and it is why this test exists:
+    # llama.cpp rejected a real request at 4362 tokens against a
+    # 4096-token context because SYSADMIN_MAX_LOG_LINES alone did not
+    # bound prompt size. The log block still respects
+    # SYSADMIN_LOG_CHARS_BUDGET however many lines were collected, and
+    # still keeps the END.
+    prompt = captured["prompt"]
+    block = prompt.split("--- begin logs.", 1)[1].split("--- end logs.", 1)[0]
+
+    assert len(block) <= sysadmin_mod.SYSADMIN_LOG_CHARS_BUDGET + 200
+    assert "line 1999" in block  # the recent end survived
+    assert "line 0 of" not in block  # the old start did not
+    assert "troncated" in block  # and the cut says so, inside the evidence
 
 
 def test_run_fixed_prefixes_error_on_nonzero_exit(monkeypatch):
@@ -673,18 +705,20 @@ def test_sysadmin_run_publishes_sub_steps_for_the_ui(monkeypatch):
         sysadmin_mod, "call_llm", lambda p, grammar=None: "Diagnostic clair."
     )
 
+    _patch_harnais_collectors(monkeypatch)
     sysadmin_mod.run("searxng.service", None)
 
     steps = subtrace.pop()
     labels = [s["label"] for s in steps]
-    assert labels == ["discover", "collect", "synthesize"]
+    assert labels == ["discover", "collect", "observe", "context_synthesize"]
     assert (
         "searxng.service" in steps[0]["detail"]
         and "forge.service" in steps[0]["detail"]
     )
     assert "test-container" in steps[0]["detail"]
     assert "journalctl -u searxng.service" in steps[1]["detail"]
-    assert "caractères" in steps[2]["detail"]
+    assert "observé" in steps[2]["detail"]  # observe
+    assert "caractères" in steps[3]["detail"]  # context_synthesize
     assert all(s["ok"] for s in steps)
     assert all(isinstance(s["duration_ms"], int) for s in steps)
 
@@ -833,8 +867,13 @@ def test_the_synthesis_prompt_allows_the_logs_to_be_off_topic(monkeypatch):
     )
 
     prompt = captured["prompt"]
-    assert "may simply not contain the answer" in prompt
-    assert "say so plainly" in prompt
+    # The same promise, in the Context Builder's own words. A confident
+    # diagnosis built on evidence that does not mention the subject is
+    # the one failure this tool cannot recover from, so this follows the
+    # property to where it now lives rather than pinning the sentence
+    # that used to carry it.
+    assert "may simply not cover it" in prompt
+    assert "Saying so plainly is a correct answer here" in prompt
     assert "absence of an error" in prompt
 
 
@@ -964,6 +1003,7 @@ def test_a_running_container_is_stated_as_a_fact_not_asked_about(monkeypatch):
 
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
     monkeypatch.setattr(sysadmin_mod, "call_llm", fake_call_llm)
+    _patch_harnais_collectors(monkeypatch)
 
     state = build_sysadmin().run(
         "",
@@ -973,8 +1013,17 @@ def test_a_running_container_is_stated_as_a_fact_not_asked_about(monkeypatch):
         },
     )
 
-    assert "WAS RUNNING" in captured["prompt"]
-    assert "podman ps" in captured["prompt"]
+    # Generalized rather than dropped. _RUNNING_FACT was a paragraph
+    # asserting one container was up, written after nine wording fixes
+    # had lost. The Harnais states it for EVERY container, from the same
+    # free evidence, under the marker that makes it unmistakably
+    # observed -- and "podman ps" no longer has to be EXPLAINED to the
+    # model, because "Up 3 hours" needs no explanation where "a name in
+    # a list" did.
+    prompt = captured["prompt"]
+    assert "[fact] container.test-container.status = Up " in prompt
+    assert "[fact] container.test-container.uptime_s" in prompt
+    assert "podman ps" not in prompt
     assert "État observé" in state.final_output, (
         "the footer must hold whatever the model decided to say"
     )
@@ -1200,3 +1249,58 @@ def test_the_suggestion_never_proposes_a_device(monkeypatch):
     )
 
     assert ".device" not in state.final_output
+
+
+def test_an_empty_journal_refuses_instead_of_reaching_the_model(monkeypatch):
+    """
+    nothing_collected, exercised for the first time.
+
+    It was unreachable. The edge asked `not collected.strip()` while
+    _run_fixed returns the literal "[no output]" for a command that
+    succeeded and printed nothing -- it cannot return "" -- so the empty
+    journal this node was written for went to the model anyway, as a log
+    block containing the words "[no output]".
+
+    The node is not decoration: measured 2026-09-12 with
+    bench/sysadmin_verdict.py, asked whether an EMPTY log block held
+    what was needed to answer "pourquoi searxng a redémarré ?", this
+    model said yes. The one case needing no judgement was being judged.
+
+    Found by a route C test checking the refusals still fire before the
+    Harnais observes -- it fired the wrong one.
+    """
+
+    def discover_then_empty(cmd, timeout):
+        if cmd == sysadmin_mod._DISCOVER_UNITS_CMD():
+            return _fake_busctl_units_json(["searxng.service"])
+        if cmd[0] == "podman":
+            return ""
+        return sysadmin_mod.NO_OUTPUT
+
+    monkeypatch.setattr(sysadmin_mod, "_run_fixed", discover_then_empty)
+
+    def no_call(prompt, grammar=None):  # pragma: no cover - must not run
+        raise AssertionError("the model was asked to diagnose an empty journal")
+
+    monkeypatch.setattr(sysadmin_mod, "call_llm", no_call)
+
+    state = build_sysadmin().run(
+        "", initial_context={"target_hint": "searxng.service", "question": "pourquoi ?"}
+    )
+
+    assert state.final_output.startswith(non_answer.NOTHING_COLLECTED_PREFIX)
+    assert "une sortie vide ne dit pas que tout va bien" in state.final_output
+
+
+def test_the_empty_marker_has_exactly_one_definition():
+    """
+    It was a literal in three places and one of them disagreed. The
+    collectors import it now, and this is the assertion that keeps them
+    importing rather than re-typing -- the same DRIFT rule non_answer.py
+    states for its own prefixes.
+    """
+    from forge.harnais.collectors import containers as containers_mod
+    from forge.harnais.collectors import logs as logs_mod
+
+    assert containers_mod._NO_OUTPUT is sysadmin_mod.NO_OUTPUT
+    assert logs_mod._NO_OUTPUT is sysadmin_mod.NO_OUTPUT

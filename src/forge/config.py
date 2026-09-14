@@ -974,8 +974,16 @@ SYSADMIN_LOG_CHARS_BUDGET = int(os.getenv("SYSADMIN_LOG_CHARS_BUDGET", "2000"))
 # resampling changes it. The control fixture (an amdgpu reset, visible in the
 # kernel log both arms carry) is answered by both.
 #
-# Set false to get the old path back with no code change. The named-target path
-# is NOT affected by this flag in either position.
+# Since route C (2026-09-14) this also covers a question that NAMES a target:
+# the validated per-unit collection becomes a Fact like any other and is
+# rendered beside CPU, RAM and container state, with `journalctl -k` dropped
+# because it is not the subject. Measured before wiring, not after: the
+# `unit_blind` fixture puts a podman error in the context beside a question
+# about a systemd unit whose log says OOM, and the model reads the log it was
+# given -- the confabulation that held this back needs the SUBJECT to be
+# unobserved, which cannot happen past collect_node's three refusals.
+#
+# Set false to get the old path back, on both branches, with no code change.
 SYSADMIN_USE_HARNAIS = os.getenv("SYSADMIN_USE_HARNAIS", "true").lower() == "true"
 
 # Token budget handed to ContextBuilder.build_for(). 1400 is what

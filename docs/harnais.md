@@ -69,14 +69,23 @@ objet. Un template rend une ligne par conteneur ; et une sortie qui
 touche exactement le plafond est refusée, parce que `running_count`
 énoncerait sinon le plafond comme un nombre observé.
 
-### Un trou connu du MVP
+### Le trou du MVP, et sa fermeture (14/09)
 
 Le collector de logs ne prend **aucune cible** et n'a aucun emplacement
-pour en recevoir une. Un `LogsCollector(unit=...)` rouvrirait le chemin
+pour en recevoir une : un `LogsCollector(unit=...)` rouvrirait le chemin
 « texte choisi par le routeur → `journalctl --unit=` » que tout le modèle
-de sécurité de `graphs/sysadmin.py` ferme. Les logs par unité arriveront
-avec leur validateur. En attendant, le MVP répond à « qu'est-ce qui ne va
-pas sur cette machine », jamais à « pourquoi `forge-llm` redémarre ».
+de sécurité de `graphs/sysadmin.py` ferme.
+
+Il est resté fermé. Ce qui a changé, c'est que **le validateur est
+arrivé** : `_collect_node`, inchangé et un nœud en amont, vérifie le nom
+contre la découverte du même run, et son résultat est enregistré comme
+un `Fact` au lieu d'être collé dans un prompt. Les logs par unité sont
+donc rendus par le même code, sous les mêmes marqueurs, que tout le
+reste — sans qu'aucun collector n'ait gagné de paramètre de cible.
+
+Les deux chemins passent maintenant par le Context Builder
+(`SYSADMIN_USE_HARNAIS`, défaut `true`), mesurés avant branchement par
+`bench/context_builder_ab.py`.
 
 Rien de tout ceci n'a été mesuré contre le vrai modèle : la règle est
 tenue par le code, donc elle tient quel que soit le modèle, mais savoir
