@@ -254,6 +254,31 @@ def running_containers() -> list[str]:
 
 
 def _container_names(raw: str) -> list[str]:
+    """The names in a `podman ps` reply, and NO phantom for an empty one.
+
+    The NO_OUTPUT check is not defensive tidying. _run_fixed returns
+    the literal "[no output]" for a command that succeeded and printed
+    nothing, so without this a machine with nothing running reported
+    ONE container, named "[no output]" -- absence wearing the shape of
+    a measurement, which is the fault this whole area exists to
+    remove. It is the same class of mistake as systemctl's two-line
+    failure message becoming two units called "System" and "Failed"
+    (production, 2026-08-11), with the difference that this one says
+    something false about a machine that is merely idle.
+
+    Found on 2026-09-14 by writing the first direct test of
+    running_containers(): every other test in the repo replaces it
+    with a lambda, so the real parse had never run against the real
+    empty reply. The assertion was written expecting [] and passed
+    with ["[no output]"] instead.
+
+    Guarded here rather than in the two callers because both of them
+    -- running_containers() and _discover_node -- parse the same reply
+    the same way, and a check in one of them is how this happened.
+    harnais/collectors/containers.py already had it.
+    """
+    if raw.strip() == NO_OUTPUT:
+        return []
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 

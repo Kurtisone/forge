@@ -1368,3 +1368,50 @@ class TestRunningContainersSaysWhyItIsEmpty:
         )
 
         assert sysadmin_mod.running_containers() == []
+
+    def test_an_idle_machine_is_not_reported_as_a_failure(self, monkeypatch, caplog):
+        """
+        The other half, and the reason the test above asserts on the
+        LOG rather than on emptiness: a machine with nothing running
+        returns [] too, and must stay quiet. Warning on both would
+        make the signal worth exactly as much as the silence it
+        replaced.
+
+        This assertion was written as `== []` and FAILED against
+        `["[no output]"]`, which is how the phantom below was found.
+        """
+        monkeypatch.setattr(
+            sysadmin_mod, "_run_fixed", lambda cmd, timeout: sysadmin_mod.NO_OUTPUT
+        )
+
+        with caplog.at_level("WARNING"):
+            assert sysadmin_mod.running_containers() == []
+
+        assert caplog.text == ""
+
+    def test_an_empty_reply_is_never_a_container_called_no_output(self):
+        """
+        _run_fixed returns the literal "[no output]" for a command
+        that succeeded and printed nothing, so the parse has to know
+        it. Without this, an idle machine reported ONE container with
+        that name -- to the user in the discovery sub-step, and into
+        `state.context["containers"]`, where _collect_node validates
+        targets against it.
+
+        Asserted on _container_names directly because it is the shared
+        parse: running_containers() and _discover_node both use it,
+        and a guard in only one of them is exactly how this survived.
+        """
+        assert sysadmin_mod._container_names(sysadmin_mod.NO_OUTPUT) == []
+        assert sysadmin_mod._container_names(f"  {sysadmin_mod.NO_OUTPUT}\n") == []
+        # and a real container whose name merely contains it is untouched
+        assert sysadmin_mod._container_names("forge\nsearxng") == ["forge", "searxng"]
+
+    def test_the_names_come_back_when_podman_answers(self, monkeypatch):
+        monkeypatch.setattr(
+            sysadmin_mod,
+            "_run_fixed",
+            lambda cmd, timeout: "forge\nforge-llm\nsearxng\n",
+        )
+
+        assert sysadmin_mod.running_containers() == ["forge", "forge-llm", "searxng"]
