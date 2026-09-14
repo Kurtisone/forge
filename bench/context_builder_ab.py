@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""
+Does the Context Builder answer better than the log block it would replace?
+
+    PATH=~/.venvs/forge/bin:$PATH PYTHONPATH=src python bench/context_builder_ab.py
+    python bench/context_builder_ab.py --only restart --out /tmp/ab.json
+
+WHY THIS EXISTS. forge/kernel/context_builder.py is merged, tested, and
+called by nothing. Route A of the wiring plan would put it behind
+graphs/sysadmin.py's NO-TARGET path -- the branch that today collects
+`journalctl -k` and hands it to _SYNTHESIS_PROMPT. Before any of that,
+the question is whether the swap is an improvement or a regression, and
+the only honest way to know is to ask the model that will do the work.
+
+WHAT IS ALREADY KNOWN AND NOT RE-ASKED. That the CONTEXT states no
+unbacked fact is proven deterministically by tests/test_context_builder*
+-- it is a property of the code, not of the model, and no model call can
+strengthen it. What is open is downstream: given an honest context, does
+this model write a better diagnosis than it writes from kernel logs?
+
+THE TWO ARMS
+
+  logs      graphs.sysadmin._SYNTHESIS_PROMPT, verbatim, imported from
+            the module -- today's behaviour, not a reconstruction.
+  context   the Context Builder's text, plus the output-shaping tail
+            that route A's node would own (see _SHAPING). Same
+            "/no_think" at position 0, same GOOD ANSWER example, same
+            JSON refusal -- so the arms differ in their EVIDENCE and in
+            the framing of that evidence, and in nothing else.
+
+TWO VARIABLES MOVE, AND THAT IS DELIBERATE. The evidence-framing
+sentences differ because the Context Builder carries its own reading
+rules and _SYNTHESIS_PROMPT carries the ones written for logs. Holding
+the framing identical would be a cleaner experiment about a shipping
+decision nobody is facing: the question here is "would route A be
+better", not "is a fact block intrinsically better than a log block
+inside an identical wrapper". Said plainly so no one reads the result
+as the second thing.
+
+THE VERDICT IS A HUMAN READ, and that is a finding rather than a
+shortcut. bench/sysadmin_verdict.py asked this model whether a log
+block answered a question, four ways, over eight fixtures whose answer
+was known, and every arm was wrong in the direction its own phrasing
+invited. There is no verdict channel at this model size. So this
+harness prints both answers in full and counts only what code can
+count: whether the answer contains the words the known cause is made
+of. That is a PROXY -- an answer can name "RAM" inside a wrong
+conclusion -- and it is reported as one.
+
+FIXTURES ARE FIXTURES. The world states below are built as Observations
+by hand, not collected: podman is not reachable from the dev sandbox,
+and a bench that depended on it could not run where this one runs. The
+log blocks are real shapes from this machine.
+"""
+
+import argparse
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+
+from forge.harnais.collector import Observation
+from forge.harnais.facts import Fact
+from forge.kernel.context_builder import ContextBuilder
+from forge.kernel.world_model import InMemoryWorldModel
+
+NOW = datetime.now()  # noqa: DTZ005 -- naive local, as everywhere in Forge
+
+BUDGET_TOKENS = 1400
+
+
+# --------------------------------------------------------------------
+# log blocks -- real shapes, from this machine
+# --------------------------------------------------------------------
+
+QUIET_KERNEL = """\
+[    0.000000] Linux version 6.16.12-valve24.5-1-neptune-616
+[    1.884113] systemd[1]: Detected architecture x86-64.
+[    2.004221] systemd[1]: Reached target Multi-User System.
+[   12.881004] wlan0: associated with 3c:37:86:1f:2a:b0"""
+
+GPU_TIMEOUT = """\
+[11204.113] amdgpu 0000:04:00.0: amdgpu: ring gfx_0.0.0 timeout, signaled seq=884, emitted seq=886
+[11204.115] amdgpu 0000:04:00.0: amdgpu: GPU reset begin!
+[11206.884] amdgpu 0000:04:00.0: amdgpu: GPU reset succeeded, trying to resume
+[11207.001] [drm] PCIE GART of 512M enabled"""
+
+
+# --------------------------------------------------------------------
+# world states
+# --------------------------------------------------------------------
+
+
+def _containers(uptimes: dict[str, int]) -> Observation:
+    facts = [Fact("container", "running_count", len(uptimes), None, NOW, "containers")]
+    for name, up in uptimes.items():
+        human = f"Up {up // 3600} hours" if up >= 3600 else f"Up {up // 60} minutes"
+        facts.append(
+            Fact("container", f"{name}.status", human, None, NOW, "containers")
+        )
+        facts.append(Fact("container", f"{name}.uptime_s", up, "s", NOW, "containers"))
+    return Observation.of("containers", ("container",), facts, NOW)
+
+
+def _cpu_ram(used_pct: float, load: float) -> Observation:
+    total = 15160368
+    facts = [
+        Fact("ram", "total_kb", total, "kB", NOW, "cpu_ram"),
+        Fact(
+            "ram",
+            "available_kb",
+            int(total * (1 - used_pct / 100)),
+            "kB",
+            NOW,
+            "cpu_ram",
+        ),
+        Fact("ram", "used_pct", used_pct, "%", NOW, "cpu_ram"),
+        Fact("cpu", "load_1m", load, None, NOW, "cpu_ram"),
+        Fact("cpu", "load_5m", round(load * 0.8, 2), None, NOW, "cpu_ram"),
+        Fact("cpu", "load_15m", round(load * 0.6, 2), None, NOW, "cpu_ram"),
+    ]
+    return Observation.of("cpu_ram", ("cpu", "ram"), facts, NOW)
+
+
+def _logs(block: str) -> Observation:
+    lines = block.splitlines()
+    facts = [
+        Fact("logs", "journalctl -k.lines", len(lines), "lines", NOW, "logs"),
+        Fact("logs", "journalctl -k.tail", block, None, NOW, "logs"),
+    ]
+    return Observation.of("logs", ("logs",), facts, NOW)
+
+
+def _world(*observations) -> InMemoryWorldModel:
+    world = InMemoryWorldModel()
+    for observation in observations:
+        world.record_observation(observation)
+    return world
+
+
+ALL_UP = {
+    "forge": 10800,
+    "forge-llm": 10800,
+    "forge-embedding": 10800,
+    "searxng": 10800,
+}
+LLM_JUST_RESTARTED = {**ALL_UP, "forge-llm": 247}
+
+
+# --------------------------------------------------------------------
+# the fixtures
+# --------------------------------------------------------------------
+#
+# `cause` is the set of words a correct answer is made of. It is a
+# PROXY and is reported as one -- see the module docstring.
+
+FIXTURES = [
+    {
+        "name": "restart",
+        "question": "Forge a été très lent il y a dix minutes, pourquoi ?",
+        "logs": QUIET_KERNEL,
+        "world": lambda: _world(
+            _containers(LLM_JUST_RESTARTED), _cpu_ram(41.2, 0.9), _logs(QUIET_KERNEL)
+        ),
+        "cause": ["forge-llm", "redémarr", "relanc", "247", "4 minutes"],
+        "known": "forge-llm restarted 247 s ago while everything else has 3 h of "
+        "uptime. The kernel log cannot show this, so the logs arm cannot win it.",
+    },
+    {
+        "name": "ram",
+        "question": "Ma machine rame, qu'est-ce qui se passe ?",
+        "logs": QUIET_KERNEL,
+        "world": lambda: _world(
+            _containers(ALL_UP), _cpu_ram(94.3, 7.8), _logs(QUIET_KERNEL)
+        ),
+        "cause": ["mémoire", "ram", "94", "charge", "load"],
+        "known": "94 % of memory used and a load average of 7.8. Quiet kernel log, "
+        "so again invisible to the logs arm.",
+    },
+    {
+        "name": "gpu",
+        "question": "J'ai eu un freeze graphique tout à l'heure, qu'est-ce qui s'est passé ?",
+        "logs": GPU_TIMEOUT,
+        "world": lambda: _world(
+            _containers(ALL_UP), _cpu_ram(38.0, 1.1), _logs(GPU_TIMEOUT)
+        ),
+        "cause": ["gpu", "amdgpu", "reset", "timeout"],
+        "known": "THE CONTROL ARM. The answer is in the kernel log, which both arms "
+        "carry. The context arm must not do WORSE here -- if the facts around the "
+        "log block distract from it, this is where that shows.",
+    },
+    {
+        "name": "blind",
+        "question": "Pourquoi forge-llm plante ?",
+        "logs": QUIET_KERNEL,
+        "world": lambda: _world(
+            Observation.failure(
+                "containers",
+                ("container",),
+                "[error] podman exited 125: unable to connect to Podman socket: "
+                "dial unix /run/forge-podman-ro-proxy/sock: connect: no such file "
+                "or directory",
+                NOW,
+            ),
+            _cpu_ram(41.2, 0.9),
+            _logs(QUIET_KERNEL),
+        ),
+        "cause": ["pas pu", "impossible", "proxy", "podman", "socket", "observ"],
+        "known": "Run #83fc443e, as it stood on this machine from 2026-09-11 to "
+        "09-14. The container state cannot be read. The correct answer is to say so "
+        "and name the broken command -- NOT to diagnose the container from a kernel "
+        "log that never mentions it.",
+    },
+]
+
+
+# --------------------------------------------------------------------
+# the two prompts
+# --------------------------------------------------------------------
+
+#: The output-shaping half route A's node would own, kept deliberately
+#: identical to _SYNTHESIS_PROMPT's: same GOOD ANSWER example (so
+#: sysadmin's _EXAMPLE_LEAK_FRAGMENTS still catches a copy), same JSON
+#: refusal, same plain-text instruction. What it does NOT repeat is the
+#: evidence framing -- "these logs were gathered before you read the
+#: question", "never treat the absence of an error as evidence" --
+#: because the Context Builder emits its own reading rules and two sets
+#: would contradict each other on what the markers mean.
+_SHAPING = """
+Respond in plain text ONLY. Do NOT wrap your answer in JSON, and do
+NOT return a {{"tool":...,"content":...}} object -- that format is
+for a different system (a routing decision) and never applies here.
+
+GOOD ANSWER (this is only an example of FORM AND TONE -- these exact
+names, files and details are fictional placeholders, not real
+observations; copying any of them into your own answer is always
+wrong, no matter what the context above actually says): Le service
+exemple-service.service échoue au démarrage car la configuration
+référence un fichier introuvable (/etc/exemple/manquant.conf). Je te
+propose de vérifier que ce fichier existe et, si besoin, de le
+recréer avant de relancer le service.
+NEVER DO THIS: {{"tool":"chat","content":"..."}}
+
+Now write your own answer using ONLY what actually appears above --
+the words "exemple-service" and "manquant.conf" must never appear in
+your answer. Same plain format as GOOD ANSWER. Be concise.
+"""
+
+
+def logs_prompt(fixture) -> str:
+    """Today's behaviour, from the real module -- not a reconstruction."""
+    from forge.config import SYSADMIN_LOG_CHARS_BUDGET
+    from forge.context_info import today_line
+    from forge.graphs.sysadmin import _SYNTHESIS_PROMPT, _truncate_log_block
+
+    return _SYNTHESIS_PROMPT.format(
+        today_line=today_line(),
+        question=fixture["question"],
+        source="journalctl -k",
+        log_block=_truncate_log_block(fixture["logs"], SYSADMIN_LOG_CHARS_BUDGET),
+        running_fact="",
+    )
+
+
+def context_prompt(fixture) -> str:
+    context = ContextBuilder(fixture["world"]()).build_for(
+        fixture["question"], BUDGET_TOKENS
+    )
+    return (
+        "/no_think\n" + context + "\n" + _SHAPING.replace("{{", "{").replace("}}", "}")
+    )
+
+
+def terse_prompt(fixture) -> str:
+    """
+    EXPLORATION ARM, added after the first pass, and not a wording fix.
+
+    The `context` arm turned an observation failure into a cause:
+    "forge-llm plante CAR le socket de Podman n'existe pas". The context
+    said the instrument was broken; the model read it as the diagnosis.
+    Stable over three runs at temperature 0.
+
+    _RULES already says "never a diagnosis" in as many words, so the
+    fix cannot be to say it better -- that is the shape this codebase
+    has watched fail thirteen times. It has to be something the model
+    cannot use: if the podman error text is not in the context, no
+    causal story can be built out of it.
+
+    The error does not disappear, it changes channel. Naming the broken
+    command is the single most useful thing a reader gets -- sysadmin's
+    _collect_failed_node exists to say so -- and that node writes it in
+    CODE, never through the model. Same split here: the model is told
+    the domain was not observed, the caller reports why.
+
+    Implemented as a transformation of the builder's own marker lines
+    rather than a rewritten prompt, so this measures the real context
+    minus one thing.
+
+    VERDICT 2026-09-14: DEAD, and worse than what it replaced. Do not
+    retry it. Stable over two runs:
+
+        plante car la charge CPU est élevée (0.9 sur 1 minute) et la
+        mémoire disponible est faible (41.2 % utilisé)
+
+    A load average of 0.9 is not high and 41 % of memory used is not
+    low. Starved of the podman error, the model reached for the next
+    nearest facts and declared HEALTHY ones the cause -- which is worse
+    than the `context` arm, that at least pointed at something really
+    broken.
+
+    What it establishes is bigger than the arm: asked why a named thing
+    crashes, this model returns a cause no matter what the context
+    holds. Removing a candidate does not produce a refusal, it produces
+    the next candidate. So no arrangement of FACTS fixes this case, and
+    the only thing that can is not calling the model at all --
+    precisely the conclusion graphs/sysadmin.py already reached with
+    target_missed, collect_failed and nothing_collected, three nodes
+    written entirely in code because a model handed evidence about
+    something else answered fluently anyway.
+    """
+    from forge.kernel.context_builder import UNOBSERVED_PREFIX
+
+    full = context_prompt(fixture)
+    out = []
+    for line in full.splitlines():
+        if line.startswith(UNOBSERVED_PREFIX):
+            domain = line[len(UNOBSERVED_PREFIX) :].split(":", 1)[0]
+            out.append(f"{UNOBSERVED_PREFIX}{domain}: not observed")
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+ARMS = {"logs": logs_prompt, "context": context_prompt, "terse": terse_prompt}
+
+
+# --------------------------------------------------------------------
+# running
+# --------------------------------------------------------------------
+
+
+def _erase_slot() -> None:
+    """Same cold-start courtesy as bench/router_ab.py. Best effort."""
+    import requests
+
+    from forge.config import LLAMA_CPP_ID_SLOT, LLAMA_CPP_URL
+
+    try:
+        requests.post(
+            f"{LLAMA_CPP_URL}/slots/{LLAMA_CPP_ID_SLOT}?action=erase", timeout=10
+        )
+    except Exception as e:  # noqa: BLE001 - never fatal
+        print(f"  (slot erase failed: {e})")
+
+
+def run_one(fixture, arm) -> dict:
+    from forge.graphs.sysadmin import _clean_diagnosis_response
+    from forge.lang import line_for
+    from forge.llm import call_llm
+
+    prompt = ARMS[arm](fixture)
+    started = time.monotonic()
+    try:
+        raw = call_llm(prompt + line_for(fixture["question"]))
+        answer = _clean_diagnosis_response(raw)
+        error = None
+    except Exception as e:  # noqa: BLE001 - record, never abort the run
+        answer, error = "", str(e)
+    wall_ms = int((time.monotonic() - started) * 1000)
+
+    lowered = answer.lower()
+    hits = [w for w in fixture["cause"] if w.lower() in lowered]
+    # A dead server and a wrong answer are not the same result, and the
+    # first run of this harness printed both as "MISS". llama-server
+    # fell over mid-pass on 2026-09-14 (RemoteDisconnected, 1091 ms)
+    # and `restart: unless-stopped` revived it, so the rows either side
+    # of it came from two different processes -- which, at temperature
+    # 0, is exactly the boundary across which this model's answers are
+    # known to shift. bench/research_ceiling.py already learned to say
+    # DOWN; this one was not born knowing it either.
+    return {
+        "fixture": fixture["name"],
+        "arm": arm,
+        "prompt_chars": len(prompt),
+        "wall_ms": wall_ms,
+        "answer": answer,
+        "answer_chars": len(answer),
+        "cause_words_hit": hits,
+        "error": error,
+    }
+
+
+def _write(args, rows) -> None:
+    if args.out:
+        Path(args.out).write_text(json.dumps(rows, indent=2, ensure_ascii=False))
+        print(f"\nwrote {args.out}")
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--only", help="run a single fixture by name")
+    p.add_argument("--out", help="write the full result as JSON")
+    args = p.parse_args()
+
+    # Without this the router grammar falls back to a reduced tool set
+    # -- 677 characters instead of the 1005 the deployed ENABLED_TOOLS
+    # produces -- and the run measures a router that exists nowhere.
+    from forge.tools import registry
+
+    registry.load_tools()
+
+    fixtures = [f for f in FIXTURES if not args.only or f["name"] == args.only]
+    if not fixtures:
+        raise SystemExit(f"no such fixture: {args.only!r}")
+
+    _erase_slot()
+    rows = []
+    consecutive_down = 0
+    for fixture in fixtures:
+        print(f"\n{'=' * 70}\n{fixture['name']}: {fixture['question']}")
+        print(f"known: {fixture['known']}")
+        for arm in ARMS:
+            row = run_one(fixture, arm)
+            rows.append(row)
+            consecutive_down = consecutive_down + 1 if row["error"] else 0
+            if consecutive_down >= 3:
+                print(
+                    "\nSTOPPING: three calls in a row failed to reach "
+                    "llama-server. The rows above may straddle a restart; "
+                    "read them as two runs, not one.",
+                    flush=True,
+                )
+                _write(args, rows)
+                return
+            # Line by line, flushed: a long run redirected to a file
+            # must not look identical whether it is advancing or wedged.
+            print(
+                f"\n--- {arm} ({row['prompt_chars']} chars in, "
+                f"{row['wall_ms']} ms, cause words hit: "
+                f"{row['cause_words_hit'] or 'NONE'}) ---",
+                flush=True,
+            )
+            print(row["error"] or row["answer"], flush=True)
+
+    print(f"\n{'=' * 70}\nsummary (cause-word hits are a PROXY, read the answers)")
+    down = 0
+    for row in rows:
+        if row["error"]:
+            mark, down = "DOWN", down + 1
+        else:
+            mark = "hit " if row["cause_words_hit"] else "MISS"
+        print(f"  {mark} {row['fixture']:>8} / {row['arm']:<8} {row['wall_ms']:>6} ms")
+    if down:
+        print(
+            f"\n  {down} call(s) never reached llama-server. Those are not "
+            "verdicts, and any row after one may come from a different "
+            "server process than the rows before it."
+        )
+
+    _write(args, rows)
+
+
+if __name__ == "__main__":
+    main()
