@@ -73,11 +73,15 @@ class CpuRamCollector:
     domains = ("cpu", "ram")
 
     def is_available(self) -> bool:
-        try:
-            _read(_MEMINFO)
-            _read(_LOADAVG)
-        except OSError:
-            return False
+        # True unconditionally, like the other two collectors, and for a
+        # reason that only showed up in a test: returning False here is
+        # cheap and honest -- two files, read or not -- but it makes
+        # harnais.observe() skip collect() and report "not available on
+        # this machine", which THROWS AWAY the reason. "cannot read
+        # /proc/meminfo: permission denied" and "no /proc at all" are
+        # different repairs, and this package exists to stop exactly
+        # that kind of detail being flattened. collect() reports the
+        # real error, so the check happens there or not at all.
         return True
 
     def cost_hint(self) -> CostHint:

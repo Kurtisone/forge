@@ -66,8 +66,10 @@ from forge.kernel.world_model import InMemoryWorldModel
 
 NOW = datetime.now()  # noqa: DTZ005 -- naive local, as everywhere in Forge
 
-BUDGET_TOKENS = 1400
-
+# Imported, not repeated: the graph and this harness must ask the
+# Context Builder for the same budget, or the bench measures a context
+# size nothing ships.
+from forge.config import SYSADMIN_CONTEXT_BUDGET_TOKENS as BUDGET_TOKENS
 
 # --------------------------------------------------------------------
 # log blocks -- real shapes, from this machine
@@ -218,35 +220,15 @@ FIXTURES = [
 # the two prompts
 # --------------------------------------------------------------------
 
-#: The output-shaping half route A's node would own, kept deliberately
-#: identical to _SYNTHESIS_PROMPT's: same GOOD ANSWER example (so
-#: sysadmin's _EXAMPLE_LEAK_FRAGMENTS still catches a copy), same JSON
-#: refusal, same plain-text instruction. What it does NOT repeat is the
-#: evidence framing -- "these logs were gathered before you read the
-#: question", "never treat the absence of an error as evidence" --
-#: because the Context Builder emits its own reading rules and two sets
-#: would contradict each other on what the markers mean.
-_SHAPING = """
-Respond in plain text ONLY. Do NOT wrap your answer in JSON, and do
-NOT return a {{"tool":...,"content":...}} object -- that format is
-for a different system (a routing decision) and never applies here.
 
-GOOD ANSWER (this is only an example of FORM AND TONE -- these exact
-names, files and details are fictional placeholders, not real
-observations; copying any of them into your own answer is always
-wrong, no matter what the context above actually says): Le service
-exemple-service.service échoue au démarrage car la configuration
-référence un fichier introuvable (/etc/exemple/manquant.conf). Je te
-propose de vérifier que ce fichier existe et, si besoin, de le
-recréer avant de relancer le service.
-NEVER DO THIS: {{"tool":"chat","content":"..."}}
-
-Now write your own answer using ONLY what actually appears above --
-the words "exemple-service" and "manquant.conf" must never appear in
-your answer. Same plain format as GOOD ANSWER. Be concise.
-"""
-
-
+#: The output-shaping half, imported from the graph rather than copied.
+#:
+#: It lived here as a literal while route A did not exist -- the same
+#: position bench/sysadmin_verdict.py writes from, a harness testing an
+#: idea before the code. Route A shipped, so the copy became the thing
+#: CLAUDE.md forbids: a bench measuring a prompt the graph does not
+#: send. Two places stating the same prompt, one of them edited, and
+#: this harness would keep reporting on a prompt nobody runs.
 def logs_prompt(fixture) -> str:
     """Today's behaviour, from the real module -- not a reconstruction."""
     from forge.config import SYSADMIN_LOG_CHARS_BUDGET
@@ -266,9 +248,9 @@ def context_prompt(fixture) -> str:
     context = ContextBuilder(fixture["world"]()).build_for(
         fixture["question"], BUDGET_TOKENS
     )
-    return (
-        "/no_think\n" + context + "\n" + _SHAPING.replace("{{", "{").replace("}}", "}")
-    )
+    from forge.graphs.sysadmin import _CONTEXT_SHAPING
+
+    return "/no_think\n" + context + "\n" + _CONTEXT_SHAPING
 
 
 def terse_prompt(fixture) -> str:

@@ -959,6 +959,34 @@ SYSADMIN_LOG_CHARS_BUDGET = int(os.getenv("SYSADMIN_LOG_CHARS_BUDGET", "2000"))
 #   GET /containers/json and GET /containers/{id}/logs, rejecting
 #   every other verb/path (start/stop/rm/exec/...) before it reaches
 #   the real socket.
+# --- Harnais on the no-target path (route A) --------------------------------
+# When sysadmin is asked a question that names NO target ("mon deck rame",
+# "qu'est-ce qui ne va pas ?"), the graph used to collect `journalctl -k` and
+# hand that block to the model. It now runs the Harnais collectors instead and
+# hands the model a Context Builder text: the same kernel log, plus CPU, RAM
+# and container state, each marked as an observed Fact or as something that
+# could not be read.
+#
+# Default ON, which is a measured default and not a preference.
+# bench/context_builder_ab.py, Qwen3.8-9B, 2026-09-14: the log block loses two
+# of four fixtures OUTRIGHT -- a container restarted 247 s ago, and 94 % memory
+# use -- because `journalctl -k` cannot contain either, so no amount of
+# resampling changes it. The control fixture (an amdgpu reset, visible in the
+# kernel log both arms carry) is answered by both.
+#
+# Set false to get the old path back with no code change. The named-target path
+# is NOT affected by this flag in either position.
+SYSADMIN_USE_HARNAIS = os.getenv("SYSADMIN_USE_HARNAIS", "true").lower() == "true"
+
+# Token budget handed to ContextBuilder.build_for(). 1400 is what
+# bench/context_builder_ab.py ran at, and at that budget no fixture reached it
+# -- the contexts came out around 800 tokens, so nothing was ever dropped and
+# the truncation notice never fired. It is a ceiling that has not yet been
+# touched, not a tuned value.
+SYSADMIN_CONTEXT_BUDGET_TOKENS = int(
+    os.getenv("SYSADMIN_CONTEXT_BUDGET_TOKENS", "1400")
+)
+
 SYSADMIN_JOURNAL_DIR = os.getenv("SYSADMIN_JOURNAL_DIR", "")
 SYSADMIN_DBUS_ADDRESS = os.getenv("SYSADMIN_DBUS_ADDRESS", "")
 SYSADMIN_PODMAN_URL = os.getenv("SYSADMIN_PODMAN_URL", "")
