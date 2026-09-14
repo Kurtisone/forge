@@ -169,6 +169,16 @@ def test_a_missed_target_reports_failed_discovery_as_the_likelier_cause(monkeypa
 
 
 def test_sysadmin_collect_falls_back_to_kernel_when_no_target_hint(monkeypatch):
+    """
+    The pre-Harnais path, pinned with SYSADMIN_USE_HARNAIS off.
+
+    This is what a question naming no target used to do, and what it
+    still does when the flag is off -- which is the whole point of the
+    flag being there: the old behaviour is one env var away, with no
+    code change. Route A's version of this question is covered by
+    tests/test_sysadmin_harnais_path.py.
+    """
+    monkeypatch.setattr(sysadmin_mod, "SYSADMIN_USE_HARNAIS", False)
     monkeypatch.setattr(sysadmin_mod, "_run_fixed", _fake_run_fixed)
     monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnosis")
 

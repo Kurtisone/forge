@@ -93,20 +93,24 @@ import difflib
 import json
 import subprocess
 
-from forge import lang, non_answer, subtrace
+from forge import harnais, lang, non_answer, subtrace
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     SYSADMIN_COLLECT_TIMEOUT,
+    SYSADMIN_CONTEXT_BUDGET_TOKENS,
     SYSADMIN_DBUS_ADDRESS,
     SYSADMIN_DISCOVERY_TIMEOUT,
     SYSADMIN_JOURNAL_DIR,
     SYSADMIN_LOG_CHARS_BUDGET,
     SYSADMIN_MAX_LOG_LINES,
     SYSADMIN_PODMAN_URL,
+    SYSADMIN_USE_HARNAIS,
 )
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
+from forge.kernel.context_builder import MVP_DOMAINS, ContextBuilder
+from forge.kernel.world_model import InMemoryWorldModel
 from forge.llm import call_llm
 from forge.logger import log
 from forge.text_cleaning import (
@@ -776,6 +780,178 @@ def _synthesize_node(state: AgentState) -> AgentState:
     return state
 
 
+#: The output-shaping half of the Harnais prompt -- what SHAPE the
+#: answer must take, as opposed to what it may treat as true.
+#:
+#: forge/kernel/context_builder.py deliberately does not carry this.
+#: The evidence half belongs with the World Model; this half belongs
+#: next to _clean_diagnosis_response, which is what checks the model
+#: obeyed it, and next to _EXAMPLE_LEAK_FRAGMENTS, which catches the
+#: GOOD ANSWER example being copied instead of used. Splitting them the
+#: other way would put the rule in one module and its enforcement in
+#: another.
+#:
+#: Kept character-for-character in step with _SYNTHESIS_PROMPT's tail
+#: on purpose: the same placeholder names, so the same leak detector
+#: covers both. What it does NOT repeat is the evidence framing --
+#: "these logs were gathered before you read the question", "never
+#: treat the absence of an error as evidence" -- because the Context
+#: Builder emits its own reading rules and two sets would disagree
+#: about what the markers mean.
+_CONTEXT_SHAPING = """
+Respond in plain text ONLY. Do NOT wrap your answer in JSON, and do
+NOT return a {"tool":...,"content":...} object -- that format is
+for a different system (a routing decision) and never applies here.
+
+GOOD ANSWER (this is only an example of FORM AND TONE -- these exact
+names, files and details are fictional placeholders, not real
+observations; copying any of them into your own answer is always
+wrong, no matter what the context above actually says): Le service
+exemple-service.service échoue au démarrage car la configuration
+référence un fichier introuvable (/etc/exemple/manquant.conf). Je te
+propose de vérifier que ce fichier existe et, si besoin, de le
+recréer avant de relancer le service.
+NEVER DO THIS: {"tool":"chat","content":"..."}
+
+Now write your own answer using ONLY what actually appears above --
+the words "exemple-service" and "manquant.conf" must never appear in
+your answer. Same plain format as GOOD ANSWER. Be concise.
+"""
+
+
+def _harnais_path(state: AgentState) -> bool:
+    """
+    Whether this run takes route A: the Harnais instead of a log block.
+
+    Only when NO target was named. A question about a named unit or
+    container keeps the path it has -- validated collection, and the
+    three refusals written in code when that validation fails. That
+    boundary is not caution, it is measured: bench/context_builder_ab.py
+    asked this model "pourquoi forge-llm plante ?" against a context
+    stating the container could not be observed, and got back "plante
+    CAR le socket de Podman n'existe pas" -- the instrument's failure
+    returned as the phenomenon's cause, stable over four runs. A named
+    target reaches _target_missed_node long before any of that, and
+    that is where it stays.
+    """
+    return SYSADMIN_USE_HARNAIS and not state.context.get("target_hint")
+
+
+def _observe_node(state: AgentState) -> AgentState:
+    """
+    Ask every Harnais collector what it can see, and record it.
+
+    This runs a second `podman ps` -- _discover_node has already run
+    one. Left as it is rather than threaded through: the collectors own
+    their observation by design (a collector that took someone else's
+    list would inherit that list's failure modes silently), and the
+    duplicate is one proxied call against a local socket. The day it
+    matters, the fix is to drop discover from this path, not to share
+    its output.
+    """
+    world = InMemoryWorldModel()
+    observations = harnais.observe(harnais.default_collectors())
+    for observation in observations:
+        world.record_observation(observation)
+
+    state.context["world"] = world
+    failed = [o.collector for o in observations if o.failed]
+    log.event(
+        "sysadmin.observe",
+        collectors=len(observations),
+        failed=failed,
+        facts=sum(len(o.facts) for o in observations),
+    )
+    return state
+
+
+def _observed_nothing(state: AgentState) -> bool:
+    """True when not one collector produced a single Fact."""
+    world = state.context.get("world")
+    if world is None:
+        return False
+    return not any(world.current_state(domain) for domain in MVP_DOMAINS)
+
+
+def _nothing_observed_node(state: AgentState) -> AgentState:
+    """
+    Report a total observation failure, deterministically.
+
+    Written in code because the alternative was measured and is worse.
+    bench/context_builder_ab.py removed the failing command's error text
+    from the context, on the theory that a cause cannot be built out of
+    a string that is not there. The model reached for the next nearest
+    facts instead and declared HEALTHY ones guilty -- "plante car la
+    charge CPU est élevée (0.9 sur 1 minute)", stable over three runs.
+
+    Asked why something is wrong, this model returns a cause whatever
+    the context holds; removing a candidate yields the next candidate,
+    never a refusal. So when there is nothing to reason from, it is not
+    asked. The error text still reaches the reader -- it reaches them
+    from here, which is the same split _collect_failed_node already
+    makes, and the same reason it makes it.
+    """
+    world = state.context["world"]
+    lines = [
+        (
+            f"{non_answer.NOTHING_OBSERVED_PREFIX}Je n'ai rien pu observer sur "
+            "cette machine : aucune source n'a répondu, donc il n'y a aucun "
+            "fait sur lequel appuyer un diagnostic. Ce message parle de "
+            "l'observation, pas de l'état de la machine — elle va peut-être "
+            "très bien."
+        )
+    ]
+    for domain in MVP_DOMAINS:
+        error = world.observation_error(domain)
+        if error:
+            lines.append(f"- {domain} : {error}")
+
+    state.final_output = "\n".join(lines)
+    state.final_tool = "sysadmin"
+    log.event("sysadmin.done", chars=len(state.final_output), observed_nothing=True)
+    return state
+
+
+def _context_synthesize_node(state: AgentState) -> AgentState:
+    """One diagnosis, from the Context Builder's text rather than a log block."""
+    question = (
+        state.context.get("question")
+        or "Diagnostique le problème et propose une solution."
+    )
+    context = ContextBuilder(state.context["world"]).build_for(
+        question, SYSADMIN_CONTEXT_BUDGET_TOKENS
+    )
+    state.context["harnais_context"] = context
+
+    # "/no_think" stays at position 0, where it was measured to matter
+    # -- see the note above _SYNTHESIS_PROMPT. The Context Builder does
+    # not emit it precisely so this stays true wherever it is called.
+    prompt = "/no_think\n" + context + "\n" + _CONTEXT_SHAPING
+    language_line = lang.line_for(question)
+
+    log.event("sysadmin.llm_call", source="harnais", prompt_chars=len(prompt))
+    try:
+        raw = call_llm(prompt + language_line)
+        log.event("sysadmin.raw_output", raw=raw)
+        answer = _clean_diagnosis_response(raw)
+        answer = lang.enforce(
+            question,
+            answer,
+            retry=lambda line: _clean_diagnosis_response(call_llm(prompt + line)),
+            enabled=ENFORCE_ANSWER_LANGUAGE,
+        )
+    except ProviderError as e:
+        state.ok = False
+        state.error = str(e)
+        state.final_output = f"[error] LLM unavailable: {e}"
+        return state
+
+    state.final_output = answer
+    state.final_tool = "sysadmin"
+    log.event("sysadmin.done", chars=len(state.final_output), source="harnais")
+    return state
+
+
 def build() -> Graph:
     g = Graph("sysadmin", max_steps=6)
     g.add_node("discover", _discover_node)
@@ -784,8 +960,22 @@ def build() -> Graph:
     g.add_node("collect_failed", _collect_failed_node, answers=False)
     g.add_node("nothing_collected", _nothing_collected_node, answers=False)
     g.add_node("synthesize", _synthesize_node)
+    g.add_node("observe", _observe_node)
+    g.add_node("nothing_observed", _nothing_observed_node, answers=False)
+    g.add_node("context_synthesize", _context_synthesize_node)
 
+    # Route A, and only for a question that names no target -- see
+    # _harnais_path. Declared BEFORE the edge to collect, because Graph
+    # takes the first matching edge, and the one to collect is
+    # unconditional.
+    g.add_edge("discover", "observe", condition=_harnais_path)
     g.add_edge("discover", "collect")
+
+    # Nothing observed at all is a refusal written in code, not a
+    # thinner prompt -- see _nothing_observed_node for the measurement
+    # that settled it.
+    g.add_edge("observe", "nothing_observed", condition=_observed_nothing)
+    g.add_edge("observe", "context_synthesize")
     # Order matters -- Graph takes the first matching edge.
     g.add_edge(
         "collect",
@@ -830,6 +1020,10 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
     containers_error = state.context.get("discover_containers_error")
     collected_logs = state.context.get("collected_logs", "")
     collect_error = collected_logs if collected_logs.startswith("[error]") else None
+    world = state.context.get("world")
+    any_domain_unobserved = world is not None and any(
+        not world.current_state(d) for d in MVP_DOMAINS
+    )
 
     def discover_detail() -> str:
         # "unités" and not "services": what ListUnits returns is every
@@ -859,9 +1053,33 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
             return f"source : {source} | erreur : {collect_error}"
         return f"source : {source}"
 
+    def observe_detail() -> str:
+        world = state.context.get("world")
+        if world is None:
+            return "aucune observation"
+        seen, missing = [], []
+        for domain in MVP_DOMAINS:
+            facts = world.current_state(domain)
+            (seen if facts else missing).append(
+                f"{domain} ({len(facts)})" if facts else domain
+            )
+        parts = [f"observé : {', '.join(seen)}" if seen else "observé : rien"]
+        if missing:
+            # Named, never omitted. A domain that silently vanishes from
+            # this line reads as one that had nothing to report, which
+            # is the distinction the whole Harnais exists to keep.
+            parts.append(f"non observé : {', '.join(missing)}")
+        return " | ".join(parts)
+
     details = {
         "discover": discover_detail,
         "collect": collect_detail,
+        "observe": observe_detail,
+        "nothing_observed": lambda: "aucune source n'a répondu",
+        "context_synthesize": lambda: (
+            f"diagnostic généré depuis {len(state.context.get('harnais_context', ''))} "
+            f"caractères de contexte ({len(state.final_output or '')} caractères)"
+        ),
         "collect_failed": lambda: (
             f"collecte échouée : {state.context.get('collect_failed', '')[:120]}"
         ),
@@ -885,6 +1103,8 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
             else False
             if ts.decision_tool == "collect"
             and (collect_error or state.context.get("target_missed"))
+            else False
+            if ts.decision_tool == "observe" and any_domain_unobserved
             else ts.tool_ok
         )
     return steps

@@ -34,8 +34,6 @@ to a model, as nothing to report. The context has to SAY the
 observation failed, and say what failed.
 """
 
-import pathlib
-
 from forge import harnais
 from forge.harnais.collectors import containers as containers_mod
 from forge.harnais.collectors import cpu_ram as cpu_ram_mod
@@ -207,15 +205,42 @@ def test_nothing_readable_at_all_refuses_instead_of_thinning_out(monkeypatch):
     assert len(unobserved_claims(context)) == 4
 
 
-def test_the_sysadmin_graph_is_untouched_by_all_of_this():
+def test_a_named_target_never_reaches_the_harnais(monkeypatch):
     """
-    Scope, pinned. The new path is built and tested in isolation; the
-    graph that answers `!` questions today still routes through its own
-    nodes and its own prompt, and replacing that is a separate decision
-    taken after this has been read.
+    The boundary route A actually shipped with, and the reason it is
+    where it is.
+
+    This test used to assert that sysadmin's source mentioned neither
+    "harnais" nor "context_builder" -- scope pinned while the Context
+    Builder was built in isolation. It is wired now, so that assertion
+    was retired ON PURPOSE, and replaced by the narrower claim that
+    survived measurement: the Harnais answers questions that name NO
+    target, and a named target keeps the path it had.
+
+    bench/context_builder_ab.py is why. Asked "pourquoi forge-llm
+    plante ?" against a context stating the container could not be
+    observed, this model answered "plante CAR le socket de Podman
+    n'existe pas" -- the instrument's failure returned as the
+    phenomenon's cause, stable over four runs. A named target reaches
+    _target_missed_node well before any of that, and this keeps it so.
+
+    Asserted on the trace rather than on the source text: a source grep
+    says a branch exists, never that it is wired to the right edge.
     """
     import forge.graphs.sysadmin as sysadmin_mod
 
-    source = pathlib.Path(sysadmin_mod.__file__).read_text(encoding="utf-8")
-    assert "context_builder" not in source
-    assert "harnais" not in source
+    def exploding_collectors():  # pragma: no cover - must not be reached
+        raise AssertionError("the Harnais ran for a question naming a target")
+
+    monkeypatch.setattr(harnais, "default_collectors", exploding_collectors)
+    monkeypatch.setattr(
+        sysadmin_mod, "_run_fixed", lambda cmd, timeout: "[error] nothing here"
+    )
+    monkeypatch.setattr(sysadmin_mod, "call_llm", lambda p, grammar=None: "diagnostic")
+
+    state = sysadmin_mod.build().run(
+        "", initial_context={"target_hint": "forge-llm", "question": QUESTION}
+    )
+
+    assert "observe" not in [step.decision_tool for step in state.trace]
+    assert state.context["target_missed"] == "forge-llm"

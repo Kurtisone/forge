@@ -118,6 +118,20 @@ COLLECT_FAILED_PREFIX = "[collecte impossible] "
 # seven fixtures and the three arms that failed the same way.
 NOTHING_COLLECTED_PREFIX = "[rien à lire] "
 
+# The Harnais observing nothing at all. Distinct from
+# NOTHING_COLLECTED_PREFIX, which is about ONE command returning no
+# lines: this one is every collector failing, so there is not a single
+# Fact to reason from.
+#
+# It exists because bench/context_builder_ab.py measured what happens
+# when the model is asked anyway. Starved of evidence it does not
+# refuse -- it reaches for the nearest remaining fact and declares it
+# the cause, including facts that say the machine is HEALTHY ("plante
+# car la charge CPU est élevée (0.9)"). Removing a candidate produces
+# the next candidate, never a refusal. So the refusal is written here,
+# in code, and the model is not called.
+NOTHING_OBSERVED_PREFIX = "[rien d'observé] "
+
 # The two path guards in the orchestrator, which refuse a tool call
 # whose path the model invented or whose "path" is pasted text. They
 # answer the user with a question -- "de quel fichier s'agit-il ?" -- so
@@ -164,6 +178,7 @@ _PREFIXES = (
     TARGET_MISSED_PREFIX,
     COLLECT_FAILED_PREFIX,
     NOTHING_COLLECTED_PREFIX,
+    NOTHING_OBSERVED_PREFIX,
     DID_NOT_UNDERSTAND_PREFIX,
     NOT_YOUR_DECISION_PREFIX,
     NO_PATH_PREFIX,
