@@ -219,9 +219,38 @@ def running_containers() -> list[str]:
     Empty on any failure, which is the only safe answer here -- a
     caller cannot tell "no containers" from "the proxy is down" and
     must not act as though it could.
+
+    Safe for the CALLER is not the same as silent. Until 2026-09-14
+    this discarded podman's error text without a word, and it was the
+    only place in the codebase that asks podman and says nothing when
+    the answer is a failure: _discover_node logs the same failure and
+    keeps it in `discover_containers_error`, and the Harnais collector
+    returns it as an Observation carrying the reason.
+
+    What that cost is on the record. The host proxy units spent three
+    days (2026-09-11 to 09-14) pointing at a checkout that had moved,
+    so every `podman ps` failed, and the one caller outside this module
+    -- graphs/research.py, asking whether a web question named a local
+    container -- went quiet. Its _LOCAL_FOOTER is the repair for a
+    measured misrouting (18 research calls in the traces, 2 of them
+    local questions, one being the exact sentence the router prompt
+    gives as a counter-example), and it was off for the whole outage:
+    the safety net disappears with the thing it catches. Nothing said
+    so, which is why it took three days and an unrelated question to
+    notice.
+
+    The return value stays []: the callers are right to be given the
+    safe answer, and changing what they receive is a different change.
+    What the log adds is a trace of the erasure, so that "the proxy is
+    down" is discoverable without somebody happening to ask.
     """
     raw = _run_fixed(_DISCOVER_CONTAINERS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
-    return [] if raw.startswith("[error]") else _container_names(raw)
+    if raw.startswith("[error]"):
+        # Same level and shape as _discover_node's own line, so the two
+        # readings of `podman ps` read alike in a log.
+        log.warning("sysadmin: running_containers could not ask podman: %s", raw)
+        return []
+    return _container_names(raw)
 
 
 def _container_names(raw: str) -> list[str]:
