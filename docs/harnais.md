@@ -4,19 +4,27 @@
 
 ---
 
-## Statut d'implémentation (13/09/2026, PR #75)
+## Statut d'implémentation (14/09/2026, PR #75, #79, #80)
 
-**La section 9 est livrée. Rien d'autre.** Pas de Host Model, pas de
-persistance, pas d'`ActionCapability`, rien de la V2 ni de la V3. Le
-Context Builder est construit et testé **en isolation** : `graphs/sysadmin.py`
-n'est pas touché et répond exactement comme avant — un test l'affirme.
+**La section 9 est livrée, et branchée. Rien d'autre.** Pas de Host
+Model, pas de persistance, pas d'`ActionCapability`, rien de la V2 ni de
+la V3.
+
+Le Context Builder a d'abord été construit et testé **en isolation** (PR
+#75, `graphs/sysadmin.py` intact, un test l'affirmait en lisant sa
+source). Il est depuis branché sur les **deux** chemins de ce graphe (PR
+#79 et #80) derrière `SYSADMIN_USE_HARNAIS`, défaut `true` — donc actif
+en production, le `.env.local` déployé ne portant pas la variable. Le
+test « sysadmin intact » est tombé à ce moment-là, comme annoncé ; ce qui
+épingle désormais l'ancien comportement est le drapeau à `False`, pas
+l'absence du neuf.
 
 | Section | Fichier | État |
 |---|---|---|
 | 4 (Fact/Hypothesis/Correlation) | [`src/forge/harnais/facts.py`](../src/forge/harnais/facts.py) | livré |
 | 3.2 (Collectors) | [`src/forge/harnais/collectors/`](../src/forge/harnais/collectors/) | livré — 3 collectors |
 | 3.5 (World Model) | [`src/forge/kernel/world_model.py`](../src/forge/kernel/world_model.py) | livré, en mémoire |
-| 3.8 (Context Builder) | [`src/forge/kernel/context_builder.py`](../src/forge/kernel/context_builder.py) | livré, branché sur aucun graphe |
+| 3.8 (Context Builder) | [`src/forge/kernel/context_builder.py`](../src/forge/kernel/context_builder.py) | livré, branché sur les deux chemins de `sysadmin` |
 | 3.4 (Host Model), 3.6 (persistance), 3.10 (Action Executor), 7 (V2/V3) | — | pas commencé |
 
 ### Ce que le texte ci-dessous a de faux
@@ -87,10 +95,15 @@ Les deux chemins passent maintenant par le Context Builder
 (`SYSADMIN_USE_HARNAIS`, défaut `true`), mesurés avant branchement par
 `bench/context_builder_ab.py`.
 
-Rien de tout ceci n'a été mesuré contre le vrai modèle : la règle est
-tenue par le code, donc elle tient quel que soit le modèle, mais savoir
-si un 9B répond *bien* depuis ce contexte est la phase Observable, pas
-celle-ci.
+Ce paragraphe disait, jusqu'au branchement, que rien n'avait été mesuré
+contre le vrai modèle. C'était vrai de la PR #75 et ça ne l'est plus :
+`bench/context_builder_ab.py` a posé les deux bras au Qwen3.8-9B en
+service avant chaque branchement. Ce que le code garantit — aucun énoncé
+sans `Fact` derrière — reste vrai quel que soit le modèle et n'avait pas
+besoin d'un appel pour l'être ; ce que le bench a mesuré est l'aval,
+c'est-à-dire si ce modèle-ci répond *mieux* depuis un contexte honnête
+que depuis un bloc de logs. La phase Observable est donc faite pour
+`sysadmin`, et pas pour la V2.
 
 ---
 
