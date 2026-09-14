@@ -32,9 +32,12 @@ def default_collectors() -> list[Collector]:
     The three MVP collectors, in ascending cost order.
 
     Imported inside the function so that importing `forge.harnais` for
-    its types alone does not pull in graphs.sysadmin -- the containers
-    and logs collectors reach into it for the podman/journalctl
-    plumbing, and facts.py has no business dragging a graph along.
+    its types alone does not pull in a subprocess-running module.
+    Until the host plumbing moved to harnais/host_exec.py this was
+    load-bearing in a stronger way -- the containers and logs
+    collectors imported it from graphs.sysadmin, so `import
+    forge.harnais` at module level would have dragged a whole graph
+    in. It is now only about keeping facts.py cheap to import.
     """
     from forge.harnais.collectors.containers import ContainersCollector
     from forge.harnais.collectors.cpu_ram import CpuRamCollector

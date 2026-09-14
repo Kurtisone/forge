@@ -17,28 +17,27 @@ collected -> a confident, invented story about a variable blocking
 searxng. It is a correct API for a caller that only needs names. It is
 the exact thing this package exists to stop being the only option.
 
-So this collector reaches past it to the plumbing underneath --
-_DISCOVER_CONTAINERS_CMD() and _run_fixed(), which DO preserve the
-distinction via the "[error] " prefix -- and turns it into an
+So this collector goes to the plumbing underneath instead --
+harnais/host_exec.py's podman_cmd() and run_fixed(), which DO preserve
+the distinction via the "[error] " prefix -- and turns it into an
 Observation that can say "I could not look".
 
-WHY PRIVATE NAMES, DELIBERATELY
+WHERE THAT PLUMBING LIVES
 
-Importing `_`-prefixed names across modules is a smell, and the two
-alternatives are worse. Rebuilding `podman ps --format {{.Names}}`
-here duplicates the command, and `running_containers()`'s docstring
-already names that cost ("Two readings of `podman ps` would drift the
-day the command grows a flag") -- it would also duplicate the
-SYSADMIN_PODMAN_URL wiring, the minimal subprocess env, the timeout
-and the "[error] " convention, which is four places to drift instead
-of one. Reaching in keeps a single definition of what talking to
-podman means.
+It used to live in graphs/sysadmin.py, and this file used to import
+`_run_fixed` and `_DISCOVER_CONTAINERS_CMD` from it by their private
+names. That was the lesser of two evils: rebuilding `podman ps` here
+would have duplicated the SYSADMIN_PODMAN_URL wiring, the minimal
+subprocess env, the timeout and the "[error] " convention -- four
+things to drift instead of one, the cost `running_containers()`'s own
+docstring names ("two readings of `podman ps` would drift the day the
+command grows a flag").
 
-The tidy version of this is to lift _run_fixed/_subprocess_env and the
-command builders out of graphs/sysadmin.py into a shared module both
-import. That is a pure extraction with no behaviour change, and it is
-deliberately NOT done on this branch: sysadmin keeps working untouched
-until the Context Builder is actually wired in.
+The extraction that fixes it properly was deferred for one stated
+reason -- sysadmin had to keep working untouched while the Context
+Builder was built beside it -- and that reason ended when the Context
+Builder was wired into the graph. It is now forge/harnais/host_exec.py,
+which both this file and the graph import.
 
 PRESENCE IS PROOF OF RUNNING
 
@@ -54,12 +53,12 @@ from datetime import datetime
 from forge.config import (
     SYSADMIN_DISCOVERY_TIMEOUT,
     SYSADMIN_MAX_LOG_LINES,
-    SYSADMIN_PODMAN_URL,
 )
-from forge.graphs.sysadmin import NO_OUTPUT as _NO_OUTPUT
-from forge.graphs.sysadmin import _run_fixed
 from forge.harnais.collector import CostHint, Observation
 from forge.harnais.facts import Fact
+from forge.harnais.host_exec import NO_OUTPUT as _NO_OUTPUT
+from forge.harnais.host_exec import podman_cmd
+from forge.harnais.host_exec import run_fixed as _run_fixed
 
 #: Imported rather than repeated. This literal was copied here and
 #: into logs.py, and a third place spelled the same idea differently
@@ -96,17 +95,13 @@ _FIELDS = 3
 def _containers_cmd() -> list[str]:
     """`podman ps` with the richer format, through the same proxy.
 
-    Mirrors graphs.sysadmin._DISCOVER_CONTAINERS_CMD's three-line shape
-    rather than importing it, because only the `--format` argument
-    differs and there is no seam to pass it through. That is a real
-    duplication of the SYSADMIN_PODMAN_URL wiring, and the note at the
-    top of this module about lifting the plumbing into a shared module
-    is now the fix for two callers instead of one.
+    This used to rebuild the `--url` wiring by hand, because it differs
+    from harnais.host_exec.discover_containers_cmd() only in `--format`
+    and there was no seam to pass that through. `podman_cmd(*args)` is
+    that seam: how to reach podman is stated once, and this function
+    says only what it wants from it.
     """
-    base = ["podman"]
-    if SYSADMIN_PODMAN_URL:
-        base += ["--url", SYSADMIN_PODMAN_URL]
-    return base + ["ps", "--format", _PS_FORMAT]
+    return podman_cmd("ps", "--format", _PS_FORMAT)
 
 
 class ContainersCollector:

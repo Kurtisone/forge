@@ -44,10 +44,11 @@ answered "pourquoi searxng a redémarré ?", this model said yes.
 from datetime import datetime
 
 from forge.config import SYSADMIN_COLLECT_TIMEOUT
-from forge.graphs.sysadmin import NO_OUTPUT as _NO_OUTPUT
-from forge.graphs.sysadmin import _collect_cmd, _run_fixed
 from forge.harnais.collector import CostHint, Observation
 from forge.harnais.facts import Fact
+from forge.harnais.host_exec import NO_OUTPUT as _NO_OUTPUT
+from forge.harnais.host_exec import collect_cmd as _collect_cmd
+from forge.harnais.host_exec import run_fixed as _run_fixed
 
 #: What `journalctl -k` is called when a fact names its own source.
 #: Matches the string sysadmin puts in `log_source`, so the two read

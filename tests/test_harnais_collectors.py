@@ -21,6 +21,7 @@ from datetime import datetime
 import pytest
 
 from forge import harnais
+from forge.harnais import host_exec
 from forge.harnais.collector import Observation
 from forge.harnais.collectors import containers as containers_mod
 from forge.harnais.collectors import cpu_ram as cpu_ram_mod
@@ -279,8 +280,11 @@ def test_no_output_never_becomes_a_container_named_no_output(monkeypatch):
 def test_containers_asks_podman_through_the_proxy(monkeypatch):
     """
     Asserted on the command itself, not on the mocked runner: the
-    collector must reuse sysadmin's builder, so SYSADMIN_PODMAN_URL
-    still routes it at the read-only proxy rather than the host socket.
+    collector must build its command with harnais.host_exec.podman_cmd,
+    so SYSADMIN_PODMAN_URL still routes it at the read-only proxy
+    rather than the host socket. Patching the flag on host_exec rather
+    than on this module is the point -- it is what proves the wiring is
+    read from the shared builder and not rebuilt here.
     """
     seen = {}
 
@@ -289,7 +293,7 @@ def test_containers_asks_podman_through_the_proxy(monkeypatch):
         return "[no output]"
 
     monkeypatch.setattr(containers_mod, "_run_fixed", capture)
-    monkeypatch.setattr(containers_mod, "SYSADMIN_PODMAN_URL", "tcp://127.0.0.1:9999")
+    monkeypatch.setattr(host_exec, "SYSADMIN_PODMAN_URL", "tcp://127.0.0.1:9999")
 
     ContainersCollector().collect()
 
