@@ -124,11 +124,23 @@ def _cpu_ram(used_pct: float, load: float) -> Observation:
     return Observation.of("cpu_ram", ("cpu", "ram"), facts, NOW)
 
 
-def _logs(block: str) -> Observation:
+def _logs(block: str, source: str = "journalctl -k") -> Observation:
+    """
+    The logs domain, from `source`.
+
+    `source` is not always the kernel. Route C's question is whether a
+    VALIDATED per-unit collection can be recorded as a Fact like any
+    other and rendered alongside the machine's state -- which is what
+    collectors/logs.py said would have to happen before per-unit logs
+    could exist at all ("per-unit logs arrive with the validator that
+    makes them safe, not before"). Here it is a fixture; in the graph
+    it would be _collect_node's own output, already checked against
+    that run's discovery.
+    """
     lines = block.splitlines()
     facts = [
-        Fact("logs", "journalctl -k.lines", len(lines), "lines", NOW, "logs"),
-        Fact("logs", "journalctl -k.tail", block, None, NOW, "logs"),
+        Fact("logs", f"{source}.lines", len(lines), "lines", NOW, "logs"),
+        Fact("logs", f"{source}.tail", block, None, NOW, "logs"),
     ]
     return Observation.of("logs", ("logs",), facts, NOW)
 
@@ -155,6 +167,24 @@ LLM_JUST_RESTARTED = {**ALL_UP, "forge-llm": 247}
 #
 # `cause` is the set of words a correct answer is made of. It is a
 # PROXY and is reported as one -- see the module docstring.
+
+SEARXNG_OOM = """\
+2026-09-14 09:11:57,003 WARNING:searx.engines: engine timeout: google
+2026-09-14 09:11:58,441 INFO:searx.webapp: shutting down
+[11223.884] Out of memory: Killed process 4412 (searxng-run) total-vm:2118344kB
+2026-09-14 09:12:03,114 INFO:searx.webapp: starting webserver on http://0.0.0.0:8080/
+2026-09-14 09:12:04,882 INFO:searx.engines: 92 engines loaded"""
+
+LLM_QUIET = """\
+llama_context: n_ctx_per_seq (16384) < n_ctx_train (32768) -- the full capacity will not be used
+llama_context: CPU output buffer size = 0.58 MiB
+main: server is listening on http://0.0.0.0:8080 - starting the main loop
+srv update_slots: all slots are idle"""
+
+PODMAN_DOWN = (
+    "[error] podman exited 125: unable to connect to Podman socket: "
+    "dial unix /run/forge-podman-ro-proxy/sock: connect: no such file or directory"
+)
 
 FIXTURES = [
     {
@@ -190,6 +220,70 @@ FIXTURES = [
         "known": "THE CONTROL ARM. The answer is in the kernel log, which both arms "
         "carry. The context arm must not do WORSE here -- if the facts around the "
         "log block distract from it, this is where that shows.",
+    },
+    # --- route C: the NAMED-target path ----------------------------------
+    #
+    # These two exist to test a claim made without measuring it -- that
+    # route C is blocked by the `blind` result. It may not be. On the
+    # targeted path, `synthesize` is reached ONLY when the target was
+    # found in this run's own discovery AND its logs were collected AND
+    # they are not empty, so the SUBJECT is observed by construction and
+    # `blind`'s precondition cannot occur there.
+    #
+    # What can still occur is a DIFFERENT domain being dark while the
+    # question names something in another one. That is the real question,
+    # and it is what these ask.
+    {
+        "name": "unit_ok",
+        "question": "Pourquoi searxng redémarre en boucle ?",
+        "source": "journalctl -u searxng.service",
+        "logs": SEARXNG_OOM,
+        "world": lambda: _world(
+            _containers(ALL_UP),
+            _cpu_ram(94.3, 7.8),
+            _logs(SEARXNG_OOM, "journalctl -u searxng.service"),
+        ),
+        "cause": ["mémoire", "oom", "out of memory", "tué", "killed", "94"],
+        "known": "The unit's own logs carry an OOM kill, and memory is at 94 %. "
+        "Both arms have the log; only the context arm can corroborate it with the "
+        "memory figure. The value case for route C.",
+    },
+    {
+        "name": "unit_blind",
+        "question": "Pourquoi searxng redémarre en boucle ?",
+        "source": "journalctl -u searxng.service",
+        "logs": SEARXNG_OOM,
+        "world": lambda: _world(
+            Observation.failure("containers", ("container",), PODMAN_DOWN, NOW),
+            _cpu_ram(41.2, 0.9),
+            _logs(SEARXNG_OOM, "journalctl -u searxng.service"),
+        ),
+        "cause": ["mémoire", "oom", "out of memory", "tué", "killed"],
+        "risk": ["podman", "socket", "proxy", "/run/forge"],
+        "known": "THE RISK CASE, and the one holding route C back. The subject IS "
+        "observed -- its logs are right there and they say OOM -- but ANOTHER "
+        "domain is dark, with a podman error in the context. If the model blames "
+        "the podman socket for searxng restarting, route C stays blocked. If it "
+        "reads the log it was given, the `blind` result does not transfer and the "
+        "block was my assumption, not a measurement.",
+    },
+    {
+        "name": "unit_quiet",
+        "question": "Pourquoi forge-llm répond si lentement ?",
+        "source": "journalctl -u forge-llm",
+        "logs": LLM_QUIET,
+        "world": lambda: _world(
+            _containers(ALL_UP),
+            _cpu_ram(94.3, 7.8),
+            _logs(LLM_QUIET, "journalctl -u forge-llm"),
+        ),
+        "cause": ["mémoire", "ram", "94", "charge", "load", "swap"],
+        "known": "THE VALUE CASE for route C, and the `ram` fixture transposed "
+        "onto the targeted path. The unit's own logs are healthy startup notices "
+        "-- they cannot explain slowness -- while memory sits at 94 % and the load "
+        "average at 7.8. The logs arm has only the quiet log and can at best say "
+        "so; the context arm has the machine. If it does not win here, route C "
+        "buys uniformity and nothing else.",
     },
     {
         "name": "blind",
@@ -238,7 +332,7 @@ def logs_prompt(fixture) -> str:
     return _SYNTHESIS_PROMPT.format(
         today_line=today_line(),
         question=fixture["question"],
-        source="journalctl -k",
+        source=fixture.get("source", "journalctl -k"),
         log_block=_truncate_log_block(fixture["logs"], SYSADMIN_LOG_CHARS_BUDGET),
         running_fact="",
     )
@@ -352,6 +446,11 @@ def run_one(fixture, arm) -> dict:
 
     lowered = answer.lower()
     hits = [w for w in fixture["cause"] if w.lower() in lowered]
+    # Words that would mean the model blamed something it was told it
+    # could not SEE. Separate from a missing cause: naming the wrong
+    # culprit and failing to name the right one are different failures,
+    # and only one of them is the one route C is held back by.
+    risk = [w for w in fixture.get("risk", []) if w.lower() in lowered]
     # A dead server and a wrong answer are not the same result, and the
     # first run of this harness printed both as "MISS". llama-server
     # fell over mid-pass on 2026-09-14 (RemoteDisconnected, 1091 ms)
@@ -368,6 +467,7 @@ def run_one(fixture, arm) -> dict:
         "answer": answer,
         "answer_chars": len(answer),
         "cause_words_hit": hits,
+        "risk_words_hit": risk,
         "error": error,
     }
 
@@ -418,8 +518,10 @@ def main() -> None:
             # must not look identical whether it is advancing or wedged.
             print(
                 f"\n--- {arm} ({row['prompt_chars']} chars in, "
-                f"{row['wall_ms']} ms, cause words hit: "
-                f"{row['cause_words_hit'] or 'NONE'}) ---",
+                f"{row['wall_ms']} ms, cause: "
+                f"{row['cause_words_hit'] or 'NONE'}"
+                + (f", RISK: {row['risk_words_hit']}" if row["risk_words_hit"] else "")
+                + ") ---",
                 flush=True,
             )
             print(row["error"] or row["answer"], flush=True)
@@ -431,7 +533,11 @@ def main() -> None:
             mark, down = "DOWN", down + 1
         else:
             mark = "hit " if row["cause_words_hit"] else "MISS"
-        print(f"  {mark} {row['fixture']:>8} / {row['arm']:<8} {row['wall_ms']:>6} ms")
+        risk = "  <-- RISK WORDS" if row["risk_words_hit"] else ""
+        print(
+            f"  {mark} {row['fixture']:>10} / {row['arm']:<8} "
+            f"{row['wall_ms']:>6} ms{risk}"
+        )
     if down:
         print(
             f"\n  {down} call(s) never reached llama-server. Those are not "
