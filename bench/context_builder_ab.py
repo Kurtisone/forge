@@ -5,12 +5,14 @@ Does the Context Builder answer better than the log block it would replace?
     PATH=~/.venvs/forge/bin:$PATH PYTHONPATH=src python bench/context_builder_ab.py
     python bench/context_builder_ab.py --only restart --out /tmp/ab.json
 
-WHY THIS EXISTS. forge/kernel/context_builder.py is merged, tested, and
-called by nothing. Route A of the wiring plan would put it behind
-graphs/sysadmin.py's NO-TARGET path -- the branch that today collects
-`journalctl -k` and hands it to _SYNTHESIS_PROMPT. Before any of that,
-the question is whether the swap is an improvement or a regression, and
-the only honest way to know is to ask the model that will do the work.
+WHY THIS EXISTS. Written while forge/kernel/context_builder.py was
+merged, tested, and called by nothing, to answer whether wiring it into
+graphs/sysadmin.py was an improvement or a regression -- the only honest
+way to know being to ask the model that would do the work. Both routes
+shipped on that evidence (PR #79 no-target, PR #80 named-target), so the
+arms below now compare what sysadmin DOES against what it used to do.
+That is still the useful comparison: the `logs` arm is reachable in
+production by setting SYSADMIN_USE_HARNAIS=false.
 
 WHAT IS ALREADY KNOWN AND NOT RE-ASKED. That the CONTEXT states no
 unbacked fact is proven deterministically by tests/test_context_builder*

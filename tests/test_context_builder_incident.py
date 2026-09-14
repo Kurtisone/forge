@@ -13,11 +13,18 @@ invented story about a variable blocking searxng. Every step was
 individually reasonable.
 
 graphs/sysadmin.py fixed its own version of this in code -- the run
-now stops at _target_missed_node instead of collecting kernel logs --
-and that graph is untouched here and keeps working as it does today.
-What this file pins is that the NEW path cannot reintroduce the fault
-by a different route: the Context Builder, handed exactly the same
-broken world, must make no factual claim about containers at all.
+now stops at _target_missed_node instead of collecting kernel logs.
+What this file pins is the other half: the Context Builder, handed
+exactly the same broken world, must make no factual claim about
+containers at all.
+
+That mattered before the wiring and matters more after it. When this
+file was written the graph was untouched and the Context Builder was
+called by nothing, so the two fixes were independent. Both of the
+graph's paths now go through the Context Builder (PR #79, #80), which
+means this world -- proxy down, everything else answering -- is one a
+production run actually builds, and these assertions are about what
+the model is handed rather than about a module sitting on its own.
 
 WHY THE ASSERTIONS LOOK LIKE THIS
 
@@ -205,24 +212,32 @@ def test_nothing_readable_at_all_refuses_instead_of_thinning_out(monkeypatch):
     assert len(unobserved_claims(context)) == 4
 
 
-def test_a_named_target_never_reaches_the_harnais(monkeypatch):
+def test_the_incident_with_a_target_named_refuses_instead_of_observing(monkeypatch):
     """
-    The boundary route A actually shipped with, and the reason it is
-    where it is.
+    This incident's own shape, with a target named: the proxy is down,
+    so discovery finds nothing, so the named target cannot be resolved.
+    The run must refuse there -- not observe what little is left and
+    diagnose from it.
 
-    This test used to assert that sysadmin's source mentioned neither
-    "harnais" nor "context_builder" -- scope pinned while the Context
-    Builder was built in isolation. It is wired now, so that assertion
-    was retired ON PURPOSE, and replaced by the narrower claim that
-    survived measurement: the Harnais answers questions that name NO
-    target, and a named target keeps the path it had.
+    THIS TEST HAS BEEN WRONG TWICE, both times by outliving what it
+    described, which is worth more than the assertion itself.
 
-    bench/context_builder_ab.py is why. Asked "pourquoi forge-llm
-    plante ?" against a context stating the container could not be
-    observed, this model answered "plante CAR le socket de Podman
-    n'existe pas" -- the instrument's failure returned as the
-    phenomenon's cause, stable over four runs. A named target reaches
-    _target_missed_node well before any of that, and this keeps it so.
+    It began as "sysadmin's source mentions neither harnais nor
+    context_builder", scope pinned while the Context Builder was built
+    in isolation. Route A wired it and retired that, on purpose.
+
+    It then became "a named target never reaches the Harnais", which
+    route C made false three days later: a named target that IS found
+    now goes through the Context Builder too, measured, deliberately.
+    The test kept passing the whole time -- because HERE discovery
+    fails, so _target_missed_node fires first -- while its name told
+    every reader that route C did not exist.
+
+    What survives is the narrow claim, and it is the one the incident
+    is about: a target that cannot be resolved refuses before any
+    observation. The general form of that, over all three refusals, is
+    tests/test_sysadmin_harnais_path.py's
+    test_the_three_refusals_still_fire_before_any_observation.
 
     Asserted on the trace rather than on the source text: a source grep
     says a branch exists, never that it is wired to the right edge.

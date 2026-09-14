@@ -42,9 +42,15 @@ obeyed it (_clean_diagnosis_response, _EXAMPLE_LEAK_FRAGMENTS). Two
 halves, two owners: this module owns what the model is told is TRUE,
 the caller owns what SHAPE the answer must take.
 
-No graph calls this yet. It is built and tested in isolation on
-purpose; replacing sysadmin's synthesis prompt with it is a separate
-decision, taken after this has been read.
+graphs/sysadmin.py calls this on both of its paths, behind
+SYSADMIN_USE_HARNAIS (default true, and absent from the deployed
+.env.local, so it is on in production). It was built and tested in
+isolation first, and wired only after bench/context_builder_ab.py had
+asked the model in service whether the swap was an improvement -- the
+Primitive and Observable halves, in that order.
+
+What the flag off gives back is the old synthesis prompt on both
+paths, with no code change.
 """
 
 from collections.abc import Sequence
