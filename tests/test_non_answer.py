@@ -210,3 +210,174 @@ class TestDelegationProducers:
         jobs.transition(job.id, jobs.AWAITING_USER, pending_field=delegation.CONFIRM)
 
         assert non_answer.is_non_answer(delegation.intercept("les tests passent"))
+
+
+class TestTheRegistryItself:
+    """
+    The closed set, checked against itself.
+
+    Every other class here runs a producer, which is the right test for
+    the failure they guard: a producer that stops using its constant.
+    None of them can see the OTHER direction -- a constant that is
+    declared and never registered in _PREFIXES or _EXACT. That one is
+    silent in the worst way: the producer keeps emitting the marker,
+    every test asserting `output.startswith(non_answer.X)` keeps
+    passing, and is_non_answer() returns False for it forever, so the
+    refusal is indexed as an answer and outranks the real answer to its
+    own question months later.
+
+    This is the module docstring's own complaint made mechanical: "that
+    is what a closed set with no way to discover its own members costs".
+    Registering a new marker is two edits, and only one of them had a
+    test before this.
+    """
+
+    def test_every_declared_marker_is_registered(self):
+        registered = set(non_answer._PREFIXES) | set(non_answer._EXACT)
+        declared = {
+            name: value
+            for name, value in vars(non_answer).items()
+            if not name.startswith("_") and isinstance(value, str) and name.isupper()
+        }
+
+        assert declared, (
+            "introspection found nothing -- the test is broken, not the set"
+        )
+
+        missing = sorted(n for n, v in declared.items() if v not in registered)
+        assert not missing, (
+            f"declared but invisible to is_non_answer(): {missing}. "
+            "Add them to _PREFIXES (or _EXACT), or is_non_answer() will "
+            "call the refusal an answer and the store will index it."
+        )
+
+
+class TestToolFailureProducers:
+    """
+    `Tool error: ` was the one member of the closed set that no test
+    guarded, found by removing each member from _PREFIXES in turn and
+    running the suite: fourteen of fifteen broke a test, this one broke
+    nothing. It is also the member with the most producers -- five
+    write sites, more than any other marker.
+
+    Three of the five are here. They reach the user and the store as
+    ok=False ToolResults, which is exactly what is_non_answer() is for:
+    "Tool error: chat" is a near-copy of nothing and an answer to
+    nothing, and indexing it puts a refusal one cosine away from every
+    future question that provoked it.
+
+    The other two are covered by the test below them, which is a
+    different claim.
+    """
+
+    @staticmethod
+    def _router_says_chat(monkeypatch):
+        import json
+
+        import forge.orchestrator as orch_mod
+
+        monkeypatch.setattr(
+            orch_mod,
+            "call_llm",
+            lambda prompt, **kw: json.dumps({"tool": "chat", "content": "x"}),
+        )
+
+    def test_a_tool_that_raises_is_recognised(self, monkeypatch):
+        from forge.orchestrator import Orchestrator
+        from forge.tools import registry as tool_registry
+
+        def boom(content):
+            raise RuntimeError("tool exploded")
+
+        monkeypatch.setitem(tool_registry.TOOLS, "chat", boom)
+        self._router_says_chat(monkeypatch)
+
+        result = Orchestrator().run("bonjour")
+
+        assert not result.ok
+        assert non_answer.is_non_answer(result.output)
+
+    def test_a_tool_that_returns_nothing_is_recognised(self, monkeypatch):
+        """
+        The contract violation, which is a DIFFERENT branch from the
+        one above -- _validate_tool_output raises ToolExecutionError
+        rather than the tool raising -- and emits the same marker. Both
+        are here because the two `except` clauses are separate code
+        that can drift apart.
+        """
+        from forge.orchestrator import Orchestrator
+        from forge.tools import registry as tool_registry
+
+        monkeypatch.setitem(tool_registry.TOOLS, "chat", lambda content: "   ")
+        self._router_says_chat(monkeypatch)
+
+        result = Orchestrator().run("bonjour")
+
+        assert not result.ok
+        assert non_answer.is_non_answer(result.output)
+
+    def test_two_providers_with_no_scheduler_is_recognised(self, monkeypatch):
+        """
+        Unreachable today -- every capability resolves to one provider,
+        which is why Kernel L3 is `blocked` rather than `to do`. Pinned
+        anyway: the day a second provider appears, this refusal starts
+        being produced for real, and a refusal nobody detects is the
+        one that gets indexed.
+        """
+        from forge.kernel import registry as capabilities
+        from forge.kernel.capability import ToolCapability
+        from forge.orchestrator import Orchestrator
+
+        monkeypatch.setitem(
+            capabilities.REGISTERED,
+            "chat",
+            [
+                ToolCapability(
+                    name="chat",
+                    provider="a_second_provider",
+                    handler=lambda content: "should never run",
+                    declared=True,
+                )
+            ],
+        )
+        self._router_says_chat(monkeypatch)
+
+        result = Orchestrator().run("bonjour")
+
+        assert not result.ok
+        assert non_answer.is_non_answer(result.output)
+
+    def test_the_default_graph_never_shows_its_tool_error(self, monkeypatch):
+        """
+        The other two write sites, and the claim is the opposite one:
+        graphs/default.py builds a `Tool error: ` string and the user
+        never sees it. Both writes set ok=False, and the fallback node
+        one edge later OVERWRITES final_output with "Something went
+        wrong: <error>", which carries the underlying cause the marker
+        drops.
+
+        So those two are vestigial. Pinned rather than deleted, because
+        what makes them dead is an EDGE in another function
+        (`dispatch -> fallback` on `not s.ok`) -- delete the edge or
+        flip the flag and the string ships. This test fails in that
+        case, which deletion would not.
+        """
+        from forge.graphs import default
+        from forge.tools import registry as tool_registry
+
+        def boom(content):
+            raise RuntimeError("tool exploded")
+
+        monkeypatch.setitem(tool_registry.TOOLS, "chat", boom)
+        monkeypatch.setattr(
+            default,
+            "call_llm",
+            lambda prompt, **kw: '{"tool": "chat", "content": "x"}',
+        )
+
+        state = default.build().run("bonjour")
+
+        assert non_answer.is_non_answer(state.final_output)
+        assert state.final_output.startswith(non_answer.SOMETHING_WENT_WRONG_PREFIX)
+        assert not state.final_output.startswith(non_answer.TOOL_ERROR_PREFIX)
+        assert "tool exploded" in state.final_output
