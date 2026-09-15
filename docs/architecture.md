@@ -76,9 +76,13 @@ flowchart TD
     style RAG stroke-dasharray: 4 3
     style EMB stroke-dasharray: 4 3
 
-    subgraph Sysadmin["sysadmin graph (v3.11) — discover → collect → synthesize"]
+    subgraph Sysadmin["sysadmin graph — observation through the Harnais since v3.23"]
         direction LR
-        SD[discover] --> SC[collect] --> SS[synthesize]
+        SD[discover] --> SC["collect<br/>(only if a target was named)"]
+        SD --> SO
+        SC --> SO["observe<br/>(Harnais collectors → World Model)"]
+        SO --> SS["context_synthesize<br/>(Context Builder text)"]
+        SC -.->|SYSADMIN_USE_HARNAIS=false| SY[synthesize]
     end
     T7 -.-> Sysadmin
     Sysadmin -.->|forge.subtrace| TR
@@ -243,7 +247,8 @@ src/forge/
 ├── harnais/             # the only layer that touches the real machine — observation only
 │   ├── facts.py         # Fact (always observed), Hypothesis, Correlation
 │   ├── collector.py     # Observation — facts, or the reason there are none
-│   └── collectors/      # cpu_ram (/proc), containers (podman proxy), logs (journalctl -k)
+│   ├── host_exec.py     # what talking to this host means: commands, minimal env, run_fixed
+│   └── collectors/      # cpu_ram (/proc), containers + units (proxies), logs (journalctl -k)
 │
 └── providers/
     ├── llama_cpp.py
