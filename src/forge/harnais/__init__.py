@@ -29,7 +29,7 @@ __all__ = [
 
 def default_collectors() -> list[Collector]:
     """
-    The three MVP collectors, in ascending cost order.
+    The MVP collectors, in ascending cost order.
 
     Imported inside the function so that importing `forge.harnais` for
     its types alone does not pull in a subprocess-running module.
@@ -42,8 +42,14 @@ def default_collectors() -> list[Collector]:
     from forge.harnais.collectors.containers import ContainersCollector
     from forge.harnais.collectors.cpu_ram import CpuRamCollector
     from forge.harnais.collectors.logs import KernelLogsCollector
+    from forge.harnais.collectors.units import SystemUnitsCollector
 
-    return [CpuRamCollector(), ContainersCollector(), KernelLogsCollector()]
+    return [
+        CpuRamCollector(),
+        ContainersCollector(),
+        SystemUnitsCollector(),
+        KernelLogsCollector(),
+    ]
 
 
 def observe(collectors: list[Collector]) -> list[Observation]:

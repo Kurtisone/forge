@@ -209,7 +209,7 @@ def test_nothing_readable_at_all_refuses_instead_of_thinning_out(monkeypatch):
 
     assert fact_claims(context) == []
     assert "NOTHING WAS OBSERVED" in context
-    assert len(unobserved_claims(context)) == 4
+    assert len(unobserved_claims(context)) == 5
 
 
 def test_the_incident_with_a_target_named_refuses_instead_of_observing(monkeypatch):

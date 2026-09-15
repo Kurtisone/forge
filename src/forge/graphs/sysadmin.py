@@ -106,6 +106,7 @@ from forge.config import (
 from forge.context_info import today_line
 from forge.errors import ProviderError
 from forge.graph import Graph
+from forge.harnais import host_exec
 from forge.harnais.collector import Observation
 from forge.harnais.facts import Fact
 
@@ -195,16 +196,15 @@ def _loggable(units: list[str]) -> list[str]:
 
 
 def _parse_busctl_units(raw: str) -> list[str]:
-    """ListUnits' D-Bus signature is a(ssssssouso) -- an array of
-    10-field tuples (name, description, load_state, active_state,
-    sub_state, following, unit_path, job_id, job_type, job_path).
-    `busctl --json=short` wraps that as {"type": "...", "data": [rows]}
-    where `data[0]` is the array of tuples and each tuple's index 0 is
-    the unit name -- verified against real output in production
-    before writing this, not guessed from the D-Bus spec alone."""
-    parsed = json.loads(raw)
-    rows = parsed["data"][0]
-    return [row[0] for row in rows if row]
+    """The unit NAMES, which is all this graph validates a target against.
+
+    The reply's shape and the field positions live in
+    harnais/host_exec.py, because the units collector reads the state
+    fields off the same rows. This one kept only index 0 and threw the
+    rest away, which is why "aucune erreur sur mon Deck ?" was answered
+    without a single unit state in the context.
+    """
+    return [row[host_exec.UNIT_NAME] for row in host_exec.parse_units(raw)]
 
 
 def running_containers() -> list[str]:

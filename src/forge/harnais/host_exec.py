@@ -48,6 +48,7 @@ to avoid duplicating. The dependency now points the way the document
 says it does.
 """
 
+import json
 import subprocess
 
 from forge.config import (
@@ -129,6 +130,32 @@ def discover_containers_cmd() -> list[str]:
     from the same `podman ps`, which is why the format string is an
     argument here rather than baked into podman_cmd."""
     return podman_cmd("ps", "--format", "{{.Names}}")
+
+
+#: Where each field sits in a ListUnits tuple. The D-Bus signature is
+#: a(ssssssouso) -- an array of 10-field tuples, verified against real
+#: production output before this was written rather than read off the
+#: spec. Named because two callers now read different fields and an
+#: index literal in either of them is a silent wrong answer, not an
+#: error: every field is a string.
+UNIT_NAME = 0
+UNIT_LOAD_STATE = 2
+UNIT_ACTIVE_STATE = 3
+UNIT_SUB_STATE = 4
+_UNIT_FIELDS = 10
+
+
+def parse_units(raw: str) -> list[list]:
+    """Every ListUnits row, whole.
+
+    `busctl --json=short` wraps the array as {"type": "...", "data":
+    [rows]}, where data[0] is the array of tuples. Rows shorter than
+    the signature are dropped rather than padded: a tuple that is not
+    the shape this was verified against is not a unit anyone should
+    read a state off.
+    """
+    rows = json.loads(raw)["data"][0]
+    return [row for row in rows if row and len(row) >= _UNIT_FIELDS]
 
 
 def collect_cmd(kind: str, name: str) -> list[str]:

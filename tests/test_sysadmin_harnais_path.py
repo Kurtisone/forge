@@ -34,6 +34,7 @@ from forge import harnais, non_answer
 from forge.harnais.collectors import containers as containers_mod
 from forge.harnais.collectors import cpu_ram as cpu_ram_mod
 from forge.harnais.collectors import logs as logs_mod
+from forge.harnais.collectors import units as units_mod
 
 MEMINFO = "MemTotal: 15160368 kB\nMemAvailable: 9059480 kB\n"
 LOADAVG = "0.90 0.72 0.54 1/1594 2759\n"
@@ -71,6 +72,14 @@ def healthy_machine(monkeypatch):
         lambda path: MEMINFO if path == cpu_ram_mod._MEMINFO else LOADAVG,
     )
     monkeypatch.setattr(logs_mod, "_run_fixed", lambda cmd, t: KERNEL)
+    monkeypatch.setattr(
+        units_mod,
+        "_run_fixed",
+        lambda cmd, t: (
+            '{"type":"a","data":[[["forge.service","","loaded",'
+            '"active","running","","/",0,"","/"]]]}'
+        ),
+    )
 
 
 def _run(question=QUESTION, target=None):
