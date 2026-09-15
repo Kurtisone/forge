@@ -304,6 +304,47 @@ class Orchestrator:
         self.max_steps = max_steps
 
     def run(self, user_input: str) -> AgentResult:
+        """
+        One turn, with the turn channel guaranteed not to outlive it.
+
+        turn.py says of itself that it "follows subtrace.py: a module
+        the orchestrator sets at the top of a run and clears when it
+        finishes", and turn.get_input() promises "the raw message, or
+        '' outside a run (direct calls, tests)". Nothing cleared it,
+        so neither was true.
+
+        It is thread-local because api.py serves requests from ONE
+        ThreadPoolExecutor with two workers -- and that is exactly what
+        made this reachable rather than theoretical. `POST /chat` runs
+        the orchestrator on a worker and leaves the message behind;
+        `POST /run` runs any registered graph on the SAME pool without
+        going through here, so it reads whatever the last chat turn on
+        that worker left. Which of the two workers picks up the
+        request decides the answer.
+
+        Reproduced with one worker, a /chat turn, then a /run of the
+        research graph with query "recette du bourguignon":
+        names_something_local returned "searxng", from the previous
+        turn. That appends a footer about a container to an answer
+        about beef stew. graphs/delegate.py would write the wrong
+        request into a job's objective, and tools/memory.py would see
+        a stale message ending in "?" and turn a `remember` into a
+        recall of someone else's question -- a write silently becoming
+        an unrelated read.
+
+        A wrapper rather than a try/finally around the body, so the
+        body is not reindented and stays readable in `git blame`.
+        """
+        try:
+            return self._run(user_input)
+        finally:
+            # Same contract as outcome.clear() and current_job.clear()
+            # below, which this run does on the way IN. Those are set
+            # during a run, so clearing on entry is enough; this one
+            # is set on entry, so it has to be cleared on the way out.
+            turn.clear()
+
+    def _run(self, user_input: str) -> AgentResult:
         # Reset before anything else: _recall() below can trigger
         # compaction, which calls the LLM, and that call belongs to
         # this run's bill.
