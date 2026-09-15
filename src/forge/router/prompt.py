@@ -446,10 +446,19 @@ _TOOL_EXAMPLES = {
             ),
         ),
         # Contrast: vague problem, no named service -- still sysadmin,
-        # but with no target_hint. Only THIS shape reaches the kernel
-        # logs: since the target_missed node landed, a hint that
-        # discovery does not recognise stops the run instead of
-        # falling back (see graphs/sysadmin.py).
+        # but with no target_hint.
+        #
+        # THIS EXAMPLE WAS MEASURED BEING IGNORED. On 2026-09-14 the
+        # model answered two turns of exactly this shape ("Tu peux
+        # vérifier pourquoi mon Deck rame ?", "Aucune erreur sur mon
+        # Deck ?") with target_hint="forge-podman-ro-proxy", copied
+        # out of a `shell` turn still in the history. The example
+        # below is the right thing to show and it is not a guarantee
+        # -- graphs/sysadmin.py now checks the hint against the user's
+        # own words and the question, and treats a name appearing in
+        # neither as an artefact, falling back to observing the
+        # machine. A hint the user DID name and discovery does not
+        # recognise still stops the run.
         (
             "Mon Steam Deck rame depuis ce matin, tu peux regarder ?",
             (

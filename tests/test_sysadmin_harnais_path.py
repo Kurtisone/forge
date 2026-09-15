@@ -503,6 +503,12 @@ def test_the_three_refusals_still_fire_before_any_observation(
     keeps a model from being handed evidence about a different subject
     than the question -- each written in code because a model given
     exactly that answered fluently anyway.
+
+    The question names the target. That is not decoration: since
+    2026-09-15 a hint appearing in neither the user's message nor the
+    router's restatement is treated as a router artefact and falls
+    back to route A, so a question of "pourquoi ?" would exercise that
+    path instead of these refusals.
     """
 
     def discover_then_fail(cmd, timeout):
@@ -526,7 +532,7 @@ def test_the_three_refusals_still_fire_before_any_observation(
 
     monkeypatch.setattr(sysadmin_mod, "call_llm", no_call)
 
-    state = _run(question="pourquoi ?", target=target)
+    state = _run(question=f"pourquoi {target} ne répond plus ?", target=target)
 
     assert _nodes(state)[-1] == expected
     assert non_answer.is_non_answer(state.final_output)
