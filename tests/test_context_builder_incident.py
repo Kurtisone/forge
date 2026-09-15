@@ -45,6 +45,7 @@ from forge import harnais
 from forge.harnais.collectors import containers as containers_mod
 from forge.harnais.collectors import cpu_ram as cpu_ram_mod
 from forge.harnais.collectors import logs as logs_mod
+from forge.harnais.collectors import units as units_mod
 from forge.kernel.context_builder import (
     ContextBuilder,
     fact_claims,
@@ -74,6 +75,12 @@ KERNEL_LOGS = (
     "kernel: wlan0: authenticate with 3c:37:86:1f:2a:b0"
 )
 
+#: systemd answering with nothing wrong, in the real ListUnits shape.
+UNITS_ALL_WELL = (
+    '{"type":"a(ssssssouso)","data":[[["forge.service","","loaded",'
+    '"active","running","","/",0,"","/"]]]}'
+)
+
 MEMINFO = "MemTotal: 15160368 kB\nMemAvailable: 9059480 kB\n"
 LOADAVG = "0.14 0.39 0.68 1/1594 2759\n"
 
@@ -90,6 +97,11 @@ def _broken_world(monkeypatch) -> InMemoryWorldModel:
     )
     monkeypatch.setattr(containers_mod, "_run_fixed", lambda cmd, timeout: PROXY_DOWN)
     monkeypatch.setattr(logs_mod, "_run_fixed", lambda cmd, timeout: KERNEL_LOGS)
+    # systemd itself was answering on that run; only the podman proxy
+    # was down. Patched rather than left alone because an unpatched
+    # collector reads the machine the suite is running on -- which is
+    # how the units collector shipped with four CI failures.
+    monkeypatch.setattr(units_mod, "_run_fixed", lambda cmd, timeout: UNITS_ALL_WELL)
 
     world = InMemoryWorldModel()
     for observation in harnais.observe(harnais.default_collectors()):
@@ -201,6 +213,16 @@ def test_nothing_readable_at_all_refuses_instead_of_thinning_out(monkeypatch):
     monkeypatch.setattr(
         logs_mod, "_run_fixed", lambda cmd, timeout: "[error] journalctl: no journal"
     )
+    monkeypatch.setattr(
+        units_mod, "_run_fixed", lambda cmd, timeout: "[error] busctl: no bus"
+    )
+
+    answered = [
+        o.collector
+        for o in harnais.observe(harnais.default_collectors())
+        if not o.failed
+    ]
+    assert not answered, f"{answered} answered: this test is reading the real machine"
 
     world = InMemoryWorldModel()
     for observation in harnais.observe(harnais.default_collectors()):
