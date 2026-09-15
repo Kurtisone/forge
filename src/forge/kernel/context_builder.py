@@ -88,7 +88,12 @@ _BLOCK_CLOSE = "--- end {label} ---"
 #: about a domain the store has never heard of -- which is a different
 #: statement from "the reading failed", and a very different one from
 #: silence.
-MVP_DOMAINS: tuple[str, ...] = ("cpu", "ram", "container", "logs")
+#: Order matters: it is the order the reader meets the evidence in, and
+#: `unit` sits next to `container` because the two answer the same
+#: question about different kinds of service. `logs` stays last -- it is
+#: the only domain whose value is a block of prose rather than a
+#: measurement, and the budget truncates from the end.
+MVP_DOMAINS: tuple[str, ...] = ("cpu", "ram", "container", "unit", "logs")
 
 _NEVER_ASKED = "no collector was asked about this"
 

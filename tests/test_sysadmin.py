@@ -59,6 +59,7 @@ def _patch_harnais_collectors(monkeypatch, containers="test-container"):
 
     from forge.harnais.collectors import containers as containers_mod
     from forge.harnais.collectors import cpu_ram as cpu_ram_mod
+    from forge.harnais.collectors import units as units_mod
 
     now = int(datetime.now().timestamp())  # noqa: DTZ005
     rows = "\n".join(
@@ -73,6 +74,14 @@ def _patch_harnais_collectors(monkeypatch, containers="test-container"):
             if path == cpu_ram_mod._MEMINFO
             else "0.90 0.72 0.54 1/1594 2759\n"
         ),
+    )
+    # A healthy machine: busctl answers, nothing is failing. Left
+    # unpatched, this collector would really try to run busctl and the
+    # observe step would report a failure the test never intended.
+    monkeypatch.setattr(
+        units_mod,
+        "_run_fixed",
+        lambda cmd, t: _fake_busctl_units_json(["searxng.service", "forge.service"]),
     )
 
 

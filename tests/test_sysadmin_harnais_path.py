@@ -34,6 +34,7 @@ from forge import harnais, non_answer
 from forge.harnais.collectors import containers as containers_mod
 from forge.harnais.collectors import cpu_ram as cpu_ram_mod
 from forge.harnais.collectors import logs as logs_mod
+from forge.harnais.collectors import units as units_mod
 
 MEMINFO = "MemTotal: 15160368 kB\nMemAvailable: 9059480 kB\n"
 LOADAVG = "0.90 0.72 0.54 1/1594 2759\n"
@@ -71,6 +72,14 @@ def healthy_machine(monkeypatch):
         lambda path: MEMINFO if path == cpu_ram_mod._MEMINFO else LOADAVG,
     )
     monkeypatch.setattr(logs_mod, "_run_fixed", lambda cmd, t: KERNEL)
+    monkeypatch.setattr(
+        units_mod,
+        "_run_fixed",
+        lambda cmd, t: (
+            '{"type":"a","data":[[["forge.service","","loaded",'
+            '"active","running","","/",0,"","/"]]]}'
+        ),
+    )
 
 
 def _run(question=QUESTION, target=None):
@@ -188,6 +197,37 @@ def blind_machine(monkeypatch):
     )
     monkeypatch.setattr(
         logs_mod, "_run_fixed", lambda cmd, t: "[error] journalctl: no journal"
+    )
+    monkeypatch.setattr(
+        units_mod, "_run_fixed", lambda cmd, t: "[error] busctl: Failed to connect"
+    )
+
+
+def test_the_blind_fixture_really_blinds_every_collector(blind_machine):
+    """
+    The fixture above has to cover EVERY collector, and this is what
+    says so on a machine that is not mine.
+
+    It did not, and CI found it: the units collector was added without
+    being patched here, so it ran the real busctl. In the Flatpak
+    sandbox this session runs in there is no busctl, so it failed and
+    the fixture looked complete; on a CI image there is one, it
+    answered, and four tests below this line failed for a reason that
+    had nothing to do with what they test.
+
+    Asserted on the collectors rather than on the context, so a sixth
+    collector trips THIS test by name instead of making a refusal test
+    fail somewhere else.
+    """
+    answered = [
+        o.collector
+        for o in harnais.observe(harnais.default_collectors())
+        if not o.failed
+    ]
+
+    assert not answered, (
+        f"{answered} answered under blind_machine, so it is reading the "
+        "machine the suite runs on rather than the fixture"
     )
 
 

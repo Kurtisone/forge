@@ -120,6 +120,7 @@ def test_a_failed_read_is_stated_as_unobserved_with_its_reason():
         "[unobserved] cpu: no collector was asked about this",
         "[unobserved] ram: no collector was asked about this",
         "[unobserved] container: [error] proxy down",
+        "[unobserved] unit: no collector was asked about this",
         "[unobserved] logs: no collector was asked about this",
     ]
     assert not states_fact_about(context, "container")

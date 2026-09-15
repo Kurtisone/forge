@@ -409,7 +409,7 @@ def test_an_unavailable_collector_is_reported_not_skipped():
 
 def test_the_default_collectors_cover_the_mvp_domains():
     covered = {d for c in harnais.default_collectors() for d in c.domains}
-    assert covered == {"cpu", "ram", "container", "logs"}
+    assert covered == {"cpu", "ram", "container", "unit", "logs"}
 
 
 def test_a_container_list_on_the_line_cap_is_refused(monkeypatch):
