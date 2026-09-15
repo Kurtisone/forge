@@ -1305,3 +1305,113 @@ def test_the_empty_marker_has_exactly_one_definition():
 
     assert containers_mod._NO_OUTPUT is sysadmin_mod.NO_OUTPUT
     assert logs_mod._NO_OUTPUT is sysadmin_mod.NO_OUTPUT
+
+
+class TestRunningContainersSaysWhyItIsEmpty:
+    """
+    The published helper, tested directly for the first time.
+
+    Every other test in the repo replaces running_containers() with a
+    lambda -- which is right for those tests and means the function at
+    the centre of run #83fc443e was never itself exercised.
+
+    Its contract is deliberate and unchanged here: [] on any failure,
+    because a caller cannot tell "no containers" from "the proxy is
+    down" and must not act as though it could. What changed is that
+    the erasure now leaves a trace. It was the only place in the
+    codebase that asks podman and says nothing when the answer is a
+    failure -- _discover_node logs it and keeps it in
+    `discover_containers_error`, and the Harnais collector returns it
+    as an Observation carrying the reason.
+    """
+
+    PROXY_DOWN = (
+        "[error] podman exited 125: Error: unable to connect to Podman socket: "
+        "dial unix /run/forge-podman-ro-proxy/sock: connect: "
+        "no such file or directory"
+    )
+
+    def test_a_dead_proxy_is_reported_with_podman_s_own_words(
+        self, monkeypatch, caplog
+    ):
+        """
+        The three days this is for: 2026-09-11 to 09-14, both host
+        proxy units pointing at a checkout that had moved, every
+        `podman ps` failing. graphs/research.py's _LOCAL_FOOTER -- the
+        repair for a measured misrouting -- was off for the whole
+        outage, because an empty list reads as "no containers". The
+        safety net vanished with the thing it catches and nothing said
+        so, which is why it took three days and an unrelated question
+        to notice.
+        """
+        monkeypatch.setattr(
+            sysadmin_mod, "_run_fixed", lambda cmd, timeout: self.PROXY_DOWN
+        )
+
+        with caplog.at_level("WARNING"):
+            assert sysadmin_mod.running_containers() == []
+
+        assert "running_containers" in caplog.text
+        # podman's own text, not a rewording of it: the message names
+        # the socket, which is what tells someone where to look.
+        assert "no such file or directory" in caplog.text
+
+    def test_the_callers_still_get_the_safe_answer(self, monkeypatch):
+        """
+        The log is additive. Returning the error text, or raising,
+        would hand graphs/research.py a container named "[error]" --
+        the same class of mistake as systemctl's failure message once
+        becoming two units called "System" and "Failed".
+        """
+        monkeypatch.setattr(
+            sysadmin_mod, "_run_fixed", lambda cmd, timeout: self.PROXY_DOWN
+        )
+
+        assert sysadmin_mod.running_containers() == []
+
+    def test_an_idle_machine_is_not_reported_as_a_failure(self, monkeypatch, caplog):
+        """
+        The other half, and the reason the test above asserts on the
+        LOG rather than on emptiness: a machine with nothing running
+        returns [] too, and must stay quiet. Warning on both would
+        make the signal worth exactly as much as the silence it
+        replaced.
+
+        This assertion was written as `== []` and FAILED against
+        `["[no output]"]`, which is how the phantom below was found.
+        """
+        monkeypatch.setattr(
+            sysadmin_mod, "_run_fixed", lambda cmd, timeout: sysadmin_mod.NO_OUTPUT
+        )
+
+        with caplog.at_level("WARNING"):
+            assert sysadmin_mod.running_containers() == []
+
+        assert caplog.text == ""
+
+    def test_an_empty_reply_is_never_a_container_called_no_output(self):
+        """
+        _run_fixed returns the literal "[no output]" for a command
+        that succeeded and printed nothing, so the parse has to know
+        it. Without this, an idle machine reported ONE container with
+        that name -- to the user in the discovery sub-step, and into
+        `state.context["containers"]`, where _collect_node validates
+        targets against it.
+
+        Asserted on _container_names directly because it is the shared
+        parse: running_containers() and _discover_node both use it,
+        and a guard in only one of them is exactly how this survived.
+        """
+        assert sysadmin_mod._container_names(sysadmin_mod.NO_OUTPUT) == []
+        assert sysadmin_mod._container_names(f"  {sysadmin_mod.NO_OUTPUT}\n") == []
+        # and a real container whose name merely contains it is untouched
+        assert sysadmin_mod._container_names("forge\nsearxng") == ["forge", "searxng"]
+
+    def test_the_names_come_back_when_podman_answers(self, monkeypatch):
+        monkeypatch.setattr(
+            sysadmin_mod,
+            "_run_fixed",
+            lambda cmd, timeout: "forge\nforge-llm\nsearxng\n",
+        )
+
+        assert sysadmin_mod.running_containers() == ["forge", "forge-llm", "searxng"]

@@ -219,12 +219,66 @@ def running_containers() -> list[str]:
     Empty on any failure, which is the only safe answer here -- a
     caller cannot tell "no containers" from "the proxy is down" and
     must not act as though it could.
+
+    Safe for the CALLER is not the same as silent. Until 2026-09-14
+    this discarded podman's error text without a word, and it was the
+    only place in the codebase that asks podman and says nothing when
+    the answer is a failure: _discover_node logs the same failure and
+    keeps it in `discover_containers_error`, and the Harnais collector
+    returns it as an Observation carrying the reason.
+
+    What that cost is on the record. The host proxy units spent three
+    days (2026-09-11 to 09-14) pointing at a checkout that had moved,
+    so every `podman ps` failed, and the one caller outside this module
+    -- graphs/research.py, asking whether a web question named a local
+    container -- went quiet. Its _LOCAL_FOOTER is the repair for a
+    measured misrouting (18 research calls in the traces, 2 of them
+    local questions, one being the exact sentence the router prompt
+    gives as a counter-example), and it was off for the whole outage:
+    the safety net disappears with the thing it catches. Nothing said
+    so, which is why it took three days and an unrelated question to
+    notice.
+
+    The return value stays []: the callers are right to be given the
+    safe answer, and changing what they receive is a different change.
+    What the log adds is a trace of the erasure, so that "the proxy is
+    down" is discoverable without somebody happening to ask.
     """
     raw = _run_fixed(_DISCOVER_CONTAINERS_CMD(), SYSADMIN_DISCOVERY_TIMEOUT)
-    return [] if raw.startswith("[error]") else _container_names(raw)
+    if raw.startswith("[error]"):
+        # Same level and shape as _discover_node's own line, so the two
+        # readings of `podman ps` read alike in a log.
+        log.warning("sysadmin: running_containers could not ask podman: %s", raw)
+        return []
+    return _container_names(raw)
 
 
 def _container_names(raw: str) -> list[str]:
+    """The names in a `podman ps` reply, and NO phantom for an empty one.
+
+    The NO_OUTPUT check is not defensive tidying. _run_fixed returns
+    the literal "[no output]" for a command that succeeded and printed
+    nothing, so without this a machine with nothing running reported
+    ONE container, named "[no output]" -- absence wearing the shape of
+    a measurement, which is the fault this whole area exists to
+    remove. It is the same class of mistake as systemctl's two-line
+    failure message becoming two units called "System" and "Failed"
+    (production, 2026-08-11), with the difference that this one says
+    something false about a machine that is merely idle.
+
+    Found on 2026-09-14 by writing the first direct test of
+    running_containers(): every other test in the repo replaces it
+    with a lambda, so the real parse had never run against the real
+    empty reply. The assertion was written expecting [] and passed
+    with ["[no output]"] instead.
+
+    Guarded here rather than in the two callers because both of them
+    -- running_containers() and _discover_node -- parse the same reply
+    the same way, and a check in one of them is how this happened.
+    harnais/collectors/containers.py already had it.
+    """
+    if raw.strip() == NO_OUTPUT:
+        return []
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
