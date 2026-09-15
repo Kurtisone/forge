@@ -74,6 +74,25 @@ consistently against the proxy throughout this whole investigation.
 `journalctl`/`podman logs` for actually reading logs are unaffected by
 any of this (neither goes through D-Bus).
 
+**What this proxy's scope means for what Forge can see.** The address
+above is the SYSTEM bus (`/run/dbus/system_bus_socket`), so ListUnits
+returns system units and nothing else. The two units this file installs
+are `systemd --user` units -- so **Forge cannot see its own proxies**,
+and `graphs/sysadmin.py` cannot answer "why is forge-podman-ro-proxy not
+working?", which is precisely the question that would have caught the
+2026-09-11 outage three days earlier.
+
+It matters more since `harnais/collectors/units.py` landed
+(2026-09-15), which reports every unit that is not `active` or
+`inactive` -- including `activating (auto-restart)`, the shape a restart
+loop has, and the shape both proxies had for those three days. A
+system-level service failing that way is reported; these two are not.
+
+Closing it means a second filtered proxy on the SESSION bus, with the
+same read-only call allowlist. Not done: it widens what Forge can reach
+into the user's own systemd manager, which is a decision rather than an
+oversight.
+
 ### 3. podman logs/ps -- podman_ro_proxy.py
 
 podman.sock exposes podman's full REST API. A `:ro` bind mount only

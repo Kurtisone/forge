@@ -22,7 +22,7 @@ l'absence du neuf.
 | Section | Fichier | État |
 |---|---|---|
 | 4 (Fact/Hypothesis/Correlation) | [`src/forge/harnais/facts.py`](../src/forge/harnais/facts.py) | livré |
-| 3.2 (Collectors) | [`src/forge/harnais/collectors/`](../src/forge/harnais/collectors/) | livré — 3 collectors |
+| 3.2 (Collectors) | [`src/forge/harnais/collectors/`](../src/forge/harnais/collectors/) | livré — 4 collectors, domaines `cpu` `ram` `container` `unit` `logs` |
 | 3.5 (World Model) | [`src/forge/kernel/world_model.py`](../src/forge/kernel/world_model.py) | livré, en mémoire |
 | 3.8 (Context Builder) | [`src/forge/kernel/context_builder.py`](../src/forge/kernel/context_builder.py) | livré, branché sur les deux chemins de `sysadmin` |
 | 3.4 (Host Model), 3.6 (persistance), 3.10 (Action Executor), 7 (V2/V3) | — | pas commencé |
@@ -47,8 +47,9 @@ lisibles séparément.
    `cpu_ram` est de la plomberie neuve (deux fichiers `/proc`, zéro
    subprocess), pas un wrapper.
 3. **§4, `Fact` n'a aucun champ pour l'entité dont il parle.** Les faits
-   par conteneur l'encodent dans `key` (`forge-llm.status`). Tient à
-   trois collectors ; voudra un vrai champ quand le Host Model de la V2
+   par conteneur et par unité l'encodent dans `key`
+   (`forge-llm.status`, `cups.service.state`). Tient à quatre
+   collectors ; voudra un vrai champ quand le Host Model de la V2
    nommera les entités.
 4. **§4, `WorldEvent` n'a pas de `domain`, alors que §5 filtre dessus.**
    Champ ajouté, et la dataclass gelée : un enregistrement d'audit
@@ -104,6 +105,37 @@ besoin d'un appel pour l'être ; ce que le bench a mesuré est l'aval,
 c'est-à-dire si ce modèle-ci répond *mieux* depuis un contexte honnête
 que depuis un bloc de logs. La phase Observable est donc faite pour
 `sysadmin`, et pas pour la V2.
+
+### Le domaine `unit`, et pourquoi il n'est pas de la V2 (15/09)
+
+Un quatrième collector, et il ne lance rien de neuf : `busctl ListUnits`
+tournait à chaque tour `sysadmin` depuis août, sa signature D-Bus est
+`a(ssssssouso)` et son champ 3 est `active_state`. `_parse_busctl_units`
+gardait le champ 0 et jetait le reste — donc la réponse à « est-ce que
+quelque chose est en panne ? » arrivait dans la même réponse à chaque
+fois et partait à la poubelle.
+
+Ce n'est pas la V2 : ni Host Model, ni persistance, ni corrélation. La
+V2 telle que ce document la décrit n'est justifiée par **aucune** des
+six vraies questions lues dans `/traces` — `uptime_s` répond déjà « ça
+vient de redémarrer » sans le moindre historique. Ce qui a justifié
+celui-ci est une question posée le 14/09, « Aucune erreur sur mon
+Deck ? », répondue sans un seul état d'unité dans le contexte.
+
+N'entrent que les unités qui ne sont **ni `active` ni `inactive`**, plus
+le compte. 522 unités vivent sur cette machine et une sur deux est du
+bruit `.device` ; un contexte qui les porterait toutes dépenserait son
+budget entier à dire que rien ne va mal. `activating (auto-restart)`
+compte comme « pas bien » : c'est la forme d'une boucle de redémarrage,
+et c'est ce que les deux proxies de l'hôte ont fait pendant trois jours
+en septembre sans que rien ne le signale.
+
+**Et il ne voit justement pas ces deux-là.** `forge-dbus-proxy` et
+`forge-podman-ro-proxy` sont des unités `systemd --user`, et
+`deploy/forge-dbus-proxy.sh` expose le bus **système** : elles ne
+peuvent pas apparaître dans cette réponse. Trou de déploiement,
+enregistré et non corrigé — le fermer demande un second proxy sur le
+bus de session.
 
 ---
 
