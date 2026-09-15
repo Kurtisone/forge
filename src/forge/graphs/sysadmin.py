@@ -91,9 +91,10 @@ Usage (Python):
 
 import difflib
 import json
+import re
 from datetime import datetime
 
-from forge import harnais, lang, non_answer, subtrace
+from forge import harnais, lang, non_answer, subtrace, turn
 from forge.config import (
     ENFORCE_ANSWER_LANGUAGE,
     SYSADMIN_COLLECT_TIMEOUT,
@@ -377,6 +378,79 @@ def _discover_node(state: AgentState) -> AgentState:
     return state
 
 
+def _squash(text: str) -> str:
+    """Lowercase, letters and digits only.
+
+    So that a user who writes `forge llm` or `forge_llm` is credited
+    with having named `forge-llm`. Separators are the only difference
+    worth absorbing: anything cleverer starts guessing.
+    """
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _hint_came_from_the_user(state: AgentState) -> bool:
+    """
+    Whether the target the router handed us appears in what the user
+    actually typed.
+
+    WHY THIS EXISTS, MEASURED IN PRODUCTION
+
+    Five real sysadmin turns on 2026-09-14, read back from /traces.
+    Two of them named no target at all -- "Tu peux verifier pourquoi
+    mon Deck rame ?" and "Aucune erreur sur mon Deck ?" -- and the
+    router attached `forge-podman-ro-proxy` to both. That string was in
+    the rolling history: a `shell` turn at 15:19 had run `podman --url
+    unix:///run/forge-podman-ro-proxy/sock ps`. It is h02's family, the
+    one already written down in CLAUDE.md -- the model does not guess a
+    name, it copies the most salient one in front of it.
+
+    The router prompt already carries the rule, with that exact
+    sentence as its example ("Mon Steam Deck rame depuis ce matin" ->
+    no target_hint, router/prompt.py). It was followed most of the time
+    and violated in silence the rest, which is the thirteenth time a
+    rule lived in a prompt here. So the replacement is arithmetic
+    between two texts, which the model cannot break.
+
+    BOTH THE TURN AND THE ROUTER'S RESTATEMENT, and the five traces
+    are why. The restatement is written by the model that just invented
+    the name, so on its own it would be asking the witness -- but in
+    all five real turns it was faithful, and in the two invented cases
+    the name appears ONLY in target_hint:
+
+        user   : Tu peux verifier pourquoi mon Deck rame ?
+        router : {"target_hint": "forge-podman-ro-proxy",
+                  "question": "pourquoi le systeme rame-t-il ?"}
+
+    against the one legitimate miss, where it is in both:
+
+        user   : Pourquoi forge-podman-ro-proxy ne fonctionne pas ?
+        router : {"target_hint": "forge-podman-ro-proxy",
+                  "question": "pourquoi forge-podman-ro-proxy ne
+                               fonctionne pas ?"}
+
+    Reading both is therefore strictly more conservative -- it refuses
+    wherever either text carries the name -- and still correct on every
+    case measured. It also covers turn.get_input() going stale:
+    orchestrator.py sets it per run and nothing calls turn.clear(), so
+    a sub-run reached some other way would read the previous message.
+
+    FAILING TOWARDS THE REFUSAL. With no question to judge against --
+    direct calls, tests, anything not routed -- this returns True: we
+    cannot show the hint was invented, so nothing changes and the run
+    refuses as it always did. A hint short enough to collide by
+    accident (`ra` inside "rame") also reads as named, and also
+    refuses. Every uncertainty lands on the old behaviour, never on a
+    diagnosis of the wrong subject.
+    """
+    hint = _squash(state.context.get("target_hint") or "")
+    if not hint:
+        return True
+    question = state.context.get("question") or ""
+    if not question.strip():
+        return True
+    return hint in _squash(turn.get_input()) or hint in _squash(question)
+
+
 def _collect_node(state: AgentState) -> AgentState:
     """Picks exactly one collection target. target_hint must appear
     verbatim in discover_node's own units/containers list to be used
@@ -409,6 +483,31 @@ def _collect_node(state: AgentState) -> AgentState:
         # loses loudly. It now stops here: no logs, no model call, no
         # opportunity to confabulate, and the report names what was
         # actually broken (usually discovery, not the service).
+        if SYSADMIN_USE_HARNAIS and not _hint_came_from_the_user(state):
+            # The user named nothing; the router copied a name out of
+            # the history. Refusing here answers a question nobody
+            # asked -- and worse, it withholds the answer the Harnais
+            # already has, since _harnais_path is `not target_hint` and
+            # a phantom hint switches route A off. So the run becomes
+            # the machine-wide one it should have been.
+            #
+            # The question is replaced by the user's own words for the
+            # same reason the check reads them: the restatement was
+            # written by the model that invented the name, and handing
+            # it to the Context Builder as the intent would put that
+            # name next to facts about something else -- which is
+            # exactly run #83fc443e's substitution, rebuilt.
+            state.context["target_invented"] = target_hint
+            state.context["target_hint"] = None
+            state.context["question"] = turn.get_input()
+            log.warning(
+                "sysadmin: target_hint %r appears nowhere in the user's message, "
+                "treating it as a router artefact and observing the machine instead",
+                target_hint,
+            )
+            log.event("sysadmin.target_invented", target=target_hint)
+            return state
+
         state.context["target_missed"] = target_hint
         log.warning(
             "sysadmin: target_hint %r not found in discovery "
@@ -1022,6 +1121,16 @@ def build() -> Graph:
     g.add_edge("observe", "nothing_observed", condition=_observed_nothing)
     g.add_edge("observe", "context_synthesize")
     # Order matters -- Graph takes the first matching edge.
+    #
+    # Before the three refusals, because it is not one: a target the
+    # user never typed is a router artefact, and the question it came
+    # with is a machine-wide question that route A answers. Measured in
+    # production, 2026-09-14 -- see _hint_came_from_the_user.
+    g.add_edge(
+        "collect",
+        "observe",
+        condition=lambda s: bool(s.context.get("target_invented")),
+    )
     g.add_edge(
         "collect",
         "target_missed",
@@ -1099,6 +1208,12 @@ def _to_sub_steps(state: AgentState) -> list[dict]:
         return f"{units_part} | {containers_part}"
 
     def collect_detail() -> str:
+        invented = state.context.get("target_invented")
+        if invented:
+            return (
+                f"cible « {invented} » absente de ta question (artefact du "
+                "routeur), observation de la machine à la place"
+            )
         missed = state.context.get("target_missed")
         if missed:
             return f"cible « {missed} » introuvable, aucun log collecté"

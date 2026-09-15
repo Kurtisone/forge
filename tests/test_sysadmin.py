@@ -181,6 +181,11 @@ def test_a_missed_target_reports_failed_discovery_as_the_likelier_cause(monkeypa
     containers -> the hint matched nothing. "I could not find your
     container" is true and useless; "container discovery failed" is
     what the user has to act on.
+
+    The question names the target, and has to: a hint that appears in
+    neither the user's message nor the router's restatement is read as
+    a router artefact and falls back to observing the machine, which
+    is a different test (_hint_came_from_the_user).
     """
 
     def broken_containers(cmd, timeout):
@@ -195,7 +200,10 @@ def test_a_missed_target_reports_failed_discovery_as_the_likelier_cause(monkeypa
 
     state = build_sysadmin().run(
         "",
-        initial_context={"target_hint": "forge-llm", "question": "pourquoi ?"},
+        initial_context={
+            "target_hint": "forge-llm",
+            "question": "pourquoi forge-llm ne répond plus ?",
+        },
     )
 
     assert "connection refused" in state.final_output
