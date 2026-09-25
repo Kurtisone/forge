@@ -21,7 +21,8 @@ Auth: set API_TOKEN in the environment to require
 `Authorization: Bearer <token>` on every endpoint except /, /health
 and /pair/claim. Leaving it unset no longer silently opens the API --
 the app refuses to start unless API_ALLOW_UNAUTHENTICATED=true says the
-open posture is intentional. See check_auth_configuration() below.
+open posture is intentional. A token shorter than MIN_API_TOKEN_LENGTH
+is refused too. See check_auth_configuration() below.
 
 /pair/claim is open because it is the endpoint that HANDS OUT the
 bearer token: requiring one would make pairing impossible. What guards
@@ -79,10 +80,28 @@ class InsecureConfiguration(RuntimeError):
     without anyone having asked for that in writing."""
 
 
+#: Shortest bearer token the app will start with. Below it a token is a
+#: word somebody chose, and the rate limit (30 requests a minute per
+#: address) stops being a defence: a dictionary tries its likeliest
+#: candidates in the first minute. 24 characters is what
+#: ``secrets.token_hex(12)`` produces, 96 bits. It is a floor on LENGTH
+#: and nothing more -- no code can tell a random string from a chosen
+#: one, and a denylist of "1234" and "password" would enumerate the
+#: wrong side of the problem.
+MIN_API_TOKEN_LENGTH = 24
+
+
 def check_auth_configuration() -> None:
     """
     Refuse to start with no API_TOKEN unless API_ALLOW_UNAUTHENTICATED
-    is explicitly set.
+    is explicitly set, and refuse a token shorter than
+    MIN_API_TOKEN_LENGTH whatever else is set.
+
+    The second refusal holds even under API_ALLOW_UNAUTHENTICATED: a
+    non-empty token is enforced by ``require_token`` either way, so the
+    opt-out does not make a weak one any less the only gate. The refusal
+    names the token's length and never its value -- this message goes to
+    the container log.
 
     /chat dispatches whatever is in ENABLED_TOOLS -- shell, files, test,
     sysadmin -- and the container's CMD binds 0.0.0.0. So "no token" is
@@ -94,6 +113,16 @@ def check_auth_configuration() -> None:
     so tests (and anything embedding the app) can patch them at the
     same boundary the auth dependency already uses.
     """
+    if API_TOKEN and len(API_TOKEN) < MIN_API_TOKEN_LENGTH:
+        raise InsecureConfiguration(
+            f"refusing to start: API_TOKEN is {len(API_TOKEN)} characters "
+            f"long and the minimum is {MIN_API_TOKEN_LENGTH}. A short token "
+            "is a guessable one, and the rate limit does not stop a "
+            "dictionary. Generate one with: "
+            "python3 -c 'import secrets; print(secrets.token_hex(24))' "
+            "and put it in .env.local. Devices already paired hold the "
+            "old token and will need !pair again."
+        )
     if API_TOKEN or API_ALLOW_UNAUTHENTICATED:
         return
     raise InsecureConfiguration(
