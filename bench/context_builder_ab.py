@@ -106,7 +106,13 @@ def _containers(uptimes: dict[str, int]) -> Observation:
     return Observation.of("containers", ("container",), facts, NOW)
 
 
-def _cpu_ram(used_pct: float, load: float) -> Observation:
+def _cpu_ram(
+    used_pct: float, load: float, loads: tuple[float, float] | None = None
+) -> Observation:
+    """`loads` is the real (5 min, 15 min) pair when a fixture has one;
+    without it they are derived from `load`, as every fixture did before
+    one was built from a reading."""
+    load_5m, load_15m = loads or (round(load * 0.8, 2), round(load * 0.6, 2))
     total = 15160368
     facts = [
         Fact("ram", "total_kb", total, "kB", NOW, "cpu_ram"),
@@ -120,8 +126,8 @@ def _cpu_ram(used_pct: float, load: float) -> Observation:
         ),
         Fact("ram", "used_pct", used_pct, "%", NOW, "cpu_ram"),
         Fact("cpu", "load_1m", load, None, NOW, "cpu_ram"),
-        Fact("cpu", "load_5m", round(load * 0.8, 2), None, NOW, "cpu_ram"),
-        Fact("cpu", "load_15m", round(load * 0.6, 2), None, NOW, "cpu_ram"),
+        Fact("cpu", "load_5m", load_5m, None, NOW, "cpu_ram"),
+        Fact("cpu", "load_15m", load_15m, None, NOW, "cpu_ram"),
     ]
     return Observation.of("cpu_ram", ("cpu", "ram"), facts, NOW)
 
@@ -192,6 +198,16 @@ ALL_UP = {
     "searxng": 10800,
 }
 LLM_JUST_RESTARTED = {**ALL_UP, "forge-llm": 247}
+#: Up for about a day, as on 2026-09-15 ("actifs depuis 26 à 28 heures").
+DAY_UP = dict.fromkeys(ALL_UP, 97200)
+
+
+def _healthy_world() -> InMemoryWorldModel:
+    return _world(
+        _containers(DAY_UP),
+        _cpu_ram(68.5, 3.24, loads=(4.24, 2.35)),
+        _logs(QUIET_KERNEL),
+    )
 
 
 # --------------------------------------------------------------------
@@ -339,6 +355,55 @@ FIXTURES = [
         "09-14. The container state cannot be read. The correct answer is to say so "
         "and name the broken command -- NOT to diagnose the container from a kernel "
         "log that never mentions it.",
+    },
+    # --- a healthy machine -------------------------------------------------
+    #
+    # Every fixture above plants a cause, and scores the words it is made
+    # of. Production has asked about nothing else but a healthy machine:
+    # the six Harnais answers in /traces from 2026-09-14 to 09-26 were all
+    # given with every container up, no unit failed and a quiet kernel.
+    # The three on route A were all wrong in the one direction a
+    # planted-cause fixture cannot show -- a cause named where there was
+    # none, or "I cannot confirm" beside `failed_count = 0`. So these two
+    # score that direction: `risk` is the words of an invented cause or
+    # of a refusal to conclude, `cause` those of the correct answer.
+    #
+    # One world, two questions, so the question is the only thing that
+    # moves between them. The numbers are real readings: the loads as
+    # answer #d5ffe739 (2026-09-15) quoted them -- its context was not
+    # stored -- and the memory figure of answer #3b38bc60 (2026-09-26).
+    {
+        "name": "healthy_slow",
+        "question": "pourquoi mon Deck rame ?",
+        "logs": QUIET_KERNEL,
+        "world": lambda: _healthy_world(),
+        "cause": ["n'explique", "rien d'anormal", "aucune cause", "rien n'indique"],
+        "risk": ["élevé", "satur", "redémarr", "relanc", "docker", "accumul"],
+        "known": "Nothing observed explains slowness: a load of 3 to 4 on eight "
+        "threads, 68.5 % of memory used, every container up for a day, no unit "
+        "failed, a quiet kernel. #d5ffe739 called that load high and blamed the "
+        "uptime ('une accumulation'); #3b38bc60 read available memory as used and "
+        "blamed it. The correct answer says nothing observed explains it, and "
+        "what was not observed (the GPU, the disk).",
+    },
+    {
+        "name": "healthy_errors",
+        "question": "Aucune erreur sur mon Deck ?",
+        "logs": QUIET_KERNEL,
+        "world": lambda: _healthy_world(),
+        "cause": ["aucune unité", "0 unité", "en échec", "failed_count"],
+        "risk": [
+            "ne peux pas confirmer",
+            "ne couvrent pas",
+            "pas nécessairement",
+            "avant la lecture",
+            "journalctl -f",
+        ],
+        "known": "No error observed anywhere this Harnais looks: failed_count = 0, "
+        "four containers up, a quiet kernel log. #c9da18d4 had exactly that and "
+        "answered 'je ne peux pas confirmer', paraphrasing two sentences of the "
+        "Context Builder's own reading rules and never citing the unit count. "
+        "The correct answer cites the count and says what was not looked at.",
     },
 ]
 
