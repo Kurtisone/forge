@@ -490,8 +490,9 @@ system bus and both proxies are `systemd --user` units, so `ListUnits`
 never lists them: "why is forge-podman-ro-proxy not working?" is the one
 question `sysadmin` cannot answer. It was written here as the one that
 would have caught the three-day outage of 2026-09-11; v3.25 measured
-that and it is not -- it was asked once, during the outage, and would
-have shortened nothing. Closing it takes a second filtered proxy on the
+that and it is not -- it was asked once, on 2026-09-14 at 18:40, after
+both proxies were back (that turn's own discovery listed four containers
+and 318 units), and would have shortened nothing. Closing it takes a second filtered proxy on the
 session bus, which widens what Forge reaches into the user's systemd
 manager -- a decision, not an oversight.
 [deploy/README.md](../deploy/README.md) says so.
@@ -523,11 +524,14 @@ read on the phone as a Forge that is down, when Forge is up and has only
 lost its view of the host.
 
 It was proposed after measuring the alternative. A second proxy on the
-session bus would have seen the proxies' own units, and one of 35 real
-`sysadmin` questions since August asked about one, during the outage
-itself. It would have given the state and not the cause, since the log
-path filters on system units, and it would not have found the outage
-sooner, because nobody was asking. What was missing was detection, not
+session bus would have seen the proxies' own units, and one of 35
+`sysadmin` questions since August asked about one. Not during the
+outage, as this section first said: that turn's discovery listed four
+containers and 318 units, so both proxies were already back, and no
+`sysadmin` question at all was asked between 2026-08-22 and the
+afternoon of 2026-09-14. It would have given the state and not the
+cause, since the log path filters on system units, and it would not
+have found the outage sooner, because nobody was asking. What was missing was detection, not
 diagnosis, so that proxy stays deferred; its risks are in
 [deploy/README.md](../deploy/README.md).
 
