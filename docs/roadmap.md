@@ -487,10 +487,12 @@ later fails by name. The first check of the fix was worthless: a fake `busctl` o
 What it cannot see is its own proxies. `forge-dbus-proxy.sh` exposes the
 system bus and both proxies are `systemd --user` units, so `ListUnits`
 never lists them: "why is forge-podman-ro-proxy not working?" is the one
-question `sysadmin` cannot answer, and the one that would have caught
-the three-day outage of 2026-09-11. Closing it takes a second filtered
-proxy on the session bus, which widens what Forge reaches into the
-user's systemd manager -- a decision, not an oversight.
+question `sysadmin` cannot answer. It was written here as the one that
+would have caught the three-day outage of 2026-09-11; v3.25 measured
+that and it is not -- it was asked once, during the outage, and would
+have shortened nothing. Closing it takes a second filtered proxy on the
+session bus, which widens what Forge reaches into the user's systemd
+manager -- a decision, not an oversight.
 [deploy/README.md](../deploy/README.md) says so.
 
 ---
