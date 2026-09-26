@@ -45,6 +45,8 @@ lived.
 | **v3.20** | done | Five faults found in anger, plus 3.20.1 and 3.20.2 — [detail](#v320--five-faults-found-in-anger) |
 | **v3.21** | done | Forge stops assuming which model it is talking to, and the trace stops assuming a run answered — [detail](#v321--forge-stops-assuming-which-model-answered) |
 | **v3.22** | done | One backend per capability, and three UI bugs a human found in ten minutes — [detail](#v322--one-backend-per-capability-and-what-a-human-pass-is-for) |
+| **v3.23** | done | Phone pairing, and the Harnais: `sysadmin` reads observed facts instead of raw text, and says when it could not observe — [detail](#v323--the-harnais-and-the-first-time-production-measured-it) |
+| **v3.24** | done | A fourth collector, from a reply Forge was already throwing away — [detail](#v324--a-unit-domain) |
 | **Kernel L2** | done | Capability layer and a deterministic Policy Engine, both wired into the orchestrator, the API, the CLI and the graphs — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [The Kernel layer](architecture.md#the-kernel-layer). Sits on the architectural maturity axis, not this product roadmap |
 | **Kernel L3** | blocked | The Cognitive Scheduler, and the reason it is not started: every capability resolves to exactly one candidate, so there is nothing to arbitrate. `_dispatch` says so in code, and stops hard rather than picking silently. `CAPABILITY_PROVIDER` (v3.22) moves the choice from the process to the work without inventing the arbiter |
 
@@ -395,6 +397,101 @@ same evening on the same GGUF, with the prompt verified byte-identical
 and the KV cache ruled out by the harness's own `--no-cache`. Neither
 intermittent nor deterministic. A tripwire across restarts, whose value
 is that it flips.
+
+### v3.23 — the Harnais, and the first time production measured it
+
+Two lines of work. The second is what this section is about.
+
+The first is pairing a phone. `!pair` renders a QR in the thread that
+carries a single-use, short-lived token, and `POST /pair/claim`
+exchanges it once for the bearer token. The bearer token is never drawn:
+everything printed in the thread is persisted to `memory.json` and
+indexed in the vector store, so one rendered there would stay readable,
+and retrievable by a `recall`, for good. Around it, for the same client:
+`job_id` in `ChatResponse` so an app stops reading the job number out of
+prose, a timestamp per turn in history, the model's name in the UI, and
+`FORGE_PUBLIC_URL` as a comma-separated list (WireGuard and LAN).
+
+The second is the Harnais. Before it, `sysadmin` handed raw command
+output to the model, and the case on record was a downed podman proxy:
+`containers=0` read as "no containers", and the diagnosis that followed
+was confident and invented. Now collectors feed an in-memory World Model
+and a Context Builder writes what the synthesis reads, keeping what was
+observed apart from what could not be. Two decisions in it are
+structural rather than stylistic. `collect()` returns an `Observation`,
+not the `list[Fact]` the design document specifies, because a list has
+one way to say "no facts" and a `Fact` cannot carry a failure -- "proxy
+down" and "machine idle" would have reached the reader identical, which
+is the original bug. And `Fact.confidence` is `field(init=False)`, since
+a `Literal` alone enforces nothing at runtime.
+
+It is wired behind `SYSADMIN_USE_HARNAIS` (default `true`) on both paths
+of the graph. Route A, no target named, lets the collectors alone feed
+the context. Route C, a target named, keeps `_collect_node` as the
+validator and records its already-validated output as a `logs`
+observation, so no collector gained a target parameter and there is
+still no way from router text to `journalctl --unit=`. Both arms were
+put to the model in service before each was wired
+(`bench/context_builder_ab.py`); the measurements are in
+[harnais.md](harnais.md), not here.
+
+Then production measured it. Five real turns read from `/traces`: route
+C worked, twice. Route A never ran. Two questions that named no target
+came back from the router with `forge-podman-ro-proxy` as `target_hint`,
+copied from a shell turn in the history, and route A is gated on there
+being no target -- so a phantom one switched it off, and `target_missed`
+refused correctly where the Harnais knew the answer. It is the `h02`
+habit again: the model copies the prompt rather than guessing. A target
+the user never typed now falls back to route A. That fallback has not
+been exercised by a real turn; the router got the next question right
+unaided, so it is insurance, not field proof.
+
+The rest came from writing the first direct test of functions every
+other test replaces with a lambda. `nothing_collected` could never
+fire: `_run_fixed` returns the string `[no output]` and the edge tested
+for `""`. `running_containers()` threw podman's error text away, and its
+first test found an idle machine reporting a container named
+`[no output]`. `TOOL_ERROR_PREFIX` was the one refusal marker in the
+`non_answer` registry whose removal broke no test (14 of 15 did).
+`turn.clear()` was promised by `turn.py` and called by nothing, so
+`/run` read the message of the last `/chat` that landed on its worker.
+The subprocess plumbing left the graph for `harnais/host_exec.py`, and a
+test now forbids the Harnais to import a graph.
+
+### v3.24 — a unit domain
+
+A fourth collector, and no new command. `busctl ListUnits` had run on
+every `sysadmin` turn since August and `_parse_busctl_units` kept the
+name and dropped the rest, though the fourth field of the reply is
+`active_state`. `harnais/collectors/units.py` reports the units that are
+neither `active` nor `inactive` -- `failed`, and `activating
+(auto-restart)`, which is what a restart loop looks like from outside --
+and a `failed_count`, emitted even at zero, because zero failures
+observed is an answer and no facts is not. Not the whole list: 522 units
+on the Deck, half of them `.device` noise, would spend the budget saying
+nothing is wrong. It is not V2 either: no Host Model, no persistence, no
+correlation. What justified it was one question, "no errors on my
+Deck?", answered without a single unit state in its context.
+
+CI found what the development machine could not see. The fixtures that
+simulate "every collector is down" did not patch the new one, so it ran
+the real `busctl`. The Flatpak sandbox where the suite is developed has
+none: it failed, the fixture looked complete, the suite was green. A CI
+image has `busctl`, it answered, and four refusal tests fell for a
+reason unrelated to what they test.
+`test_the_blind_fixture_really_blinds_every_collector` now checks the
+registry of collectors rather than a context, so a collector added
+later fails by name. The first check of the fix was worthless: a fake `busctl` on
+`PATH` is never seen, because `subprocess_env()` pins `PATH`.
+
+What it cannot see is its own proxies. `forge-dbus-proxy.sh` exposes the
+system bus and both proxies are `systemd --user` units, so `ListUnits`
+never lists them: "why is forge-podman-ro-proxy not working?" is the one
+question `sysadmin` cannot answer, and the one that would have caught
+the three-day outage of 2026-09-11. Closing it takes a second filtered
+proxy on the session bus, which widens what Forge reaches into the
+user's systemd manager -- a decision, not an oversight.
+[deploy/README.md](../deploy/README.md) says so.
 
 ---
 
