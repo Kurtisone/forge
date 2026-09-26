@@ -25,7 +25,8 @@ l'absence du neuf.
 | 3.2 (Collectors) | [`src/forge/harnais/collectors/`](../src/forge/harnais/collectors/) | livré — 4 collectors, domaines `cpu` `ram` `container` `unit` `logs` |
 | 3.5 (World Model) | [`src/forge/kernel/world_model.py`](../src/forge/kernel/world_model.py) | livré, en mémoire |
 | 3.8 (Context Builder) | [`src/forge/kernel/context_builder.py`](../src/forge/kernel/context_builder.py) | livré, branché sur les deux chemins de `sysadmin` |
-| 3.4 (Host Model), 3.6 (persistance), 3.10 (Action Executor), 7 (V2/V3) | — | pas commencé |
+| 3.4 (Host Model), 3.6 (persistance), 7 (V2) | — | écartés le 26/09, chiffres dans [La V2 relue contre les traces](#la-v2-relue-contre-les-traces-et-écartée-2609) |
+| 3.10 (Action Executor), 7 (V3) | — | pas commencé |
 
 ### Ce que le texte ci-dessous a de faux
 
@@ -136,6 +137,126 @@ en septembre sans que rien ne le signale.
 peuvent pas apparaître dans cette réponse. Trou de déploiement,
 enregistré et non corrigé — le fermer demande un second proxy sur le
 bus de session.
+
+### La V2 relue contre les traces, et écartée (26/09)
+
+La question posée avant toute conception : la V2 de la §7 est-elle
+justifiée ? Elle se juge en quatre parties, parce que la §7 en mélange
+quatre. **Non pour le Host Model, la persistance et les corrélations ;
+les collectors en plus ne sont pas la V2 et se jugent un par un.** Rien
+n'est construit.
+
+**Les questions.** `traces.jsonl` du déploiement : 623 tours du 24/06 au
+26/09, 38 routés `sysadmin`, 35 hors trois tests de session du 26/09.
+Ce ne sont pas des incidents. 34 sur 35 tombent un jour de commit sur
+`sysadmin`, le Harnais ou les proxies, intercalés entre ces commits
+(11/08 : 12 tours parmi 11 commits de 15:17 à 20:58 ; 22/08 : 10 tours ;
+14/09 : 5 tours parmi 3 commits). Neuf sessions, douze formulations,
+dont « pourquoi searxng a redémarré ? » dix fois à elle seule. Les deux
+pannes réelles connues — llama-server tombé deux fois le 13/09, les deux
+proxies en boucle du 11 au 14/09 — n'ont suscité **aucune** question.
+
+| Famille | Tours | Route |
+|---|---|---|
+| « X a redémarré / plante », ou « regarde les logs de forge-llm » que le routeur réécrit en « pourquoi plante ? » | 26 | C |
+| « X va bien ? » | 2 | C |
+| cible inexistante (test de `target_missed`) | 1 | C |
+| « mon Deck rame » | 3 | A |
+| « aucune erreur sur mon Deck ? » | 1 | A |
+| le journal ; un proxy (unité `--user`) | 1 + 1 | — |
+
+**Host Model — aucune question.** Aucune ne porte sur une dépendance.
+« Est-ce que X existe ? » est tranché par la découverte du tour même, de
+1 à 175 ms dans les sous-étapes. Et tout reste sur le Deck :
+l'auto-découverte n'a pas de parc à découvrir.
+
+**Persistance du World Model — aucune question.** La famille qui semble
+l'appeler, « pourquoi X a redémarré », demande ce qu'a fait l'instance
+précédente en sortant. Or Forge ne collecte que quand quelqu'un demande :
+neuf sessions en 35 jours, un écart médian de 32,5 h entre deux, 23 jours
+au plus. L'instantané persisté le plus récent aurait eu plus d'un jour à
+chaque question, et n'aurait jamais contenu le crash. Ce qui le contient,
+l'hôte le garde déjà : les événements `died` de podman et leur code de
+sortie, `OOMKilled`, le journal noyau. Les réponses d'août le disent
+d'elles-mêmes (« OOMKilled », « Exit Code », « l'historique des
+événements du podman »). C'est une preuve que le Harnais ne collecte
+pas, mais pas un store à nous : une lecture de l'historique de l'hôte,
+que l'allowlist du proxy podman n'autorise pas (`/containers/json` et
+`/containers/{id}/logs`, rien d'autre).
+
+**Corrélations — aucune question, et le défaut observé est l'inverse.**
+Le modèle en invente déjà : #d5ffe739 (15/09) lit 27 h d'uptime comme
+« une accumulation de processus ou de mémoire » et propose de redémarrer
+les deux conteneurs du modèle. Le risque « corrélation ≠ causalité » de
+la §8 est réalisé sans moteur de corrélation.
+
+**Collectors en plus — pas la V2, et mesurés inutiles pour ce qu'ils
+semblaient corriger.** #d5ffe739 qualifie d'« élevée » une charge de
+4,24 : le Harnais publie trois moyennes de charge et jamais le nombre de
+threads (8 ici). `/proc/pressure` existe sur ce noyau et mesure
+directement « ça rame ». Les deux ont été posés au modèle avant d'écrire
+le moindre collector (plus bas) : ni l'un ni l'autre ne change la
+réponse. Le GPU, que llama-server occupe (`-ngl 99`), n'est pas lu ;
+aucune question ne l'a demandé.
+
+**Ce qui manque au Harnais, ce qui manque au modèle.** Six réponses
+synthétisées depuis le branchement. Route C : trois sur trois ancrées et
+justes (#b1180272, #e90b727d, et #048e445a, un test). Route A : trois sur trois
+fausses, toutes sur une machine saine.
+
+- #d5ffe739, « pourquoi mon Deck rame ? » : une charge dite élevée sans
+  dénominateur (Harnais — mais le lui donner ne change rien, plus bas),
+  une corrélation inventée (modèle). La question
+  remise au Context Builder était la réécriture du routeur, « pourquoi le
+  système est lent depuis ce matin ? » : l'exemple de `router/prompt.py`
+  recopié, la famille h02.
+- #3b38bc60, même question (test) : `ram.available_kb`, 4,77 Go libres,
+  lu comme de la mémoire utilisée ; 68,5 % désignés comme la cause ;
+  `docker stats` recommandé sur une machine podman. Le modèle, avec la
+  bonne preuve sous les yeux.
+- #c9da18d4, « Aucune erreur sur mon Deck ? » (test) : `unit.failed_count
+  = 0` dans le contexte et jamais cité. La réponse paraphrase deux phrases
+  des règles de lecture de ce module — « The absence of an error in a log
+  is never evidence that nothing is wrong » et « These facts were
+  collected before anyone read the question […] Saying so plainly is a
+  correct answer here ». Le contexte semblait l'inviter à ne pas
+  conclure ; le bench ne le reproduit pas (plus bas).
+
+**Ce que le bench en dit.** `bench/context_builder_ab.py` n'avait aucune
+fixture de machine saine — toutes plantent une cause et comptent ses
+mots, donc il ne pouvait pas voir le défaut qu'on vient de lire. Et
+aucun de ses mondes ne portait le domaine `unit` : depuis la v3.24,
+chacun de ses contextes affichait `[unobserved] unit: no collector was
+asked about this`, une ligne que la production n'envoie pas. Les deux
+sont corrigés, et les sept anciennes fixtures rendent les verdicts
+consignés le 14/09, `blind` compris (« plante car le socket de Podman
+n'existe pas », la confusion qui fait refuser la route C en code). Sur
+le Qwen3.8-9B en service :
+
+| Fixture (bras `context`) | Réponse |
+|---|---|
+| `healthy_errors`, uptime 27 h | cite `unit.failed_count = 0`, « aucun service n'est en état d'échec » ; garde la précaution des règles et conseille `docker logs` |
+| `healthy_errors`, uptime 3 min (le vrai #c9da18d4) | cite `failed_count = 0`, « le système semble fonctionner normalement » |
+| `healthy_slow` | le #3b38bc60 presque mot pour mot : « 68,5 % de la RAM est utilisée (4,77 Go sur 15,16 Go) », redémarrer les conteneurs |
+| `healthy_slow` + nombre de threads | cite `used_pct` juste, accuse la mémoire quand même |
+| `healthy_slow` + PSI | « Bien que le pourcentage de stallage de la RAM soit faible (0,03 %) », accuse la mémoire, propose un redémarrage |
+| `healthy_slow` + les deux | « le CPU ne soit pas bloqué (0 %) », puis 4,24 sur 8 cœurs dit « élevé » |
+
+Deux conclusions. **« Aucune erreur ? » n'appelle pas de correctif** : le
+défaut de production ne se reproduit pas en deux passes, un échantillon
+reste un échantillon. **« Pourquoi ça rame ? » sur une machine saine n'a
+pas de correctif par les faits** : le modèle lit la contre-preuve, la
+cite, et nomme la même cause. Le bras `terse` avait établi qu'ôter un
+candidat produit le suivant ; ajouter un fait qui l'écarte produit le
+même, fait joint. Aucun collector ne répare ça, donc aucun n'est
+construit. Les trois mondes restent dans le bench, marqués morts comme
+`terse`, pour qu'une prochaine proposition de collector PSI rejoue la
+mesure au lieu de la refaire.
+
+**Ce qui rouvrirait la question.** Une vraie panne dont la réponse exige
+le passé et dont l'hôte ne garde pas la trace. Avant toute persistance à
+nous, lire celle de l'hôte — ce qui est une décision d'allowlist du proxy
+podman, pas un chantier V2.
 
 ---
 

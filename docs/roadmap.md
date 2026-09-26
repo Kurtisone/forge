@@ -50,6 +50,7 @@ lived.
 | **v3.25** | done | Forge says when it cannot see the host, and the D-Bus proxy is pinned to the one call it makes — [detail](#v325--forge-says-when-it-cannot-see-the-host) |
 | **Kernel L2** | done | Capability layer and a deterministic Policy Engine, both wired into the orchestrator, the API, the CLI and the graphs — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [The Kernel layer](architecture.md#the-kernel-layer). Sits on the architectural maturity axis, not this product roadmap |
 | **Kernel L3** | blocked | The Cognitive Scheduler, and the reason it is not started: every capability resolves to exactly one candidate, so there is nothing to arbitrate. `_dispatch` says so in code, and stops hard rather than picking silently. `CAPABILITY_PROVIDER` (v3.22) moves the choice from the process to the work without inventing the arbiter |
+| **Harnais V2** | declined | Host Model, a persisted World Model, correlations: read against all 35 `sysadmin` questions in `/traces`, and none of them would have been served. They are acceptance tests written while building `sysadmin`, and the two real outages drew none. The past a restart question needs is kept by the host (podman events, the kernel journal); Forge's own samples exist only when someone asks, a median 32.5 h apart — [detail](harnais.md#la-v2-relue-contre-les-traces-et-écartée-2609) |
 
 ---
 
