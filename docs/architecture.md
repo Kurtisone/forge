@@ -90,7 +90,7 @@ flowchart TD
 
     subgraph HostProxies["Host access — read-only, always (deploy/)"]
         direction LR
-        DBUS["xdg-dbus-proxy<br/>(filter: ListUnits/GetUnit only)"]
+        DBUS["xdg-dbus-proxy<br/>(filter: ListUnits only)"]
         PODP["podman_ro_proxy.py<br/>(GET containers/json + logs only)"]
         JRNL["journalctl<br/>(bind mount, no daemon)"]
     end
