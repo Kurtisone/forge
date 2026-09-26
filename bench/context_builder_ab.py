@@ -126,6 +126,26 @@ def _cpu_ram(used_pct: float, load: float) -> Observation:
     return Observation.of("cpu_ram", ("cpu", "ram"), facts, NOW)
 
 
+def _units(unwell: dict[str, str] | None = None) -> Observation:
+    """
+    The unit domain, as collectors/units.py reports it: the count, then
+    one fact per unit that is neither active nor inactive.
+
+    Every world carries it because production has since v3.24. Before
+    that it was missing from all of them, so each context rendered
+    "[unobserved] unit: no collector was asked about this" -- a dark
+    domain no fixture meant to darken, in a harness that had measured
+    (`blind`) what this model does with a dark domain.
+    """
+    unwell = unwell or {}
+    facts = [Fact("unit", "failed_count", len(unwell), None, NOW, "units")]
+    facts += [
+        Fact("unit", f"{name}.state", state, None, NOW, "units")
+        for name, state in unwell.items()
+    ]
+    return Observation.of("units", ("unit",), facts, NOW)
+
+
 def _logs(block: str, source: str = "journalctl -k") -> Observation:
     """
     The logs domain, from `source`.
@@ -148,8 +168,19 @@ def _logs(block: str, source: str = "journalctl -k") -> Observation:
 
 
 def _world(*observations) -> InMemoryWorldModel:
+    """
+    A World Model holding `observations`, on top of a unit domain in
+    which nothing has failed.
+
+    The default is recorded first so a fixture that is ABOUT units can
+    still override it -- a failed Observation drops the domain, a
+    successful one overwrites fact by fact. It lives here rather than in
+    each fixture because a fixture that forgets a domain darkens it
+    silently, which is how every world below came to carry an
+    unobserved unit domain nobody chose.
+    """
     world = InMemoryWorldModel()
-    for observation in observations:
+    for observation in (_units(), *observations):
         world.record_observation(observation)
     return world
 
