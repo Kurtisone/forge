@@ -69,6 +69,7 @@ from forge.config import (
     LLM_MODEL,
     MEMORY_ENABLED,
 )
+from forge.harnais import host_probe
 from forge.logger import log
 from forge.orchestrator import Orchestrator
 from forge.router import build_router_prompt
@@ -396,11 +397,28 @@ async def health():
         if loaded:
             model = loaded
 
-    return {
+    body = {
         "status": "ok",
         "provider": FORGE_PROVIDER,
         "model": model,
     }
+
+    # Whether sysadmin can see through its two host proxies. ADDITIVE, and
+    # it never touches `status` or the HTTP code: the Android app picks
+    # which address to use by whether /health answers 2xx (ForgeRepository.
+    # firstReachable), so a lost proxy turned into a 503 here would read,
+    # on the phone, as "Forge is down". Forge IS up; what it has lost is
+    # its view of the host, and that is what this field says. Absent when
+    # sysadmin is off or no proxy is configured. See harnais/host_probe.py.
+    try:
+        access = await _run_in_thread(host_probe.host_access)
+    except Exception as e:  # noqa: BLE001 -- the probe must never fail /health
+        log.warning("health: host probe failed: %s: %s", type(e).__name__, e)
+        access = {}
+    if access:
+        body["host_access"] = access
+
+    return body
 
 
 # Deliberately unauthenticated, and the only endpoint where that is not
