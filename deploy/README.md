@@ -82,8 +82,10 @@ above is the SYSTEM bus (`/run/dbus/system_bus_socket`), so ListUnits
 returns system units and nothing else. The two units this file installs
 are `systemd --user` units -- so **Forge cannot see its own proxies**,
 and `graphs/sysadmin.py` cannot answer "why is forge-podman-ro-proxy not
-working?", which is precisely the question that would have caught the
-2026-09-11 outage three days earlier.
+working?". That question has been asked once in 35 real sysadmin turns,
+during the outage itself, and answering it would not have shortened the
+outage: Forge is reactive and nobody had asked. What would have is
+DETECTION, which is the next paragraph.
 
 It matters more since `harnais/collectors/units.py` landed
 (2026-09-15), which reports every unit that is not `active` or
@@ -91,7 +93,21 @@ It matters more since `harnais/collectors/units.py` landed
 loop has, and the shape both proxies had for those three days. A
 system-level service failing that way is reported; these two are not.
 
-Closing it means a second filtered proxy on the SESSION bus, with
+**What catches the outage on the first day.** `/health` carries
+`host_access`, for example `{"podman": "ok", "systemd": "unobservable"}`,
+with one entry per proxy this deployment has configured
+(`SYSADMIN_PODMAN_URL`, `SYSADMIN_DBUS_ADDRESS`). It is produced by
+running the same two collectors sysadmin runs, so it cannot say ok about
+a path sysadmin then fails on. The web UI's status dot turns amber,
+names the proxy and puts the unit to look at in its tooltip; the loss
+and the recovery are each logged once (`podman logs forge`), whether or
+not anyone is polling. It adds no host access -- both sockets are
+already mounted -- and it is additive: `status` and the HTTP code never
+change, because the Android app picks an address by whether `/health`
+answers 2xx, and a lost proxy must not read on the phone as a Forge that
+is down. Answers are reused for 30 seconds (`harnais/host_probe.py`).
+
+Closing the diagnosis half means a second filtered proxy on the SESSION bus, with
 `ListUnits` alone. Not done: it widens what Forge can reach into the
 user's own systemd manager, which is a decision rather than an
 oversight -- and a heavier one than the system bus's. The user owns
