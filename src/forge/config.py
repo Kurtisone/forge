@@ -950,8 +950,8 @@ SYSADMIN_LOG_CHARS_BUDGET = int(os.getenv("SYSADMIN_LOG_CHARS_BUDGET", "2000"))
 #   one needs nothing beyond the RO bind mount + the binary itself.
 # - SYSADMIN_DBUS_ADDRESS: address of the FILTERED bus exposed by
 #   deploy/forge-dbus-proxy.sh (xdg-dbus-proxy), never the host's real
-#   system bus directly -- the proxy allows only read-only systemd
-#   method calls (ListUnits/GetUnit), denies everything else
+#   system bus directly -- the proxy allows one read-only systemd
+#   method call (ListUnits) and denies everything else
 #   (StartUnit/StopUnit/...) at the bus level itself, before Forge's
 #   own code is ever in a position to decide anything.
 # - SYSADMIN_PODMAN_URL: address of deploy/podman_ro_proxy.py, never

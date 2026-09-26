@@ -50,13 +50,11 @@ _PATH = "/org/freedesktop/systemd1"
 
 #: Every call the proxy lets through, in the spelling xdg-dbus-proxy
 #: takes: NAME=INTERFACE.MEMBER@PATH. Widening this is a decision; make
-#: it here.
+#: it here. It was five rules until 2026-09-26; the four removed
+#: (ListUnitsByPatterns, GetUnit, Properties.Get, Properties.GetAll) were
+#: never called, and GetAll on the manager returns its Environment.
 ALLOWED_CALLS = {
     f"{_MANAGER}={_MANAGER}.Manager.ListUnits@{_PATH}",
-    f"{_MANAGER}={_MANAGER}.Manager.ListUnitsByPatterns@{_PATH}",
-    f"{_MANAGER}={_MANAGER}.Manager.GetUnit@{_PATH}",
-    f"{_MANAGER}=org.freedesktop.DBus.Properties.Get@{_PATH}",
-    f"{_MANAGER}=org.freedesktop.DBus.Properties.GetAll@{_PATH}",
 }
 
 

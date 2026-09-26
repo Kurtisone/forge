@@ -45,10 +45,13 @@ SYSADMIN_JOURNAL_DIR=/host-journal
 Discovery talks to systemd over D-Bus -- no file-based equivalent
 exists. `forge-dbus-proxy.sh` uses `xdg-dbus-proxy` (the same tool
 Flatpak uses to sandbox D-Bus access) to expose a NEW socket that only
-forwards five read-only method calls and silently drops everything
-else -- `StartUnit`/`StopUnit`/`RestartUnit`/`Reboot`/... never reach
-the real bus at all, confirmed in practice: `ListUnits` succeeds,
-a mutating call returns `Access denied` straight from the proxy.
+forwards ONE read-only method call, `ListUnits`, and silently drops
+everything else -- `StartUnit`/`StopUnit`/`RestartUnit`/`Reboot`/...
+never reach the real bus at all, confirmed in practice: `ListUnits`
+succeeds, a mutating call returns `Access denied` straight from the
+proxy. `tests/test_dbus_proxy_allowlist.py` pins the filter and the
+list. It used to forward five, four of which nothing called -- one of
+them `Properties.GetAll`, which returns the manager's environment.
 
 ```
 -v ${XDG_RUNTIME_DIR}/forge-dbus-proxy:/run/forge-dbus-proxy:ro
@@ -88,10 +91,17 @@ It matters more since `harnais/collectors/units.py` landed
 loop has, and the shape both proxies had for those three days. A
 system-level service failing that way is reported; these two are not.
 
-Closing it means a second filtered proxy on the SESSION bus, with the
-same read-only call allowlist. Not done: it widens what Forge can reach
-into the user's own systemd manager, which is a decision rather than an
-oversight.
+Closing it means a second filtered proxy on the SESSION bus, with
+`ListUnits` alone. Not done: it widens what Forge can reach into the
+user's own systemd manager, which is a decision rather than an
+oversight -- and a heavier one than the system bus's. The user owns
+that manager, so a mistake in the filter there is arbitrary code
+execution as the user (`StartTransientUnit`), where polkit would refuse
+it on the system bus. It would need its own twin of the allowlist test
+before it ships, and the units collector would cap the length and count
+of the names it hands the model: any process of the user can create a
+unit with a name of its choosing, which only root can on the system
+bus.
 
 ### 3. podman logs/ps -- podman_ro_proxy.py
 

@@ -38,17 +38,19 @@ exec xdg-dbus-proxy \
   "unix:path=/run/dbus/system_bus_socket" \
   "$PROXY_SOCKET" \
   --filter \
-  --call="org.freedesktop.systemd1=org.freedesktop.systemd1.Manager.ListUnits@/org/freedesktop/systemd1" \
-  --call="org.freedesktop.systemd1=org.freedesktop.systemd1.Manager.ListUnitsByPatterns@/org/freedesktop/systemd1" \
-  --call="org.freedesktop.systemd1=org.freedesktop.systemd1.Manager.GetUnit@/org/freedesktop/systemd1" \
-  --call="org.freedesktop.systemd1=org.freedesktop.DBus.Properties.Get@/org/freedesktop/systemd1" \
-  --call="org.freedesktop.systemd1=org.freedesktop.DBus.Properties.GetAll@/org/freedesktop/systemd1"
+  --call="org.freedesktop.systemd1=org.freedesktop.systemd1.Manager.ListUnits@/org/freedesktop/systemd1"
 
 # Note what's deliberately absent: StartUnit, StopUnit, RestartUnit,
 # KillUnit, ReloadUnit, EnableUnitFiles, DisableUnitFiles, Reboot,
 # PowerOff, and everything else on org.freedesktop.systemd1.Manager.
-# --filter makes this a deny-by-default proxy: only the five calls
-# listed above ever reach the real bus. Nothing added here should
-# ever be a call whose name doesn't start with a read-only verb
-# (List/Get) -- if a future need requires more, each addition should
-# be reviewed on that basis specifically.
+# --filter makes this a deny-by-default proxy: only the one call
+# listed above ever reaches the real bus. It is the only call Forge
+# makes (harnais/host_exec.discover_units_cmd, reused by the units
+# collector). This list used to carry four more -- ListUnitsByPatterns,
+# GetUnit, Properties.Get and Properties.GetAll -- that nothing called.
+#
+# Judge an addition by what it RETURNS, not only by whether it
+# mutates: a read-only verb is not enough. Properties.GetAll on the
+# manager hands back its Environment, which is whatever the session
+# imported. tests/test_dbus_proxy_allowlist.py pins this list, so a
+# change here is a change there, in the same diff.
