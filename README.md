@@ -80,8 +80,9 @@ podman compose build forge
 podman compose up -d --no-deps forge
 ```
 
-Forge refuses to start without `API_TOKEN` — that is deliberate, not a
-papercut. Full instructions in [docs/usage.md](docs/usage.md).
+Forge refuses to start without `API_TOKEN`, or with one shorter than 24
+characters — that is deliberate, not a papercut. Full instructions in
+[docs/usage.md](docs/usage.md).
 
 ---
 

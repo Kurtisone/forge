@@ -36,7 +36,7 @@ this page covers the ones you are likely to touch.
 | `TRACE_ENABLED` | Write JSONL execution trace per run | `true` |
 | `TRACE_FILE` | Path to the JSONL trace file | `data/traces.jsonl` |
 | `SHOW_DEBUG` | Emit full structured trace to stderr (prompt, raw output, timings) | `false` |
-| `API_TOKEN` | Bearer token required on `/chat`, `/review`, `/run`, `/tools`, `/traces`. Empty = API stays open | *(empty)* |
+| `API_TOKEN` | Bearer token required on `/chat`, `/review`, `/run`, `/tools`, `/traces`. At least 24 characters, or Forge refuses to start; empty is refused too unless `API_ALLOW_UNAUTHENTICATED` is set. `python3 -c 'import secrets; print(secrets.token_hex(24))'` makes one | *(empty)* |
 | `RATE_LIMIT_ENABLED` | In-memory sliding-window rate limit on the same routes as `API_TOKEN` | `true` |
 | `RATE_LIMIT_REQUESTS` | Max requests per client IP per window | `30` |
 | `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds | `60` |

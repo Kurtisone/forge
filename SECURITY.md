@@ -54,7 +54,7 @@ three separate recorded times on this project.
 | Boundary | Where | What it guarantees |
 | --- | --- | --- |
 | Tool opt-in | `config.ENABLED_TOOLS`, `tools/registry.py` | A module with `run()` is not dispatchable until it is listed. |
-| Auth | `config.API_TOKEN` | Forge refuses to start without a token unless `API_ALLOW_UNAUTHENTICATED=true` is written down explicitly. |
+| Auth | `config.API_TOKEN` | Forge refuses to start without a token unless `API_ALLOW_UNAUTHENTICATED=true` is written down explicitly, and refuses a token shorter than 24 characters whatever else is set: the rate limit (30 requests a minute per address) does not stop a dictionary. |
 | Workspace confinement | `tools/files.py` `_safe_path`, `tools/review.py`, `tools/test.py` | Paths resolving outside `WORKSPACE_DIR` are rejected before any filesystem call. |
 | SSRF | `tools/web_fetch.py` | Private, loopback and link-local resolved IPs are blocked. Not configurable, on purpose — Forge sits on a home network. |
 | Escalation guard | `orchestrator.py` | Once a run has called `web_fetch`/`web_search`/`research`/`sysadmin`, no later step of that run may dispatch `shell`, `test`, or `files:write`. |
