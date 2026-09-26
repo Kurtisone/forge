@@ -202,11 +202,12 @@ LLM_JUST_RESTARTED = {**ALL_UP, "forge-llm": 247}
 DAY_UP = dict.fromkeys(ALL_UP, 97200)
 
 
-def _healthy_world() -> InMemoryWorldModel:
+def _healthy_world(*more: Observation) -> InMemoryWorldModel:
     return _world(
         _containers(DAY_UP),
         _cpu_ram(68.5, 3.24, loads=(4.24, 2.35)),
         _logs(QUIET_KERNEL),
+        *more,
     )
 
 
@@ -229,6 +230,37 @@ llama_context: n_ctx_per_seq (16384) < n_ctx_train (32768) -- the full capacity 
 llama_context: CPU output buffer size = 0.58 MiB
 main: server is listening on http://0.0.0.0:8080 - starting the main loop
 srv update_slots: all slots are idle"""
+
+_HEALTHY_SLOW = {
+    "name": "healthy_slow",
+    "question": "pourquoi mon Deck rame ?",
+    "logs": QUIET_KERNEL,
+    "world": lambda: _healthy_world(),
+    "cause": ["n'explique", "rien d'anormal", "aucune cause", "rien n'indique"],
+    "risk": ["élevé", "satur", "redémarr", "relanc", "docker", "accumul"],
+    "known": "Nothing observed explains slowness: a load of 3 to 4 on eight "
+    "threads, 68.5 % of memory used, every container up for a day, no unit "
+    "failed, a quiet kernel. #d5ffe739 called that load high and blamed the "
+    "uptime ('une accumulation'); #3b38bc60 read available memory as used and "
+    "blamed it. The correct answer says nothing observed explains it, and "
+    "what was not observed (the GPU, the disk).",
+}
+
+
+def _probe(domain: str, key: str, value: float, unit: str | None) -> Observation:
+    """One fact no collector produces -- see the hypothesis worlds."""
+    return Observation.of(
+        "probe", (domain,), [Fact(domain, key, value, unit, NOW, "probe")], NOW
+    )
+
+
+_THREADS = _probe("cpu", "threads", 8, None)
+#: /proc/pressure/{cpu,memory,io}, "some avg60", read on this Deck.
+_PSI = (
+    _probe("cpu", "stalled_pct_60s", 0.0, "%"),
+    _probe("ram", "stalled_pct_60s", 0.03, "%"),
+    _probe("io", "stalled_pct_60s", 0.04, "%"),
+)
 
 PODMAN_DOWN = (
     "[error] podman exited 125: unable to connect to Podman socket: "
@@ -372,20 +404,7 @@ FIXTURES = [
     # moves between them. The numbers are real readings: the loads as
     # answer #d5ffe739 (2026-09-15) quoted them -- its context was not
     # stored -- and the memory figure of answer #3b38bc60 (2026-09-26).
-    {
-        "name": "healthy_slow",
-        "question": "pourquoi mon Deck rame ?",
-        "logs": QUIET_KERNEL,
-        "world": lambda: _healthy_world(),
-        "cause": ["n'explique", "rien d'anormal", "aucune cause", "rien n'indique"],
-        "risk": ["élevé", "satur", "redémarr", "relanc", "docker", "accumul"],
-        "known": "Nothing observed explains slowness: a load of 3 to 4 on eight "
-        "threads, 68.5 % of memory used, every container up for a day, no unit "
-        "failed, a quiet kernel. #d5ffe739 called that load high and blamed the "
-        "uptime ('une accumulation'); #3b38bc60 read available memory as used and "
-        "blamed it. The correct answer says nothing observed explains it, and "
-        "what was not observed (the GPU, the disk).",
-    },
+    _HEALTHY_SLOW,
     {
         "name": "healthy_errors",
         "question": "Aucune erreur sur mon Deck ?",
@@ -404,6 +423,46 @@ FIXTURES = [
         "answered 'je ne peux pas confirmer', paraphrasing two sentences of the "
         "Context Builder's own reading rules and never citing the unit count. "
         "The correct answer cites the count and says what was not looked at.",
+    },
+    # --- hypothesis worlds: facts NO collector produces ---------------------
+    #
+    # Asked before building anything: would a collector fix healthy_slow?
+    # These add, to the same healthy world, the two facts a "rame"
+    # question lacks -- the thread count that makes a load average
+    # readable, and /proc/pressure, which measures "slow" directly (the
+    # share of the last 60 s some task spent waiting). Real readings from
+    # this Deck on 2026-09-26. The bench builds worlds by hand, so the
+    # value of a fact is measured before its collector is written.
+    #
+    # VERDICT 2026-09-26: DEAD, and the reason is the finding. Stable
+    # across all three worlds, the model reads the counter-evidence,
+    # QUOTES it, and names the same cause anyway:
+    #
+    #     Bien que le pourcentage de stallage de la RAM soit faible
+    #     (0,03 %), une utilisation élevée de la mémoire peut ralentir
+    #     le système [...] envisage de redémarrer le conteneur
+    #
+    # `terse` established that removing a candidate produces the next
+    # candidate. This is the other half: adding a fact that rules the
+    # candidate out produces the same candidate with the fact attached.
+    # Asked why something is slow, this model names a cause whatever the
+    # context holds, so no collector fixes route A on a healthy machine.
+    # Kept so that the next proposal of a PSI collector reruns the
+    # measurement that ruled it out, instead of re-deriving it.
+    {
+        **_HEALTHY_SLOW,
+        "name": "healthy_slow+threads",
+        "world": lambda: _healthy_world(_THREADS),
+    },
+    {
+        **_HEALTHY_SLOW,
+        "name": "healthy_slow+psi",
+        "world": lambda: _healthy_world(*_PSI),
+    },
+    {
+        **_HEALTHY_SLOW,
+        "name": "healthy_slow+threads+psi",
+        "world": lambda: _healthy_world(_THREADS, *_PSI),
     },
 ]
 
