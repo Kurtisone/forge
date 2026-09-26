@@ -47,6 +47,7 @@ lived.
 | **v3.22** | done | One backend per capability, and three UI bugs a human found in ten minutes — [detail](#v322--one-backend-per-capability-and-what-a-human-pass-is-for) |
 | **v3.23** | done | Phone pairing, and the Harnais: `sysadmin` reads observed facts instead of raw text, and says when it could not observe — [detail](#v323--the-harnais-and-the-first-time-production-measured-it) |
 | **v3.24** | done | A fourth collector, from a reply Forge was already throwing away — [detail](#v324--a-unit-domain) |
+| **v3.25** | done | Forge says when it cannot see the host, and the D-Bus proxy is pinned to the one call it makes — [detail](#v325--forge-says-when-it-cannot-see-the-host) |
 | **Kernel L2** | done | Capability layer and a deterministic Policy Engine, both wired into the orchestrator, the API, the CLI and the graphs — see [ARCHITECTURE.md](../ARCHITECTURE.md) and [The Kernel layer](architecture.md#the-kernel-layer). Sits on the architectural maturity axis, not this product roadmap |
 | **Kernel L3** | blocked | The Cognitive Scheduler, and the reason it is not started: every capability resolves to exactly one candidate, so there is nothing to arbitrate. `_dispatch` says so in code, and stops hard rather than picking silently. `CAPABILITY_PROVIDER` (v3.22) moves the choice from the process to the work without inventing the arbiter |
 
@@ -487,11 +488,70 @@ later fails by name. The first check of the fix was worthless: a fake `busctl` o
 What it cannot see is its own proxies. `forge-dbus-proxy.sh` exposes the
 system bus and both proxies are `systemd --user` units, so `ListUnits`
 never lists them: "why is forge-podman-ro-proxy not working?" is the one
-question `sysadmin` cannot answer, and the one that would have caught
-the three-day outage of 2026-09-11. Closing it takes a second filtered
-proxy on the session bus, which widens what Forge reaches into the
-user's systemd manager -- a decision, not an oversight.
+question `sysadmin` cannot answer. It was written here as the one that
+would have caught the three-day outage of 2026-09-11; v3.25 measured
+that and it is not -- it was asked once, during the outage, and would
+have shortened nothing. Closing it takes a second filtered proxy on the
+session bus, which widens what Forge reaches into the user's systemd
+manager -- a decision, not an oversight.
 [deploy/README.md](../deploy/README.md) says so.
+
+### v3.25 — Forge says when it cannot see the host
+
+From 2026-09-11 to 2026-09-14 both host proxies sat in a restart loop
+and `sysadmin` was blind for three days: 0 containers, 0 units, every
+target missed. The Harnais already says so *inside an answer* (v3.23),
+but only to someone who asks, and nobody did until the third day. Forge
+is reactive; a failure nobody asks about is a failure nobody sees.
+`/health` now carries `host_access`, one entry per configured proxy
+(`ok`, `unobservable`, or `unknown` while the first probe runs), and the
+web UI's status dot turns amber and names the proxy. It is produced by
+running the two collectors `sysadmin` itself runs, so there is one
+definition of "reachable" and `/health` cannot say ok about a path
+`sysadmin` then fails on. Answers are reused for 30 seconds, one refresh
+runs at a time, and a caller waits at most 1.5 seconds: the API serves
+everything from two workers, and a hung proxy must not hold both.
+
+Fault-injected for real rather than only tested: stopping the D-Bus
+proxy showed as `unobservable` within 8 seconds and was logged once, and
+the restart was seen 32 seconds later and logged once, with `/health`
+answering 200 and `ok` throughout. That last part is the constraint that
+shaped it. The Android app picks an address by whether `/health` answers
+2xx and decodes the body with Gson, which ignores keys it does not know.
+An added key is invisible to it; a lost proxy reported as an error would
+read on the phone as a Forge that is down, when Forge is up and has only
+lost its view of the host.
+
+It was proposed after measuring the alternative. A second proxy on the
+session bus would have seen the proxies' own units, and one of 35 real
+`sysadmin` questions since August asked about one, during the outage
+itself. It would have given the state and not the cause, since the log
+path filters on system units, and it would not have found the outage
+sooner, because nobody was asking. What was missing was detection, not
+diagnosis, so that proxy stays deferred; its risks are in
+[deploy/README.md](../deploy/README.md).
+
+The filter it depends on got the scrutiny that came with it.
+`forge-dbus-proxy.sh` had no test, and dropping `--filter` breaks
+nothing visible: the proxy becomes a plain forwarder and `ListUnits`
+still works. `tests/test_dbus_proxy_allowlist.py` pins the flag, the
+option set, the rule set and the upstream. The rules also went from five
+to `ListUnits`, the only call Forge makes: `Properties.GetAll` was
+reachable from the container and returned 5147 bytes of the systemd
+manager's properties, `Environment` included. After the proxy was
+restarted it is refused, and `ListUnits` still answers.
+
+Last, the bench that measured what removing the unused `test` tool cost
+the router. The tool could not run in this image, had been called ten
+times, all in August, and with `files` enabled it equalled `shell`. The
+measurement skipped four fixtures without a word: `router_ab.py`
+skipped any fixture whose `forbid` named a disabled tool, and h01 to
+h04, the h02 family, forbid `test`. Forbidding a tool the prompt does
+not offer is satisfied trivially, so only `expect` counts now. What it
+found: Qwen3.8-9B routes 27 to 28 of 31 fixtures, the first base for the
+model in service; two identical runs differ by one decision; and
+dropping `test` shrinks the router prompt by 161 tokens for two moved
+decisions, both still accepted.
 
 ---
 
