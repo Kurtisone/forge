@@ -87,3 +87,29 @@ def commands_module(index_html: Path) -> str:
         + _balanced(src, m.start())
         + "\n  return UI_COMMANDS;\n}\n"
     )
+
+
+def health_module(index_html: Path) -> str:
+    """
+    An ES module exporting the UI's own host-blindness functions: which
+    of /health's `host_access` entries count as a fault, and the tooltip
+    that says which unit to look at.
+
+    Pure functions of the JSON /health returns, so they can be run with
+    the exact shapes the server sends -- including the one that must NOT
+    light the header, "unknown", which is only the first probe still
+    running.
+    """
+    src = index_html.read_text(encoding="utf-8")
+
+    m = re.search(r"^const HOST_PROXY_UNIT\b", src, re.MULTILINE)
+    assert m, "HOST_PROXY_UNIT vanished from index.html"
+    parts = [_balanced(src, m.start())]
+
+    for name in ("hostBlindness", "hostBlindnessHint"):
+        m = re.search(rf"^function {name}\b", src, re.MULTILINE)
+        assert m, f"{name} vanished from index.html"
+        parts.append(_balanced(src, m.start()))
+
+    parts.append("export { hostBlindness, hostBlindnessHint };")
+    return "\n\n".join(parts) + "\n"

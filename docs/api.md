@@ -9,7 +9,7 @@ privileged path of its own.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/` | open | Web UI |
-| `GET` | `/health` | open | Provider + model info (for `llama_cpp`, the actually-loaded model, queried live from llama-server — see below) |
+| `GET` | `/health` | open | Provider + model info (for `llama_cpp`, the actually-loaded model, queried live from llama-server), plus `host_access` when sysadmin is on and a host proxy is configured — see [`/health` and the host proxies](#health-and-the-host-proxies) |
 | `POST` | `/chat` | optional | Single conversation turn |
 | `POST` | `/review` | optional | File content analysis, optionally running its tests first (`test_path` field, v3.10) |
 | `POST` | `/run` | optional | Run any graph by name |
@@ -49,6 +49,24 @@ per client IP (default: 30 per 60s), `429 Too Many Requests` with a
 process-local counter, single-worker only: running uvicorn with multiple
 workers gives each its own counter. Set `RATE_LIMIT_ENABLED=false` to disable,
 e.g. behind a proxy that already rate-limits.
+
+### `/health` and the host proxies
+
+`{"status": "ok", "provider": "llama_cpp", "model": "…", "host_access": {"podman": "ok", "systemd": "unobservable"}}`
+
+`host_access` says whether sysadmin can observe through each host proxy
+(`podman` for `SYSADMIN_PODMAN_URL`, `systemd` for `SYSADMIN_DBUS_ADDRESS`):
+`"ok"`, `"unobservable"`, or `"unknown"` while the very first probe is
+still running. The key is **absent** when sysadmin is off or no proxy is
+configured. It is measured by the collectors sysadmin itself runs and
+reused for 30 seconds; the reason for a failure goes to the log, never to
+this unauthenticated endpoint.
+
+It is additive on purpose. **`status` and the HTTP code never change**:
+the Android app picks which address to use by whether `/health` answers
+2xx, so a lost proxy reported as an error would read on the phone as a
+Forge that is down, when Forge is up and has lost only its view of the
+host. The web UI's status dot turns amber and names the proxy.
 
 **`POST /run` example:**
 ```json
