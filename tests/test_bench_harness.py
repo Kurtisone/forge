@@ -198,3 +198,60 @@ class TestCell:
     def test_the_closest_row_stays_visible_beside_the_scored_one(self, ip):
         assert ip._cell((0.9741, 2, 0.9083)).startswith("0.9741 rank=2")
         assert "[0.9083]" in ip._cell((0.9741, 2, 0.9083))
+
+
+@pytest.fixture(scope="module")
+def ra():
+    """bench/router_ab.py, whose skip rule is a decision in its own right."""
+    return _load("router_ab")
+
+
+class TestRoutingSkipRule:
+    """
+    2026-09-26: `test` came out of ENABLED_TOOLS and the routing run that
+    was meant to say what that cost skipped h01 to h04, silently, because
+    each of them FORBIDS `test` and the skip rule counted `forbid` as a
+    tool the fixture needs. Those four are the family kept as the
+    router's tripwire. The run printed a score over the rest and looked
+    complete.
+    """
+
+    def test_a_forbid_naming_a_disabled_tool_does_not_skip(self, ra):
+        fx = {"id": "h02", "expect": ["chat", "research"], "forbid": ["review", "test"]}
+        assert ra._missing_tools(fx, {"chat", "code", "research", "review"}) == set()
+
+    def test_an_expected_tool_that_is_disabled_still_skips(self, ra):
+        fx = {"id": "x", "expect": ["research"], "forbid": ["files"]}
+        assert ra._missing_tools(fx, {"chat", "code", "files"}) == {"research"}
+
+    def test_chat_and_code_are_always_routable(self, ra):
+        fx = {"id": "x", "expect": ["chat", "code"]}
+        assert ra._missing_tools(fx, set()) == set()
+
+    def test_no_real_fixture_is_skipped_for_a_tool_it_only_forbids(self, ra):
+        """
+        Over the real fixture set rather than a hand-built one, so it
+        holds for the next fixture somebody writes too: disabling any
+        tool a fixture merely forbids must not change whether it runs.
+        """
+        every = {"chat", "code"}
+        for fx in ra.FIXTURES:
+            every |= set(fx.get("expect") or []) | set(fx.get("forbid") or [])
+
+        checked = 0
+        for fx in ra.FIXTURES:
+            for tool in set(fx.get("forbid") or []) - set(fx.get("expect") or []):
+                checked += 1
+                assert ra._missing_tools(fx, every - {tool}) == ra._missing_tools(
+                    fx, every
+                ), f"{fx['id']} is skipped once {tool!r} is disabled"
+        assert checked, "no fixture forbids anything -- did the fixture shape change?"
+
+    def test_the_h_family_survives_dropping_test(self, ra):
+        every = {"chat", "code"}
+        for fx in ra.FIXTURES:
+            every |= set(fx.get("expect") or []) | set(fx.get("forbid") or [])
+        skipped = [
+            fx["id"] for fx in ra.FIXTURES if ra._missing_tools(fx, every - {"test"})
+        ]
+        assert not {"h01", "h02", "h03", "h04"} & set(skipped)

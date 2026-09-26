@@ -84,7 +84,10 @@ from forge.router.prompt import build_router_prompt
 #           check scores as a pass.
 #
 # Fixtures whose expected tools are not all enabled in this deployment
-# are skipped and reported, rather than counted as failures.
+# are skipped and reported, rather than counted as failures. A `forbid`
+# naming a tool that is not enabled does not skip anything: the model
+# cannot pick what the prompt does not offer, so it is satisfied
+# trivially and the rest of the fixture still means something.
 
 
 def _fx(**kwargs):
@@ -811,6 +814,21 @@ def run_bench(tools, erase=True):
 # --------------------------------------------------------------------
 
 
+def _missing_tools(fx, tools):
+    """
+    The tools a fixture needs ENABLED before it says anything: the ones
+    it EXPECTS, and only those. "chat" and "code" are always routable.
+
+    This used to count `forbid` as well, and the day `test` came out of
+    ENABLED_TOOLS the four h fixtures -- which forbid it -- were skipped
+    without a word. That is the family this harness keeps as its
+    tripwire, gone from exactly the arm it was meant to be compared
+    against. Forbidding a tool the prompt does not offer is satisfied
+    trivially; it does not make the fixture meaningless.
+    """
+    return {t for t in (fx.get("expect") or []) if t not in tools} - {"chat", "code"}
+
+
 def run_routing(tools, no_cache=False, reverse=False):
     from forge.llm import call_llm
     from forge.router.parser import parse_router_output
@@ -824,10 +842,7 @@ def run_routing(tools, no_cache=False, reverse=False):
     fixtures = list(reversed(FIXTURES)) if reverse else FIXTURES
     rows = []
     for fx in fixtures:
-        needed = set(fx.get("expect") or []) | set(fx.get("forbid") or [])
-        # "chat" and "code" are always routable; anything else must be
-        # enabled or the fixture is meaningless here.
-        missing = {t for t in needed if t not in tools} - {"chat", "code"}
+        missing = _missing_tools(fx, tools)
         if missing:
             rows.append({"id": fx["id"], "skipped": sorted(missing)})
             print(f"  {fx['id']}  SKIP (tools not enabled: {sorted(missing)})")
