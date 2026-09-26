@@ -66,6 +66,8 @@
     }
     .dot.ok  { background: var(--green); }
     .dot.err { background: var(--red); }
+    /* Forge answers, but sysadmin cannot see the host through a proxy. */
+    .dot.warn { background: var(--amber); }
 
     /* Context gauge. Always present, never announced: a widget that
        appears only once things get tight reads as an alarm, and its
@@ -707,19 +709,47 @@ function shortModel(name) {
   return String(name || '').replace(/\.gguf$/i, '')
 }
 
+// The host proxy behind each name /health reports in `host_access`, so
+// the tooltip can say which unit to look at instead of "something".
+const HOST_PROXY_UNIT = {
+  podman: 'forge-podman-ro-proxy.service',
+  systemd: 'forge-dbus-proxy.service',
+}
+
+// Which proxies sysadmin cannot see through, from /health's host_access
+// ({proxy: "ok" | "unobservable" | "unknown"}). Only "unobservable"
+// counts: "unknown" is the first probe still running, and treating that
+// as a fault would light the header amber on every cold start.
+function hostBlindness(access) {
+  return Object.entries(access || {})
+    .filter(([, state]) => state === 'unobservable')
+    .map(([name]) => name)
+}
+
+function hostBlindnessHint(blind) {
+  const units = blind.map(name => HOST_PROXY_UNIT[name] || name).join(' ')
+  return `sysadmin cannot see the host through: ${blind.join(', ')}. ` +
+    `On the Deck: systemctl --user status ${units}`
+}
+
 async function checkHealth() {
   try {
     const r = await fetch('/health')
     const data = await r.json()
-    document.getElementById('status-dot').className = 'dot ok'
+    // Forge is up (it answered), so the dot is never red for this: amber
+    // says it has lost its view of the host, which is a different fault.
+    const blind = hostBlindness(data.host_access)
+    document.getElementById('status-dot').className = blind.length ? 'dot warn' : 'dot ok'
     // .gguf is noise in a 220px box that already ellipsises: the
   // extension is the same for every model this ever serves, and it
   // costs five of the ~25 characters that actually fit. Display only
   // -- the trace record keeps the exact name the backend reported.
   const text = `${data.provider} · ${shortModel(data.model)}`
     const el = document.getElementById('status-text')
-    el.textContent = text
-    el.title = text
+    // The warning goes FIRST: the box is 220px and ellipsises from the
+    // right, so anything appended would be the first thing cut.
+    el.textContent = blind.length ? `⚠ ${blind.join(', ')} · ${text}` : text
+    el.title = blind.length ? hostBlindnessHint(blind) : text
   } catch {
     document.getElementById('status-dot').className = 'dot err'
     document.getElementById('status-text').textContent = 'offline'
